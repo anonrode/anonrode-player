@@ -100,7 +100,9 @@ object AppLog {
             put(android.provider.MediaStore.Files.FileColumns.RELATIVE_PATH,
                 Environment.DIRECTORY_DOWNLOADS + "/$DIR")
         }
-        val existing = resolveExisting(resolver)
+        val existingId = resolveExisting(resolver)
+        val existing = existingId?.let { android.content.ContentUris.withAppendedId(
+            MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), it) }
         if (existing == null) {
             val uri = resolver.insert(MediaStore.Downloads.getContentUri(
                 MediaStore.VOLUME_EXTERNAL_PRIMARY), values)
