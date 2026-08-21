@@ -34,11 +34,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
+import androidx.lifecycle.lifecycleScope
 import dev.anonrode.player.core.media.subtitle.SubtitleParser
 import dev.anonrode.player.core.model.SubtitleCue
 import dev.anonrode.player.core.ui.theme.AnonrodeTheme
-import java.util.concurrent.Executors
-import kotlin.math.abs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Minimal player screen — functional placeholder for the UI redesign.
@@ -57,7 +59,6 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private val io = Executors.newSingleThreadExecutor()
 
     private var cueText by mutableStateOf<String?>(null)
     private var positionSec by mutableFloatStateOf(0f)
@@ -82,14 +83,14 @@ class PlayerActivity : ComponentActivity() {
         val engine = app.engine
 
         // Resolve sidecar subtitles + start playback off the main thread.
-        io.execute {
+        lifecycleScope.launch(Dispatchers.IO) {
             val state = app.stateStore.get(uriStr)
             val parsed = findSidecarSubtitle(Uri.parse(uriStr))
                 ?.let { (name, text) -> SubtitleParser.parse(name, text) }
                 ?: emptyList()
             val manual = state?.subtitleDelayMs ?: 0L
             val auto = state?.autoSyncOffsetMs ?: 0L
-            runOnUiThread {
+            withContext(Dispatchers.Main) {
                 engine.play(MediaItem.fromUri(uriStr), uriStr, parsed, manual, auto)
                 startRenderLoop(parsed)
             }
