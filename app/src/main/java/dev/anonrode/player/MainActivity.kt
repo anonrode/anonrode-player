@@ -63,9 +63,7 @@ class MainActivity : ComponentActivity() {
                         LibraryScreen(
                             modifier = Modifier.padding(padding),
                             loading = false,
-                            viewModelFactory = {
-                                LibraryVmFactory(app.scanner, app.stateStore)
-                            },
+                            viewModelFactory = LibraryVmFactory(app.scanner, app.stateStore),
                             onOpenVideo = { video -> play(video.uri, video.title) },
                         )
                     } else {
