@@ -3,6 +3,8 @@ package dev.anonrode.player.core.media.log
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import java.text.SimpleDateFormat
@@ -124,10 +126,8 @@ object AppLog {
         }
     }
 
-    private fun querySize(resolver: android.content.ContentResolver, id: Long): Long {
-        val uri = ContentUris.withAppendedId(
-            MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), id)
-        resolver.query(uri, arrayOf(android.provider.MediaStore.Files.FileColumns.SIZE),
+    private fun querySize(resolver: android.content.ContentResolver, fileUri: Uri): Long {
+        resolver.query(fileUri, arrayOf(android.provider.MediaStore.Files.FileColumns.SIZE),
             null, null, null)?.use { c -> if (c.moveToFirst()) return c.getLong(0) }
         return 0
     }
