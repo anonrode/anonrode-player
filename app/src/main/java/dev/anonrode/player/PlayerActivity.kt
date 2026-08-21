@@ -182,9 +182,7 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        if (AnonrodeApp.get(this)::engine.isInitialized) {
-            AnonrodeApp.get(this).engine.savePositionNow()
-        }
+        AnonrodeApp.get(this).engine.savePositionNow()
         super.onDestroy()
     }
 }
