@@ -4,11 +4,12 @@ import android.content.Context
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import dev.anonrode.player.core.datastore.PlayerSettings
 import dev.anonrode.player.core.media.sync.AudioSyncProcessor
 import dev.anonrode.player.core.media.sync.SyncListener
@@ -47,13 +48,7 @@ class PlaybackEngine(
     var subtitleOffsetMs: Long = 0L
         private set
 
-    // Late-bound: the processor's position provider reads the player once built.
-    private var playerRef: ExoPlayer? = null
-
-    private val syncProcessor = AudioSyncProcessor(
-        positionProvider = { playerRef?.currentPosition ?: 0L },
-        listener = this,
-    )
+    private val syncProcessor = AudioSyncProcessor(this)
 
     val player: ExoPlayer = buildPlayer(context)
 
@@ -63,7 +58,7 @@ class PlaybackEngine(
             override fun buildAudioSink(
                 context: Context,
                 enableFloatOutput: Boolean,
-                enableAudioOutputPlaybackParams: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
             ): AudioSink =
                 DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(enableFloatOutput)
@@ -84,13 +79,24 @@ class PlaybackEngine(
             .build()
             .also {
                 it.setHandleAudioBecomingNoisy(true)
-                playerRef = it
+                // Seek re-anchor: the sync processor's sample-count clock must
+                // be re-set from the MAIN thread on every discontinuity.
+                it.addListener(object : Player.Listener {
+                    override fun onPositionDiscontinuity(
+                        oldPosition: Player.PositionInfo,
+                        newPosition: Player.PositionInfo,
+                        reason: Int,
+                    ) {
+                        syncProcessor.setStartPosition(newPosition.positionMs)
+                    }
+                })
             }
     }
 
-    /** Point the sync engine at the new episode's cues and reset analysis. */
-    fun attachSyncProcessor(cues: List<SubtitleCue>) {
+    /** Point the sync engine at the new episode's cues; anchor media time. */
+    fun attachSyncProcessor(cues: List<SubtitleCue>, startPositionMs: Long) {
         syncProcessor.setCues(cues)
+        syncProcessor.setStartPosition(startPositionMs)
     }
 
     fun detachSyncProcessor() {
@@ -123,7 +129,7 @@ class PlaybackEngine(
         this.manualDelayMs = manualDelayMs
         // Instant sync from the persisted offset; the engine refines live.
         subtitleOffsetMs = persistedAutoOffsetMs + manualDelayMs
-        syncProcessor.setCues(cues)
+        attachSyncProcessor(cues, /* startPositionMs = */ 0L)
 
         player.setMediaItem(mediaItem)
         player.prepare()
@@ -131,6 +137,7 @@ class PlaybackEngine(
         val saved = positionRestore(uri)
         if (saved != null && saved > 0) {
             player.seekTo(saved)
+            syncProcessor.setStartPosition(saved)
         }
         player.play()
     }
