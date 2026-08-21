@@ -1,10 +1,14 @@
 package dev.anonrode.player
 
+import android.Manifest
 import android.content.Intent
-import android.net.Uri
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -27,20 +32,37 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.anonrode.player.core.model.Series
+import dev.anonrode.player.core.model.Video
 import dev.anonrode.player.core.ui.theme.AnonrodeTheme
 import dev.anonrode.player.feature.library.LibraryViewModel
 
-/**
- * Minimal library screen — functional placeholder.
- * The UI is being redesigned separately; keep this compiling and usable.
- */
 class MainActivity : ComponentActivity() {
+
+    private val permissionLauncher: ActivityResultLauncher<Array<String>> =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+            if (grants.values.any { it }) {
+                recreate() // granted → rebuild and rescan the library
+            }
+        }
+
+    private fun requiredPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= 33) {
+        arrayOf(Manifest.permission.READ_MEDIA_VIDEO)
+    } else {
+        arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+
+    private fun hasVideoPermission(): Boolean =
+        requiredPermissions().all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = AnonrodeApp.get(this)
+
         setContent {
             AnonrodeTheme {
                 Scaffold(
@@ -49,12 +71,19 @@ class MainActivity : ComponentActivity() {
                         TopAppBar(title = { Text("Anonrode Player") })
                     }
                 ) { padding ->
-                    LibraryList(
-                        modifier = Modifier.padding(padding),
-                        scanner = app.scanner,
-                        stateStore = app.stateStore,
-                        onPlay = { video -> play(video.uri, video.title) },
-                    )
+                    if (hasVideoPermission()) {
+                        LibraryList(
+                            modifier = Modifier.padding(padding),
+                            scanner = app.scanner,
+                            stateStore = app.stateStore,
+                            onPlay = { video -> play(video.uri, video.title) },
+                        )
+                    } else {
+                        PermissionGate(
+                            modifier = Modifier.padding(padding),
+                            onRequest = { permissionLauncher.launch(requiredPermissions()) },
+                        )
+                    }
                 }
             }
         }
@@ -69,11 +98,38 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+fun PermissionGate(modifier: Modifier = Modifier, onRequest: () -> Unit) {
+    Column(
+        modifier = modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "Anonrode needs access to your videos",
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            "Your library is built from the video files on this device — nothing is uploaded anywhere.",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(vertical = 12.dp),
+        )
+        Button(onClick = onRequest) {
+            Text("Grant video access")
+        }
+        Text(
+            "If you previously picked \"Partial access\", switch to full access for all folders to appear.",
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(top = 16.dp),
+        )
+    }
+}
+
+@Composable
 fun LibraryList(
     modifier: Modifier = Modifier,
     scanner: dev.anonrode.player.core.media.library.MediaScanner,
     stateStore: dev.anonrode.player.core.media.state.MediaStateStore,
-    onPlay: (dev.anonrode.player.core.model.Video) -> Unit,
+    onPlay: (Video) -> Unit,
 ) {
     val vm: LibraryViewModel = viewModel(factory = object : androidx.lifecycle.ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
@@ -120,7 +176,7 @@ fun SectionLabel(text: String) {
 }
 
 @Composable
-fun SeriesCard(series: Series, onPlay: (dev.anonrode.player.core.model.Video) -> Unit) {
+fun SeriesCard(series: Series, onPlay: (Video) -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()
         .clickable {
             series.videos.firstOrNull()?.let { onPlay(it) }
