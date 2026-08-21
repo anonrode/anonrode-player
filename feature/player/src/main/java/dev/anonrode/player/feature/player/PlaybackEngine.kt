@@ -1,17 +1,19 @@
 package dev.anonrode.player.feature.player
 
 import android.content.Context
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultTrackSelector
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.audio.AudioAttributes
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import dev.anonrode.player.core.datastore.PlayerSettings
 import dev.anonrode.player.core.media.sync.AudioSyncProcessor
 import dev.anonrode.player.core.media.sync.SyncListener
 import dev.anonrode.player.core.model.SubtitleCue
-import io.github.anilbeesetti.nextlib.media3ext.NextRenderersFactory
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -19,9 +21,14 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Owns the ExoPlayer instance: nextlib FFmpeg renderers, decoder fallback,
- * audio-focus handling, resume restore/save, and the live auto-sync
- * processor on the audio path.
+ * Owns the ExoPlayer instance: nextlib FFmpeg renderers (open class) with a
+ * buildAudioSink override that injects the auto-sync [AudioSyncProcessor]
+ * into the audio pipeline, decoder fallback, audio-focus handling, resume
+ * restore/save, and per-episode offset persistence.
+ *
+ * Offset semantics (validated): applied offset = persisted auto lock +
+ * manual delay (additive). The live engine re-listens on every playback and
+ * refines the persisted auto offset.
  */
 @UnstableApi
 class PlaybackEngine(
@@ -33,20 +40,37 @@ class PlaybackEngine(
 ) : SyncListener {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var audioSyncProcessor: AudioSyncProcessor? = null
-    private var syncOffsetMs = 0L
     private var currentUri: String? = null
+    private var manualDelayMs: Long = 0L
 
-    /** Current total subtitle offset in ms (manual delay + auto-sync lock). */
+    /** Applied subtitle offset in ms: persisted auto lock + manual delay. */
     var subtitleOffsetMs: Long = 0L
         private set
+
+    // Late-bound: the processor's position provider reads the player once built.
+    private var playerRef: ExoPlayer? = null
+
+    private val syncProcessor = AudioSyncProcessor(
+        positionProvider = { playerRef?.currentPosition ?: 0L },
+        listener = this,
+    )
 
     val player: ExoPlayer = buildPlayer(context)
 
     private fun buildPlayer(context: Context): ExoPlayer {
-        val renderersFactory = NextRenderersFactory(context)
-            .setEnableDecoderFallback(true)
         val trackSelector = DefaultTrackSelector(context)
+        val renderersFactory = object : NextRenderersFactory(context) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioOutputPlaybackParams: Boolean,
+            ): AudioSink =
+                DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioOutputPlaybackParams(enableAudioOutputPlaybackParams)
+                    .setAudioProcessors(arrayOf(syncProcessor))
+                    .build()
+        }
         return ExoPlayer.Builder(context)
             .setRenderersFactory(renderersFactory)
             .setTrackSelector(trackSelector)
@@ -58,52 +82,35 @@ class PlaybackEngine(
                 /* handleAudioFocus = */ true,
             )
             .build()
-            .also { it.setHandleAudioBecomingNoisy(true) }
+            .also {
+                it.setHandleAudioBecomingNoisy(true)
+                playerRef = it
+            }
     }
 
-    /**
-     * Attach the auto-sync analysis chain for the current media.
-     * `initialOffsetMs` = persisted auto offset + manual delay, applied
-     * immediately so re-watches start in sync; the live engine keeps
-     * listening and refines (on lock: auto + manual, additive).
-     */
-    fun attachSyncProcessor(cues: List<SubtitleCue>, initialOffsetMs: Long, force: Boolean = false) {
-        audioSyncProcessor?.let { player.removeAudioProcessor(it) }
-        audioSyncProcessor = null
-        subtitleOffsetMs = initialOffsetMs
-
-        if (!force && (!settingsProvider().autoSyncEnabled || cues.size < 5)) return
-
-        val processor = AudioSyncProcessor(
-            positionProvider = { player.currentPosition },
-            listener = this,
-        )
-        processor.setCues(cues)
-        audioSyncProcessor = processor
-        player.addAudioProcessor(processor)
+    /** Point the sync engine at the new episode's cues and reset analysis. */
+    fun attachSyncProcessor(cues: List<SubtitleCue>) {
+        syncProcessor.setCues(cues)
     }
 
     fun detachSyncProcessor() {
-        audioSyncProcessor?.let { player.removeAudioProcessor(it) }
-        audioSyncProcessor = null
+        syncProcessor.setCues(emptyList())
         subtitleOffsetMs = manualDelayMs
     }
 
     override fun onSyncLocked(offsetSeconds: Float) {
-        // Auto-sync offset on top of any manual delay (additive, per spec).
-        subtitleOffsetMs = ((offsetSeconds * 1000f).toLong()) + manualDelayMs
-        // Persist the auto lock so re-watches start instantly in sync.
+        // Additive semantics: applied = persisted/refined auto lock + manual.
+        val autoMs = (offsetSeconds * 1000f).toLong()
+        subtitleOffsetMs = autoMs + manualDelayMs
         val uri = currentUri
         if (uri != null) {
-            scope.launch { onAutoSyncSave(uri, ((offsetSeconds * 1000f).toLong()) ) }
+            scope.launch { onAutoSyncSave(uri, autoMs) }
         }
     }
 
     override fun onSyncNoMatch() {
         subtitleOffsetMs = manualDelayMs
     }
-
-    private var manualDelayMs: Long = 0L
 
     suspend fun play(
         mediaItem: MediaItem,
@@ -114,7 +121,9 @@ class PlaybackEngine(
     ) {
         currentUri = uri
         this.manualDelayMs = manualDelayMs
-        attachSyncProcessor(cues, persistedAutoOffsetMs + manualDelayMs)
+        // Instant sync from the persisted offset; the engine refines live.
+        subtitleOffsetMs = persistedAutoOffsetMs + manualDelayMs
+        syncProcessor.setCues(cues)
 
         player.setMediaItem(mediaItem)
         player.prepare()
@@ -139,7 +148,7 @@ class PlaybackEngine(
     fun stopAndSave() {
         savePositionNow()
         player.stop()
-        detachSyncProcessor()
+        subtitleOffsetMs = manualDelayMs
     }
 
     fun release() {
