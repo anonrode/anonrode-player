@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
                     LibraryList(
                         modifier = Modifier.padding(padding),
                         scanner = app.scanner,
+                        stateStore = app.stateStore,
                         onPlay = { video -> play(video.uri, video.title) },
                     )
                 }
@@ -71,12 +72,13 @@ class MainActivity : ComponentActivity() {
 fun LibraryList(
     modifier: Modifier = Modifier,
     scanner: dev.anonrode.player.core.media.library.MediaScanner,
+    stateStore: dev.anonrode.player.core.media.state.MediaStateStore,
     onPlay: (dev.anonrode.player.core.model.Video) -> Unit,
 ) {
     val vm: LibraryViewModel = viewModel(factory = object : androidx.lifecycle.ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
-            LibraryViewModel(scanner, AnonrodeApp.get(applicationContext).stateStore) as T
+            LibraryViewModel(scanner, stateStore) as T
     })
     val state by vm.ui.collectAsState()
 
