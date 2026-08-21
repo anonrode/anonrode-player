@@ -1,0 +1,41 @@
+name: publish_release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build release APKs (debug-signed until keystore is configured)
+        run: ./gradlew assembleReleaseWithDebugSigning assembleDebug --stacktrace
+
+      - name: Rename APKs
+        run: |
+          mkdir -p apks
+          find app/build/outputs/apk -name "*.apk" -exec cp {} apks/ \;
+          cd apks
+          for f in *.apk; do mv "$f" "anonrode-player-${{ github.ref_name }}-$f"; done
+
+      - name: Create GitHub Release with APKs
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: apks/*.apk

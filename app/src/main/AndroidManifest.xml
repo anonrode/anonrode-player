@@ -18,7 +18,7 @@
     <application
         android:name=".AnonrodeApp"
         android:label="@string/app_name"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@drawable/ic_launcher"
         android:supportsRtl="true"
         android:appCategory="video"
         android:theme="@style/Theme.AnonrodePlayer">
