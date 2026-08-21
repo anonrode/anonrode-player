@@ -341,7 +341,7 @@ fun PlayerScreen(
         // ── diagnostics overlay (temporary — engine debugging) ──────
         if (errorMsg != null || stateText != "READY") {
             Text(
-                (errorMsg?.let { "ERROR: $it
+                (errorMsg?.let { "ERROR: " + it + "
 " } ?: "") +
                     "state=$stateText pos=${player.currentPosition / 1000f}s " +
                     "video=${player.videoSize.width}x${player.videoSize.height}",
