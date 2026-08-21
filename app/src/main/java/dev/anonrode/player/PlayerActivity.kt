@@ -10,44 +10,26 @@ import android.os.Handler
 import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.PlayerView
-import androidx.lifecycle.lifecycleScope
 import dev.anonrode.player.core.media.subtitle.SubtitleParser
 import dev.anonrode.player.core.model.SubtitleCue
 import dev.anonrode.player.core.ui.theme.AnonrodeTheme
+import dev.anonrode.player.ui.PlayerScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Minimal player screen — functional placeholder for the UI redesign.
- * Plays with Media3 + nextlib, restores resume position, applies the
- * persisted auto-sync offset + manual delay (additive), and renders the
- * active cue with the offset applied via binary search (ported from the
- * web player).
+ * Hosts the PlayerScreen. Playback wiring: restore resume position, apply
+ * persisted auto-sync offset + manual delay (additive), resolve sidecar
+ * subtitles, and drive the subtitle render loop (binary search + offset).
+ * State fields are Compose-backed so only affected UI recomposes.
  */
 @UnstableApi
 class PlayerActivity : ComponentActivity() {
@@ -61,14 +43,14 @@ class PlayerActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var cueText by mutableStateOf<String?>(null)
-    private var positionSec by mutableFloatStateOf(0f)
-    private var durationSec by mutableFloatStateOf(0f)
+    private var positionSec by mutableStateOf(0f)
+    private var durationSec by mutableStateOf(0f)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission("android.permission.POST_NOTIFICATIONS") !=
+            ContextCompat.checkSelfPermission(this, "android.permission.POST_NOTIFICATIONS") !=
             PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
         }
@@ -81,6 +63,19 @@ class PlayerActivity : ComponentActivity() {
         val title = intent.getStringExtra(EXTRA_TITLE) ?: uriStr
         val app = AnonrodeApp.get(this)
         val engine = app.engine
+
+        setContent {
+            AnonrodeTheme {
+                PlayerScreen(
+                    player = engine.player,
+                    title = title,
+                    cueText = cueText,
+                    positionSec = positionSec,
+                    durationSec = durationSec,
+                    onBack = { finish() },
+                )
+            }
+        }
 
         // Resolve sidecar subtitles + start playback off the main thread.
         lifecycleScope.launch(Dispatchers.IO) {
@@ -95,34 +90,16 @@ class PlayerActivity : ComponentActivity() {
                 startRenderLoop(parsed)
             }
         }
-
-        setContent {
-            AnonrodeTheme {
-                PlayerSurface(
-                    engine = engine,
-                    title = title,
-                    cueText = cueText,
-                    positionSec = positionSec,
-                    durationSec = durationSec,
-                    onSeek = { frac ->
-                        engine.player.seekTo((frac * engine.player.duration.coerceAtLeast(1)).toLong())
-                    },
-                    onTogglePlay = {
-                        if (engine.player.isPlaying) engine.player.pause() else engine.player.play()
-                    },
-                )
-            }
-        }
     }
 
     private fun startRenderLoop(cues: List<SubtitleCue>) {
         val tick = object : Runnable {
             override fun run() {
-                val p = AnonrodeApp.get(this@PlayerActivity).engine.player
+                val engine = AnonrodeApp.get(this@PlayerActivity).engine
+                val p = engine.player
                 positionSec = p.currentPosition / 1000f
                 durationSec = (p.duration.takeIf { it > 0 } ?: 0L) / 1000f
-                val t = p.currentPosition / 1000.0 - AnonrodeApp.get(this@PlayerActivity)
-                    .engine.subtitleOffsetMs / 1000.0
+                val t = p.currentPosition / 1000.0 - engine.subtitleOffsetMs / 1000.0
                 cueText = findCue(cues, t)?.lines?.joinToString("\n")
                 handler.postDelayed(this, 100)
             }
@@ -184,51 +161,5 @@ class PlayerActivity : ComponentActivity() {
         handler.removeCallbacksAndMessages(null)
         AnonrodeApp.get(this).engine.savePositionNow()
         super.onDestroy()
-    }
-}
-
-@Composable
-fun PlayerSurface(
-    engine: dev.anonrode.player.feature.player.PlaybackEngine,
-    title: String,
-    cueText: String?,
-    positionSec: Float,
-    durationSec: Float,
-    onSeek: (Float) -> Unit,
-    onTogglePlay: () -> Unit,
-) {
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    player = engine.player
-                    useController = false
-                }
-            }
-        )
-        cueText?.let { txt ->
-            Text(
-                txt,
-                color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.align(Alignment.BottomCenter)
-                    .padding(bottom = 96.dp)
-                    .background(Color(0xAA000000))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            )
-        }
-        Column(modifier = Modifier.align(Alignment.BottomStart).padding(16.dp)) {
-            Text(title, color = Color.White, style = MaterialTheme.typography.labelMedium)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = onTogglePlay) { Text(if (engine.player.isPlaying) "Pause" else "Play") }
-                Slider(
-                    value = positionSec.coerceIn(0f, durationSec.coerceAtLeast(1f)),
-                    onValueChange = { onSeek(it / durationSec.coerceAtLeast(1f)) },
-                    valueRange = 0f..durationSec.coerceAtLeast(1f),
-                    modifier = Modifier.fillMaxWidth().padding(start = 12.dp)
-                )
-            }
-        }
     }
 }
