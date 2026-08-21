@@ -5,7 +5,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.DefaultTrackSelector
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
@@ -67,7 +67,7 @@ class PlaybackEngine(
             ): AudioSink =
                 DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(enableFloatOutput)
-                    .setEnableAudioOutputPlaybackParams(enableAudioOutputPlaybackParams)
+                    .setEnableAudioTrackPlaybackParams(enableAudioOutputPlaybackParams)
                     .setAudioProcessors(arrayOf(syncProcessor))
                     .build()
         }
