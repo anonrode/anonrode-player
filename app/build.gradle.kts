@@ -12,8 +12,8 @@ android {
         applicationId = "dev.anonrode.player"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 3
-        versionName = "0.2.0"
+        versionCode = 4
+        versionName = "0.2.1"
     }
 
     buildTypes {
@@ -31,6 +31,10 @@ android {
         create("releaseWithDebugSigning") {
             initWith(getByName("release"))
             matchingFallbacks += listOf("release")
+            // R8 breaks DataStore/serialization on this path — keep sideload
+            // builds unshrunk until proper keep rules are proven.
+            isMinifyEnabled = false
+            isShrinkResources = false
             signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".release"
         }

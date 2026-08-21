@@ -99,6 +99,8 @@ fun PlayerScreen(
     var controlsVisible by remember { mutableStateOf(true) }
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
     var locked by remember { mutableStateOf(false) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var stateText by remember { mutableStateOf("IDLE") }
     var showCC by remember { mutableStateOf(true) }
     var speedIdx by remember { mutableIntStateOf(2) }
     val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
@@ -112,6 +114,20 @@ fun PlayerScreen(
         val l = object : Player.Listener {
             override fun onIsPlayingChanged(p: Boolean) {
                 isPlaying = p
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                stateText = when (playbackState) {
+                    Player.STATE_IDLE -> "IDLE"
+                    Player.STATE_BUFFERING -> "BUFFERING"
+                    Player.STATE_READY -> "READY"
+                    Player.STATE_ENDED -> "ENDED"
+                    else -> "?"
+                }
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                errorMsg = error.errorCodeName + ": " + (error.cause?.message ?: error.message ?: "unknown")
             }
         }
         player.addListener(l)
@@ -317,6 +333,21 @@ fun PlayerScreen(
             ) {
                 Icon(Icons.Filled.Lock, null, tint = Teal)
             }
+        }
+
+        // ── diagnostics overlay (temporary — engine debugging) ──────
+        if (errorMsg != null || stateText != "READY") {
+            Text(
+                (errorMsg?.let { "ERROR: $it
+" } ?: "") +
+                    "state=$stateText pos=${player.currentPosition / 1000f}s " +
+                    "video=${player.videoSize.width}x${player.videoSize.height}",
+                color = Color(0xFFFFD166),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 48.dp)
+                    .background(Color.Black.copy(alpha = 0.7f))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            )
         }
 
         // ── controls overlay ─────────────────────────────────────────

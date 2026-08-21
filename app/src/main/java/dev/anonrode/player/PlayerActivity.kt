@@ -79,15 +79,19 @@ class PlayerActivity : ComponentActivity() {
 
         // Resolve sidecar subtitles + start playback off the main thread.
         lifecycleScope.launch(Dispatchers.IO) {
-            val state = app.stateStore.get(uriStr)
-            val parsed = findSidecarSubtitle(Uri.parse(uriStr))
-                ?.let { (name, text) -> SubtitleParser.parse(name, text) }
-                ?: emptyList()
-            val manual = state?.subtitleDelayMs ?: 0L
-            val auto = state?.autoSyncOffsetMs ?: 0L
-            withContext(Dispatchers.Main) {
-                engine.play(MediaItem.fromUri(uriStr), uriStr, parsed, manual, auto)
-                startRenderLoop(parsed)
+            try {
+                val state = app.stateStore.get(uriStr)
+                val parsed = findSidecarSubtitle(Uri.parse(uriStr))
+                    ?.let { (name, text) -> SubtitleParser.parse(name, text) }
+                    ?: emptyList()
+                val manual = state?.subtitleDelayMs ?: 0L
+                val auto = state?.autoSyncOffsetMs ?: 0L
+                withContext(Dispatchers.Main) {
+                    engine.play(MediaItem.fromUri(uriStr), uriStr, parsed, manual, auto)
+                    startRenderLoop(parsed)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
