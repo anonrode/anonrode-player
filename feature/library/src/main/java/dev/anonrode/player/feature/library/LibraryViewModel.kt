@@ -51,10 +51,11 @@ class LibraryViewModel(
         val byUri = snap.videos.associateBy { it.uri }
         val continueWatching = inProg.mapNotNull { st ->
             val v = byUri[st.uri] ?: return@mapNotNull null
-            val frac = if (st.durationMs != null && st.durationMs > 0) {
-                (st.playbackPositionMs.toFloat() / st.durationMs).coerceIn(0f, 1f)
+            val dur = st.durationMs ?: 0L
+            val frac = if (dur > 0) {
+                (st.playbackPositionMs.toFloat() / dur).coerceIn(0f, 1f)
             } else 0f
-            InProgress(v, frac, "${v.title} · ${fmtMin(st.playbackPositionMs)} / ${fmtMin(st.durationMs ?: 0)}")
+            InProgress(v, frac, "${v.title} · ${fmtMin(st.playbackPositionMs)} / ${fmtMin(dur)}")
         }
         // Watched counts per series from finished flags.
         val finishedUris = inProg.filter { it.finished }.map { it.uri }.toSet()
