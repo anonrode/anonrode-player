@@ -338,13 +338,17 @@ fun PlayerScreen(
             }
         }
 
-        // ── diagnostics overlay (temporary — engine debugging) ──────
+        // diagnostics overlay (temporary - engine debugging)
         if (errorMsg != null || stateText != "READY") {
+            val diag = buildString {
+                errorMsg?.let { append("ERROR: ").append(it).append('\n') }
+                append("state=").append(stateText)
+                append(" pos=").append(player.currentPosition / 1000f).append("s")
+                append(" video=").append(player.videoSize.width)
+                    .append("x").append(player.videoSize.height)
+            }
             Text(
-                (errorMsg?.let { "ERROR: " + it + "
-" } ?: "") +
-                    "state=$stateText pos=${player.currentPosition / 1000f}s " +
-                    "video=${player.videoSize.width}x${player.videoSize.height}",
+                diag,
                 color = Color(0xFFFFD166),
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 48.dp)
