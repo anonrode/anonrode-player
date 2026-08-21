@@ -58,7 +58,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import dev.anonrode.player.core.media.log.AppLog
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import kotlin.math.abs
@@ -117,6 +119,7 @@ fun PlayerScreen(
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                AppLog.d("PLAYER", "state=" + playbackState)
                 stateText = when (playbackState) {
                     Player.STATE_IDLE -> "IDLE"
                     Player.STATE_BUFFERING -> "BUFFERING"

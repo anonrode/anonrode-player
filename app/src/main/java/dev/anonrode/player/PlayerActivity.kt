@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
+import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.subtitle.SubtitleParser
 import dev.anonrode.player.core.model.SubtitleCue
 import dev.anonrode.player.core.ui.theme.AnonrodeTheme
@@ -80,10 +81,14 @@ class PlayerActivity : ComponentActivity() {
         // Resolve sidecar subtitles + start playback off the main thread.
         lifecycleScope.launch(Dispatchers.IO) {
             try {
+                AppLog.d("PLAY", "opening " + uriStr)
                 val state = app.stateStore.get(uriStr)
-                val parsed = findSidecarSubtitle(Uri.parse(uriStr))
+                val subFile = findSidecarSubtitle(Uri.parse(uriStr))
+                AppLog.d("PLAY", "sidecar subtitle: " + (subFile?.first ?: "NONE"))
+                val parsed = subFile
                     ?.let { (name, text) -> SubtitleParser.parse(name, text) }
                     ?: emptyList()
+                AppLog.d("PLAY", "parsed " + parsed.size + " cues")
                 val manual = state?.subtitleDelayMs ?: 0L
                 val auto = state?.autoSyncOffsetMs ?: 0L
                 withContext(Dispatchers.Main) {
@@ -91,7 +96,7 @@ class PlayerActivity : ComponentActivity() {
                     startRenderLoop(parsed)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                AppLog.e("PLAY", "FAILED to start playback", e)
             }
         }
     }

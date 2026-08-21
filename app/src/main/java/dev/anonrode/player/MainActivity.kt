@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.ui.theme.AnonrodeTheme
 import dev.anonrode.player.ui.LibraryScreen
 
@@ -31,6 +32,7 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher: ActivityResultLauncher<Array<String>> =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+            AppLog.d("PERM", "permission result: " + grants)
             if (grants.values.any { it }) {
                 recreate() // granted → rebuild and rescan the library
             }
@@ -50,6 +52,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = AnonrodeApp.get(this)
+        AppLog.d("MAIN", "activity create, hasVideoPermission=" + hasVideoPermission())
 
         setContent {
             AnonrodeTheme {

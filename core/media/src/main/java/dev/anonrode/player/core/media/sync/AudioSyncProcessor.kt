@@ -4,6 +4,7 @@ import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.AudioProcessor.AudioFormat
 import androidx.media3.common.util.UnstableApi
+import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.model.SubtitleCue
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -93,6 +94,7 @@ class AudioSyncProcessor(
 
     fun setCues(cues: List<SubtitleCue>) {
         this.cues = cues
+        AppLog.d("SYNC", "setCues: " + cues.size + " cues, locked=" + locked)
     }
 
     // ── AudioProcessor ─────────────────────────────────────────────
@@ -246,6 +248,7 @@ class AudioSyncProcessor(
 
         if (stableHits >= 2) {
             locked = true
+            AppLog.d("SYNC", "LOCKED offset=" + result.offsetSeconds + "s")
             listener.onSyncLocked(result.offsetSeconds.toFloat())
         }
     }

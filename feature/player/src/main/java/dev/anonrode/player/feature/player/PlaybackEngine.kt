@@ -11,6 +11,7 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import dev.anonrode.player.core.datastore.PlayerSettings
+import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.sync.AudioSyncProcessor
 import dev.anonrode.player.core.media.sync.SyncListener
 import dev.anonrode.player.core.model.SubtitleCue
@@ -105,6 +106,7 @@ class PlaybackEngine(
     }
 
     override fun onSyncLocked(offsetSeconds: Float) {
+        AppLog.d("SYNC", "LOCKED at " + offsetSeconds + "s")
         // Additive semantics: applied = persisted/refined auto lock + manual.
         val autoMs = (offsetSeconds * 1000f).toLong()
         subtitleOffsetMs = autoMs + manualDelayMs
@@ -131,6 +133,7 @@ class PlaybackEngine(
         subtitleOffsetMs = persistedAutoOffsetMs + manualDelayMs
         attachSyncProcessor(cues, /* startPositionMs = */ 0L)
 
+        AppLog.d("ENGINE", "play: setMediaItem+prepare")
         player.setMediaItem(mediaItem)
         player.prepare()
 
@@ -139,6 +142,7 @@ class PlaybackEngine(
             player.seekTo(saved)
             syncProcessor.setStartPosition(saved)
         }
+        AppLog.d("ENGINE", "calling play()")
         player.play()
     }
 
