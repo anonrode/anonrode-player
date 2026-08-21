@@ -8,7 +8,7 @@ import androidx.room.RoomDatabase
 @Database(
     entities = [MediaStateEntity::class],
     version = 1,
-    exportSchema = true,
+    exportSchema = false,
 )
 abstract class MediaDatabase : RoomDatabase() {
 
