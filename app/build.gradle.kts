@@ -30,6 +30,7 @@ android {
         }
         create("releaseWithDebugSigning") {
             initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
             signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".release"
         }
