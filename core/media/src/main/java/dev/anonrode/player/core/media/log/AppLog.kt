@@ -114,8 +114,7 @@ object AppLog {
             val size = querySize(resolver, existing)
             if (size > MAX_BYTES) {
                 // rotate: delete, next write recreates fresh
-                resolver.delete(ContentUris.withAppendedId(
-                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), existing), null, null)
+                resolver.delete(existing, null, null)
                 val uri = resolver.insert(MediaStore.Downloads.getContentUri(
                     MediaStore.VOLUME_EXTERNAL_PRIMARY), values)
                     ?: throw IllegalStateException("insert returned null")
