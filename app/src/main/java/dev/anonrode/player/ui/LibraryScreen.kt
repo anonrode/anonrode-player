@@ -61,7 +61,7 @@ fun PosterArt(title: String, modifier: Modifier = Modifier, corner: Int = 14) {
     }
 }
 
-data class InProgressItem(val video: Video, val fraction: Float, val label: String)
+typealias InProgressItem = dev.anonrode.player.feature.library.LibraryViewModel.InProgress
 
 @Composable
 fun LibraryScreen(
