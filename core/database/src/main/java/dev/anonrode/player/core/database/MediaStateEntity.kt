@@ -23,6 +23,9 @@ data class MediaStateEntity(
     // Comma-separated persisted subtitle URI permissions.
     val externalSubtitleUris: String = "",
     val subtitleDelayMs: Long = 0L,
+    // Persisted auto-sync lock (seconds*1000). Re-watches start instantly in
+    // sync; the live engine quietly re-listens and refines.
+    val autoSyncOffsetMs: Long = 0L,
     val playbackSpeed: Float = 1f,
     val videoScale: Float = 1f,
     val lastPlayedTimeMs: Long? = null,
