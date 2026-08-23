@@ -179,19 +179,12 @@ class PlayerActivity : ComponentActivity() {
         AppLog.d("SUB", "found ${candidates.size} subtitle files in $parentDir")
         if (candidates.isEmpty()) return null
 
-        // Priority 1: exact name match (basename + any ext)
-        candidates.firstOrNull { it.name.substringBeforeLast('.').equals(base, ignoreCase = true) }
-        // Priority 2: name starts with base
-            ?: candidates.firstOrNull { it.name.substringBeforeLast('.').startsWith(base, ignoreCase = true) }
-        // Priority 3: any sub file in the same dir
-            ?: candidates.firstOrNull()
-            ?: return null
-
         val chosen = candidates.firstOrNull { it.name.substringBeforeLast('.').equals(base, ignoreCase = true) }
             ?: candidates.firstOrNull { it.name.substringBeforeLast('.').startsWith(base, ignoreCase = true) }
             ?: candidates.firstOrNull()
 
-        AppLog.d("SUB", "chosen: ${chosen.name}")
+        if (chosen == null) return null
+        AppLog.d("SUB", "chosen: " + chosen.name)
         val text = contentResolver.openInputStream(chosen.uri)
             ?.bufferedReader()?.use { it.readText() }
         if (text.isNullOrEmpty()) null else chosen.name to text
