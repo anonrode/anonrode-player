@@ -134,36 +134,68 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /**
-     * Sidecar subtitle discovery: MediaStore.Files query for files whose
-     * name starts with the video's base name and has a supported extension.
+     * Subtitle resolution: tries exact name match first, then ANY supported
+     * subtitle file in the same directory (MediaStore.Files query).
      */
     private fun findSidecarSubtitle(videoUri: Uri): Pair<String, String>? = try {
         val videoPath = contentResolver.query(
             videoUri, arrayOf(android.provider.MediaStore.Video.Media.DATA), null, null, null
         )?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: return null
 
+        AppLog.d("SUB", "video path: $videoPath")
+        val parentDir = videoPath.substringBeforeLast('/')
         val base = videoPath.substringAfterLast('/').substringBeforeLast('.')
         val filesUri = android.provider.MediaStore.Files.getContentUri("external")
+
+        // Collect all candidate subtitle files in the same tree
+        data class Candidate(val uri: Uri, val name: String, val path: String)
+
+        val candidates = mutableListOf<Candidate>()
         contentResolver.query(
             filesUri,
             arrayOf(android.provider.MediaStore.Files.FileColumns._ID,
-                android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME),
-            "${android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?",
-            arrayOf("$base%"),
-            null
+                android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME,
+                android.provider.MediaStore.Files.FileColumns.DATA),
+            null, null, null
         )?.use { c ->
+            val idCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Files.FileColumns._ID)
+            val nameCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME)
+            val dataCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Files.FileColumns.DATA)
             while (c.moveToNext()) {
-                val name = c.getString(1) ?: continue
+                val name = c.getString(nameCol) ?: continue
                 val ext = name.substringAfterLast('.', "").lowercase()
                 if (ext !in SUB_EXTS) continue
-                val fileUri = ContentUris.withAppendedId(filesUri, c.getLong(0))
-                val text = contentResolver.openInputStream(fileUri)
-                    ?.bufferedReader()?.use { it.readText() } ?: continue
-                if (text.isNotEmpty()) return name to text
+                val path = c.getString(dataCol) ?: continue
+                // Must be in same directory as the video
+                if (path.substringBeforeLast('/') != parentDir) continue
+                candidates.add(Candidate(
+                    uri = ContentUris.withAppendedId(filesUri, c.getLong(idCol)),
+                    name = name, path = path
+                ))
             }
-            null
         }
-    } catch (_: Exception) {
+
+        AppLog.d("SUB", "found ${candidates.size} subtitle files in $parentDir")
+        if (candidates.isEmpty()) return null
+
+        // Priority 1: exact name match (basename + any ext)
+        candidates.firstOrNull { it.name.substringBeforeLast('.').equals(base, ignoreCase = true) }
+        // Priority 2: name starts with base
+            ?: candidates.firstOrNull { it.name.substringBeforeLast('.').startsWith(base, ignoreCase = true) }
+        // Priority 3: any sub file in the same dir
+            ?: candidates.firstOrNull()
+            ?: return null
+
+        val chosen = candidates.firstOrNull { it.name.substringBeforeLast('.').equals(base, ignoreCase = true) }
+            ?: candidates.firstOrNull { it.name.substringBeforeLast('.').startsWith(base, ignoreCase = true) }
+            ?: candidates.firstOrNull()
+
+        AppLog.d("SUB", "chosen: ${chosen.name}")
+        val text = contentResolver.openInputStream(chosen.uri)
+            ?.bufferedReader()?.use { it.readText() }
+        if (text.isNullOrEmpty()) null else chosen.name to text
+    } catch (e: Exception) {
+        AppLog.e("SUB", "subtitle resolution failed", e)
         null
     }
 
