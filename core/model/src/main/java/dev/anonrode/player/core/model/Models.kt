@@ -47,6 +47,7 @@ data class MediaState(
     val externalSubtitleUris: List<String> = emptyList(),
     val subtitleDelayMs: Long = 0L,
     val autoSyncOffsetMs: Long = 0L,
+    val autoSyncSpeedFactor: Float = 1f,
     val playbackSpeed: Float = 1f,
     val videoScale: Float = 1f,
     val lastPlayedTimeMs: Long? = null,

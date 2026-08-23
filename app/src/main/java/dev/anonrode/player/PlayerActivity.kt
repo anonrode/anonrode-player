@@ -44,8 +44,9 @@ class PlayerActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var cueText by mutableStateOf<String?>(null)
-    private var positionSec by mutableStateOf(0f)
-    private var durationSec by mutableStateOf(0f)
+    private var positionSec by mutableFloatStateOf(0f)
+    private var durationSec by mutableFloatStateOf(0f)
+    private var syncSpeedFactor by mutableFloatStateOf(1f)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

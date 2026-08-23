@@ -27,6 +27,7 @@ data class MediaStateEntity(
     // Persisted auto-sync lock (ms). Re-watches start instantly in sync;
     // the live engine quietly re-listens and refines.
     @ColumnInfo(name = "auto_sync_offset_ms") val autoSyncOffsetMs: Long = 0L,
+    @ColumnInfo(name = "auto_sync_speed_factor") val autoSyncSpeedFactor: Float = 1f,
     @ColumnInfo(name = "playback_speed") val playbackSpeed: Float = 1f,
     @ColumnInfo(name = "video_scale") val videoScale: Float = 1f,
     @ColumnInfo(name = "last_played_time_ms") val lastPlayedTimeMs: Long? = null,

@@ -48,6 +48,11 @@ class MediaStateStore(private val dao: MediaStateDao) {
     }
 
     /** Persist an auto-sync lock so re-watches start instantly in sync. */
+    suspend fun updateAutoSyncSpeed(uri: String, speed: Float) {
+        val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
+        dao.upsert(cur.copy(autoSyncSpeedFactor = speed, lastPlayedTimeMs = System.currentTimeMillis()))
+    }
+
     suspend fun updateAutoSyncOffset(uri: String, offsetMs: Long) {
         val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
         dao.upsert(cur.copy(autoSyncOffsetMs = offsetMs, lastPlayedTimeMs = System.currentTimeMillis()))

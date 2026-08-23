@@ -48,6 +48,8 @@ class PlaybackEngine(
     /** Applied subtitle offset in ms: persisted auto lock + manual delay. */
     var subtitleOffsetMs: Long = 0L
         private set
+    var subtitleSpeedFactor: Float = 1f
+        private set
 
     private val syncProcessor = AudioSyncProcessor(this)
 
