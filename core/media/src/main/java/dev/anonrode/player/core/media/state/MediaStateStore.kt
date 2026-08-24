@@ -20,6 +20,9 @@ class MediaStateStore(private val dao: MediaStateDao) {
     /** Continue-watching feed. */
     fun getInProgress(): Flow<List<MediaState>> = dao.getInProgress().map { list -> list.map { it.toModel() } }
 
+    /** Every persisted state (including finished rows), most recently played first. */
+    fun getAllStates(): Flow<List<MediaState>> = dao.getAll().map { list -> list.map { it.toModel() } }
+
     suspend fun updatePosition(uri: String, positionMs: Long, durationMs: Long?, finished: Boolean = false) {
         val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
         dao.upsert(

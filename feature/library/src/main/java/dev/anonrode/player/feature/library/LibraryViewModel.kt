@@ -41,39 +41,58 @@ class LibraryViewModel(
 
     init {
         viewModelScope.launch {
-            combine(scanner.observeLibrary(), stateStore.getInProgress()) { snap, inProg ->
-                render(snap, inProg)
+            combine(
+                scanner.observeLibrary(),
+                stateStore.getInProgress(),
+                stateStore.getAllStates(),
+            ) { snap, inProg, allStates ->
+                render(snap, inProg, allStates)
             }.collect { _ui.value = it }
         }
     }
 
-    private fun render(snap: LibrarySnapshot, inProg: List<dev.anonrode.player.core.model.MediaState>): UiState {
+    private fun render(
+        snap: LibrarySnapshot,
+        inProgress: List<dev.anonrode.player.core.model.MediaState>,
+        allStates: List<dev.anonrode.player.core.model.MediaState>,
+    ): UiState {
         val byUri = snap.videos.associateBy { it.uri }
-        val continueWatching = inProg.mapNotNull { st ->
-            val v = byUri[st.uri] ?: return@mapNotNull null
-            val dur = st.durationMs ?: 0L
-            val frac = if (dur > 0) {
-                (st.playbackPositionMs.toFloat() / dur).coerceIn(0f, 1f)
-            } else 0f
-            InProgress(v, frac, "${v.title} · ${fmtMin(st.playbackPositionMs)} / ${fmtMin(dur)}")
-        }
-        // Watched counts per series from finished flags.
-        val finishedUris = inProg.filter { it.finished }.map { it.uri }.toSet()
-        val seriesWithWatched = snap.series.map { s ->
-            val w = s.videos.count {
-                finishedUris.contains(it.uri) ||
-                    (byUri[it.uri]?.let { bv -> finishedUris.contains(bv.uri) } == true)
+        // Continue watching: most recently played first (by the persisted
+        // playback timestamp, not the file's MediaStore modification date).
+        val continueWatching = inProgress
+            .sortedByDescending { it.lastPlayedTimeMs ?: 0L }
+            .mapNotNull { st ->
+                val v = byUri[st.uri] ?: return@mapNotNull null
+                val dur = st.durationMs ?: 0L
+                val frac = if (dur > 0) {
+                    (st.playbackPositionMs.toFloat() / dur).coerceIn(0f, 1f)
+                } else 0f
+                InProgress(v, frac, "${v.title} · ${fmtMin(st.playbackPositionMs)} / ${fmtMin(dur)}")
             }
+        // Watched counts per series from finished flags over ALL states:
+        // getInProgress() filters finished = 0 in SQL, so it can never
+        // contribute a finished entry here.
+        val finishedUris = allStates.filter { it.finished }.map { it.uri }.toSet()
+        val seriesWithWatched = snap.series.map { s ->
+            val w = s.videos.count { finishedUris.contains(it.uri) }
             s.copy(totalWatched = w)
         }
         return UiState(
             loading = false,
-            inProgress = continueWatching.sortedByDescending { it.video.lastModifiedMs },
+            inProgress = continueWatching,
             series = seriesWithWatched,
             videos = snap.videos,
             videoCount = snap.videos.size,
         )
     }
 
-    private fun fmtMin(ms: Long): String = "${ms / 60000}:${String.format("%02d", (ms % 60000) / 1000)}"
+    /** m:ss below one hour; switches to h:mm once it crosses an hour. */
+    private fun fmtMin(ms: Long): String {
+        val totalSec = ms / 1000
+        val h = totalSec / 3600
+        val m = (totalSec % 3600) / 60
+        val sec = totalSec % 60
+        return if (h > 0) "$h:${m.toString().padStart(2, '0')}"
+        else "$m:${sec.toString().padStart(2, '0')}"
+    }
 }

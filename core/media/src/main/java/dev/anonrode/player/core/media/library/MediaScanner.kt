@@ -55,8 +55,10 @@ class MediaScanner(private val context: Context) {
         awaitClose { resolver.unregisterContentObserver(observer) }
     }
         .debounce(250)
-        .flowOn(Dispatchers.IO)
         .map { scan() }
+        // flowOn only affects upstream operators, so it must come AFTER map
+        // for scan() to run off the collector's (main) thread.
+        .flowOn(Dispatchers.IO)
 
     fun scan(): LibrarySnapshot {
         val videos = ArrayList<Video>()

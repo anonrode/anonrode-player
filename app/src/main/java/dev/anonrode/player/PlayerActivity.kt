@@ -201,6 +201,8 @@ class PlayerActivity : ComponentActivity() {
                     ?.let { (name, text) -> SubtitleParser.parse(name, text) }
                     ?: emptyList()
                 AppLog.d("PLAY", "parsed " + parsed.size + " cues")
+                // findCue binary-searches by start time, so cues must be ordered.
+                val sortedCues = parsed.sortedBy { it.start }
                 val manual = state?.subtitleDelayMs ?: 0L
                 val auto = state?.autoSyncOffsetMs ?: 0L
 
@@ -219,12 +221,12 @@ class PlayerActivity : ComponentActivity() {
                     queue?.current?.title?.let { title = it }
                     val player = engine.player
                     player.setPlaybackSpeed(speed)
-                    engine.play(MediaItem.fromUri(uriStr), uriStr, parsed, manual, auto)
+                    engine.play(MediaItem.fromUri(uriStr), uriStr, sortedCues, manual, auto)
                     // Fully-watched episodes restart from the top instead of
                     // resuming at the final frame; the resulting seek
                     // discontinuity re-anchors the sync processor.
                     if (state?.finished == true) player.seekTo(0)
-                    restartRenderLoop(parsed)
+                    restartRenderLoop(sortedCues)
                     episodeQueue = queue
                     switching = false
                 }
@@ -430,12 +432,20 @@ class PlayerActivity : ComponentActivity() {
         data class Candidate(val uri: Uri, val name: String, val path: String)
 
         val candidates = mutableListOf<Candidate>()
+        // Filter at the query level: never pull the whole Files table.
+        val selection = buildString {
+            SUB_EXTS.forEachIndexed { i, ext ->
+                if (i > 0) append(" OR ")
+                append(android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME)
+                    .append(" LIKE '%.").append(ext).append("'")
+            }
+        }
         contentResolver.query(
             filesUri,
             arrayOf(android.provider.MediaStore.Files.FileColumns._ID,
                 android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME,
                 android.provider.MediaStore.Files.FileColumns.DATA),
-            null, null, null
+            selection, null, null
         )?.use { c ->
             val idCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Files.FileColumns._ID)
             val nameCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME)

@@ -56,12 +56,21 @@ class AudioSyncProcessor(
         AppLog.d("SYNC", "setCues: ${cues.size} cues")
     }
 
+    // Written from the main thread, consumed by the audio thread.
+    @Volatile private var pendingResetPosition: Long? = null
+
     fun setStartPosition(positionMs: Long) {
-        startPositionMs = positionMs
-        totalFrames = 0
+        pendingResetPosition = positionMs
+    }
+
+    /** Applies a pending position reset on the audio thread. */
+    private fun checkAndApplyReset() {
+        val reset = pendingResetPosition ?: return
+        pendingResetPosition = null
+        startPositionMs = reset
         java.util.Arrays.fill(audioBins, 0f)
-        binCount = 0; windowN = 0
-        floor = 0.0; peak = 0.0; lastSpeech = 0.0
+        binCount = 0; totalFrames = 0
+        windowN = 0; floor = 0.0; peak = 0.0; lastSpeech = 0.0
         lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
         locked = false
     }
@@ -114,17 +123,18 @@ class AudioSyncProcessor(
     }
 
     private fun analyze(pcm: ByteBuffer) {
+        checkAndApplyReset()
         if (locked) return
         val nCh = channelCount; val frameBytes = 2 * nCh
         while (pcm.remaining() >= frameBytes) {
+            checkAndApplyReset()
             // fill one window
             for (ch in 0 until nCh) {
                 if (windowN < windowSamples.size) {
-                    windowSamples[windowN++] = pcm.short
-                    pcm.position(pcm.position() + 2)
+                    windowSamples[windowN++] = pcm.short // pcm.short advances position by 2 bytes
                 }
             }
-            totalFrames += nCh
+            totalFrames += 1
 
             if (windowN >= min(windowSamples.size, windowTarget * nCh)) {
                 val rms = sqrt(windowSamples.take(windowN).sumOf { it.toDouble() * it } / windowN)
@@ -165,7 +175,9 @@ class AudioSyncProcessor(
 
     private fun accumulateBin(speech: Float) {
         val posMs = startPositionMs + totalFrames * 1000L / max(sampleRate, 1)
-        val idx = (posMs / 100).toInt().coerceIn(0, audioBins.size - 1)
+        val idx = (posMs / 100).toInt()
+        // Past capacity (or negative): skip instead of clamping into the last bin.
+        if (idx >= audioBins.size || idx < 0) return
         binCount = max(binCount, idx + 1)
         audioBins[idx] = max(audioBins[idx], speech)
         

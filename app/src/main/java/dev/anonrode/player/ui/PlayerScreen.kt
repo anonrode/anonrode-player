@@ -333,6 +333,10 @@ fun PlayerScreen(
     var scrW by remember { mutableFloatStateOf(1000f) }
     var scrH by remember { mutableFloatStateOf(1000f) }
 
+    // Seekbar drag position in seconds; -1 = not dragging. Seeking is applied
+    // once on release instead of firing player.seekTo() per pixel of drag.
+    var localSeek by remember { mutableFloatStateOf(-1f) }
+
     var mode by remember { mutableStateOf<String?>(null) } // "seek" | "vol" | "bri"
     var startX by remember { mutableFloatStateOf(0f) }
     var startY by remember { mutableFloatStateOf(0f) }
@@ -645,8 +649,13 @@ fun PlayerScreen(
                     Text(fmtTime(player.currentPosition), color = Color.White,
                         style = MaterialTheme.typography.labelSmall)
                     Slider(
-                        value = positionSec.coerceIn(0f, durationSec.coerceAtLeast(1f)),
-                        onValueChange = { player.seekTo((it * 1000).toLong()) },
+                        value = (if (localSeek >= 0f) localSeek else positionSec)
+                            .coerceIn(0f, durationSec.coerceAtLeast(1f)),
+                        onValueChange = { localSeek = it },
+                        onValueChangeFinished = {
+                            if (localSeek >= 0f) player.seekTo((localSeek * 1000).toLong())
+                            localSeek = -1f
+                        },
                         valueRange = 0f..durationSec.coerceAtLeast(1f),
                         colors = SliderDefaults.colors(
                             thumbColor = Color.White,

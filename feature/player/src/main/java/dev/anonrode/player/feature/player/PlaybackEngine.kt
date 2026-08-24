@@ -21,6 +21,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 /**
  * Owns the ExoPlayer instance: nextlib FFmpeg renderers (open class) with a
@@ -45,11 +47,15 @@ class PlaybackEngine(
     private var currentUri: String? = null
     private var manualDelayMs: Long = 0L
 
-    /** Applied subtitle offset in ms: persisted auto lock + manual delay. */
-    var subtitleOffsetMs: Long = 0L
+    /** Applied subtitle offset in ms: persisted auto lock + manual delay.
+     *  @Volatile: written from the audio processor thread ([onSyncLocked]
+     *  fires there) and read from the main render loop — without it changes
+     *  may never become visible across threads. */
+    @Volatile var subtitleOffsetMs: Long = 0L
         private set
-    /** Speed correction factor from drift detection (1.0 = no drift). */
-    var subtitleSpeedFactor: Float = 1f
+    /** Speed correction factor from drift detection (1.0 = no drift). Same
+     *  cross-thread visibility requirement as [subtitleOffsetMs]. */
+    @Volatile var subtitleSpeedFactor: Float = 1f
         private set
 
     private val syncProcessor = AudioSyncProcessor(this)
@@ -150,13 +156,44 @@ class PlaybackEngine(
         player.play()
     }
 
-    fun savePositionNow() {
-        val uri = currentUri ?: return
+    private data class PositionSnapshot(
+        val uri: String,
+        val positionMs: Long,
+        val durationMs: Long?,
+        val finished: Boolean,
+    )
+
+    /**
+     * Reads ExoPlayer state into an immutable snapshot. MUST be called on the
+     * player's owning thread (main) — Media3 throws off-main-thread access.
+     */
+    private fun capturePositionSnapshot(): PositionSnapshot? {
+        val uri = currentUri ?: return null
         val pos = player.currentPosition
+        // Null (not 0!) when unknown: storing 0 would clobber a previously
+        // persisted good duration for this URI.
         val dur = player.duration.takeIf { it > 0 && it != C.TIME_UNSET }
         val finished = dur != null && pos >= dur - 1000
+        return PositionSnapshot(uri, pos, dur, finished)
+    }
+
+    /** Fire-and-forget save; caller must be on the main thread. */
+    fun savePositionNow() {
+        val snap = capturePositionSnapshot() ?: return
         scope.launch {
-            onPositionSave(uri, pos, dur ?: 0L, finished)
+            onPositionSave(snap.uri, snap.positionMs, snap.durationMs, snap.finished)
+        }
+    }
+
+    /**
+     * Suspending save for the service's periodic autosave loop: caller must
+     * already be on the main thread so the [capturePositionSnapshot] reads
+     * are legal; only the store write hops to [Dispatchers.IO].
+     */
+    suspend fun persistPositionNow() {
+        val snap = capturePositionSnapshot() ?: return
+        withContext(Dispatchers.IO) {
+            onPositionSave(snap.uri, snap.positionMs, snap.durationMs, snap.finished)
         }
     }
 
@@ -167,7 +204,14 @@ class PlaybackEngine(
     }
 
     fun release() {
-        stopAndSave()
+        // Save synchronously BEFORE teardown: any async save launched here
+        // would be cancelled by scope.cancel() below before its DB write
+        // lands. Blocking is acceptable on this teardown path — one write.
+        capturePositionSnapshot()?.let { snap ->
+            runBlocking {
+                onPositionSave(snap.uri, snap.positionMs, snap.durationMs, snap.finished)
+            }
+        }
         player.release()
         scope.cancel()
     }

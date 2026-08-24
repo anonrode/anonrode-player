@@ -57,7 +57,8 @@ data class MediaState(
 object EpisodePattern {
     // Handles: S01E02  S01_E02  S01_EP02  S01.E02  S02-EP07  1x02  S01E02v2
     private val full = Regex("""[Ss](\d{1,2})[_.\-\s]*[Ee][Pp]?[_.\-\s]*(\d{1,3})(?!\d)""")
-    private val cross = Regex("""(\d{1,2})x(\d{2})""")
+    // Lookarounds + boundary: "1920x1080" must NOT match as 80x72-style episodes.
+    private val cross = Regex("""(?<!\d)(\d{1,2})x(\d{2})(?!\d)""")
     private val seasonWord = Regex("""[Ss]eason\s*(\d{1,2})\s*[Ee]p(?:isode)?\s*(\d{1,3})""", RegexOption.IGNORE_CASE)
     private val bare = Regex("""[Ee][Pp]?[_.\-\s]*(\d{1,3})(?!\d)""")
 
