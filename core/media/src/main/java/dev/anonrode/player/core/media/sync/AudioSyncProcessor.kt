@@ -8,248 +8,200 @@ import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.model.SubtitleCue
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
-/** Callbacks from the live sync analysis. */
 interface SyncListener {
-    /** A validated, stable offset was found. */
-    fun onSyncLocked(offsetSeconds: Float)
-    /** Analysis finished with no lockable alignment. */
+    fun onSyncLocked(offsetSeconds: Float, speedFactor: Float)
     fun onSyncNoMatch()
 }
 
-/**
- * Live subtitle auto-sync: a pass-through Media3 [AudioProcessor] that turns
- * playback PCM into a binary speech-activity track (adaptive floor/peak VAD,
- * 100ms bins) and periodically runs [SpeechCorrelator] against the subtitle
- * cues.
- *
- * THREADING (critical): ExoPlayer methods throw when called off the main
- * thread, and queueInput runs on the audio thread. Media time is therefore
- * derived by COUNTING SAMPLES (frames × 1000 / sampleRate) offset by
- * [startPositionMs], which is set from the main thread via [setStartPosition]
- * (wired to onPositionDiscontinuity for seeks). The player is never touched
- * from this thread.
- *
- * Pass-through: input is copied to output unchanged. Buffers are reused to
- * avoid per-buffer allocation churn.
- */
 @UnstableApi
 class AudioSyncProcessor(
     private val listener: SyncListener,
 ) : AudioProcessor {
 
-    // ── configuration ──────────────────────────────────────────────
     @Volatile private var sampleRate = 0
     @Volatile private var channelCount = 0
     @Volatile private var active = false
     private var inputEnded = false
     private var outputEnded = false
-
-    // ── pass-through buffering (reused, grown on demand) ───────────
     private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
 
-    // ── analysis state ─────────────────────────────────────────────
     @Volatile private var cues: List<SubtitleCue> = emptyList()
-    private val audioBins = FloatArray(40 * 10 * 2 + 15 * 60 * 10) // ±40s search + 15min @ 0.1s
+    private val audioBins = FloatArray(40 * 10 * 2 + 15 * 60 * 10)
     private var binCount = 0
     @Volatile private var locked = false
 
-    // sample-count clock (audio thread only)
     private var totalFrames: Long = 0
-
-    // set from main thread; read from audio thread
     @Volatile var startPositionMs: Long = 0
 
-    // per-window accumulation (10ms RMS windows)
-    private var windowSamples = 0
-    private var windowSumSq = 0.0
+    private val windowSamples: ShortArray = ShortArray(320) // max 10ms @ 32kHz stereo
+    private var windowN = 0
     private var windowTarget = 0
+
     private var floor = 0.0
     private var peak = 0.0
     private var lastSpeech = 0.0
 
-    private var lastEvalFrames = Long.MIN_VALUE
+    private val driftTracker = DriftTracker()
+    private var lastEvalPos = Long.MIN_VALUE
     private var stableHits = 0
     private var lastOffset = Double.NaN
 
-    /** Main thread: media position the next flushed buffer starts at. */
+    fun setCues(cues: List<SubtitleCue>) {
+        this.cues = cues
+        AppLog.d("SYNC", "setCues: ${cues.size} cues")
+    }
+
     fun setStartPosition(positionMs: Long) {
         startPositionMs = positionMs
         totalFrames = 0
         java.util.Arrays.fill(audioBins, 0f)
-        binCount = 0
-        windowSamples = 0
-        windowSumSq = 0.0
-        floor = 0.0
-        peak = 0.0
-        lastSpeech = 0.0
-        lastEvalFrames = Long.MIN_VALUE
-        stableHits = 0
-        lastOffset = Double.NaN
+        binCount = 0; windowN = 0
+        floor = 0.0; peak = 0.0; lastSpeech = 0.0
+        lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
+        locked = false
     }
 
-    fun setCues(cues: List<SubtitleCue>) {
-        this.cues = cues
-        AppLog.d("SYNC", "setCues: " + cues.size + " cues, locked=" + locked)
-    }
-
-    // ── AudioProcessor ─────────────────────────────────────────────
-
-    override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
-        sampleRate = inputAudioFormat.sampleRate
-        channelCount = inputAudioFormat.channelCount
-        active = inputAudioFormat.encoding == C.ENCODING_PCM_16BIT &&
-            sampleRate > 0 && channelCount > 0
+    override fun configure(fmt: AudioFormat): AudioFormat {
+        sampleRate = fmt.sampleRate; channelCount = fmt.channelCount
+        active = fmt.encoding == C.ENCODING_PCM_16BIT && sampleRate > 0 && channelCount > 0
         if (active) {
-            windowTarget = max(1, sampleRate / 100) // 10ms RMS windows
-            java.util.Arrays.fill(audioBins, 0f)
-            binCount = 0
-            totalFrames = 0
-            windowSamples = 0
-            windowSumSq = 0.0
-            floor = 0.0
-            peak = 0.0
-            lastSpeech = 0.0
-            lastEvalFrames = Long.MIN_VALUE
-            stableHits = 0
-            lastOffset = Double.NaN
+            windowTarget = max(1, sampleRate / 100)
+            resetAll()
         }
-        return inputAudioFormat // pass-through
+        return fmt
     }
 
-    override fun isActive(): Boolean = active
+    override fun isActive() = active
 
-    override fun queueInput(inputBuffer: ByteBuffer) {
-        if (!active) {
-            inputBuffer.position(inputBuffer.limit())
-            return
-        }
-        val bytes = inputBuffer.remaining()
-        if (bytes == 0) return
+    override fun queueInput(input: ByteBuffer) {
+        if (!active) { input.position(input.limit()); return }
+        val bytes = input.remaining(); if (bytes == 0) return
 
-        val copy = inputBuffer.duplicate()
-        copy.order(ByteOrder.nativeOrder())
-        analyze(copy)
-        inputBuffer.position(inputBuffer.limit())
+        val copy = input.duplicate(); copy.order(ByteOrder.nativeOrder())
+        analyze(copy); input.position(input.limit())
 
-        // pass-through: reuse/replace pending output (contract: previous
-        // output was fully consumed by the sink before more input arrives)
-        if (outputBuffer.capacity() < bytes) {
+        if (outputBuffer.capacity() < bytes)
             outputBuffer = ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder())
-        } else {
-            outputBuffer.clear()
-        }
-        val src = inputBuffer.duplicate()
-        src.position(0)
-        outputBuffer.put(src)
-        outputBuffer.flip()
+        else outputBuffer.clear()
+        val src = input.duplicate(); src.position(0)
+        outputBuffer.put(src); outputBuffer.flip()
     }
 
-    override fun queueEndOfStream() {
-        inputEnded = true
-        outputEnded = outputBuffer.remaining() == 0
-    }
-
+    override fun queueEndOfStream() { inputEnded = true; outputEnded = outputBuffer.remaining() == 0 }
     override fun getOutput(): ByteBuffer = outputBuffer
-
     override fun isEnded(): Boolean = outputEnded
 
     override fun flush() {
-        inputEnded = false
-        outputEnded = false
+        inputEnded = false; outputEnded = false
         outputBuffer = AudioProcessor.EMPTY_BUFFER
-        // Keep the VAD track; startPositionMs will be refreshed from main
-        // via onPositionDiscontinuity → setStartPosition on seeks.
-        java.util.Arrays.fill(audioBins, 0f)
-        binCount = 0
-        totalFrames = 0
-        windowSamples = 0
-        windowSumSq = 0.0
-        floor = 0.0
-        peak = 0.0
-        lastSpeech = 0.0
-        lastEvalFrames = Long.MIN_VALUE
-        stableHits = 0
-        lastOffset = Double.NaN
+        java.util.Arrays.fill(audioBins, 0f); binCount = 0; totalFrames = 0
+        windowN = 0; floor = 0.0; peak = 0.0; lastSpeech = 0.0
+        lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
     }
 
-    override fun reset() {
-        flush()
-        cues = emptyList()
-        active = false
-    }
+    override fun reset() { flush(); cues = emptyList(); active = false }
 
-    // ── analysis (audio thread) ────────────────────────────────────
+    private fun resetAll() {
+        java.util.Arrays.fill(audioBins, 0f); binCount = 0; totalFrames = 0
+        windowN = 0; floor = 0.0; peak = 0.0; lastSpeech = 0.0
+        lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
+        locked = false
+    }
 
     private fun analyze(pcm: ByteBuffer) {
         if (locked) return
-        val nCh = channelCount
-
-        while (pcm.remaining() >= 2 * nCh) {
-            var sum = 0.0
-            repeat(nCh) {
-                val v = pcm.short.toDouble() / 32768.0
-                sum += v * v
-                pcm.position(pcm.position() + 2)
+        val nCh = channelCount; val frameBytes = 2 * nCh
+        while (pcm.remaining() >= frameBytes) {
+            // fill one window
+            for (ch in 0 until nCh) {
+                if (windowN < windowSamples.size) {
+                    windowSamples[windowN++] = pcm.short
+                    pcm.position(pcm.position() + 2)
+                }
             }
-            windowSumSq += sum
-            windowSamples++
             totalFrames += nCh
 
-            if (windowSamples >= windowTarget) {
-                val rms = sqrt(windowSumSq / (windowSamples * nCh))
-                windowSamples = 0
-                windowSumSq = 0.0
-                accumulateWindow(rms)
+            if (windowN >= min(windowSamples.size, windowTarget * nCh)) {
+                val rms = sqrt(windowSamples.take(windowN).sumOf { it.toDouble() * it } / windowN)
+                
+                // multi-feature speech detection
+                var zcr = 0; var prevSign = windowSamples[0] >= 0
+                for (k in 0 until windowN) {
+                    val curSign = windowSamples[k] >= 0
+                    if (curSign != prevSign) zcr++
+                    prevSign = curSign
+                }
+                val zcrNorm = zcr.toFloat() / windowN
+                val meanAmp = windowSamples.take(windowN).map { abs(it.toFloat()) }.average().toFloat()
+                varianceBuf = windowSamples.take(windowN).map { (it - meanAmp).let { d -> d*d } }.average().toFloat()
+                val normVar = varianceBuf / max(meanAmp * meanAmp, 1f)
+                
+                val uf = floor * 1.08; val up = max(uf + 0.0012, peak)
+                val energyScore = ((rms - uf) / (up - uf).coerceAtLeast(0.001)).coerceIn(0.0, 1.0).toFloat()
+                val varianceScore = min(normVar / 2f, 1f)
+                val zcrScore = when { zcrNorm in 0.02f..0.15f -> 1f; zcrNorm < 0.02f -> 0.5f; else -> max(0f, 1f - (zcrNorm - 0.15f) / 0.2f) }
+                
+                val sp = (energyScore * 0.5 + varianceScore * 0.3 + zcrScore * 0.2).coerceIn(0f, 1f)
+                lastSpeech = sp * 0.72 + lastSpeech * 0.28
+                
+                // adapt floor/peak
+                if (floor == 0.0) { floor = rms; peak = rms*1.9+0.0001 }
+                else { floor = floor*0.986 + min(rms, floor*1.45)*0.014; peak = max(floor+0.00035, max(peak*0.992, rms)) }
+                
+                windowN = 0
+                accumulateBin(sp)
             }
         }
     }
 
-    private fun currentPosMs(): Long =
-        startPositionMs + totalFrames * 1000L / sampleRate.coerceAtLeast(1)
+    private var varianceBuf: Float = 0f
 
-    private fun accumulateWindow(rms: Double) {
-        if (floor == 0.0) {
-            floor = rms
-            peak = rms * 1.9 + 0.0001
-        } else {
-            floor = floor * 0.986 + min(rms, floor * 1.45) * 0.014
-            peak = max(floor + 0.00035, max(peak * 0.992, rms))
-        }
-
-        val usableFloor = floor * 1.08
-        val usablePeak = max(usableFloor + 0.0012, peak)
-        val speech = ((rms - usableFloor) / (usablePeak - usableFloor)).coerceIn(0.0, 1.0)
-
-        val posMs = currentPosMs()
+    private fun accumulateBin(speech: Float) {
+        val posMs = startPositionMs + totalFrames * 1000L / max(sampleRate, 1)
         val idx = (posMs / 100).toInt().coerceIn(0, audioBins.size - 1)
         binCount = max(binCount, idx + 1)
-        audioBins[idx] = max(audioBins[idx], speech.toFloat())
-
-        maybeEvaluate(posMs)
+        audioBins[idx] = max(audioBins[idx], speech)
+        
+        if (posMs - lastEvalPos >= 1400 || lastEvalPos == Long.MIN_VALUE) {
+            if (lastEvalPos == Long.MIN_VALUE) lastEvalPos = posMs
+            else {
+                lastEvalPos = posMs
+                val minBins = (SpeechCorrelator.MIN_AUDIO_SECONDS / SpeechCorrelator.ALIGN_BIN).toInt()
+                if (binCount >= minBins && cues.isNotEmpty()) {
+                    evaluate(posMs)
+                }
+            }
+        }
     }
 
-    private fun maybeEvaluate(posMs: Long) {
-        if (posMs - lastEvalFrames < 1400) return
-        lastEvalFrames = posMs
-        if (binCount < (SpeechCorrelator.MIN_AUDIO_SECONDS / SpeechCorrelator.ALIGN_BIN).toInt()) return
-        if (cues.isEmpty()) return
-
+    private fun evaluate(posMs: Long) {
         val result = SpeechCorrelator.findOffset(audioBins, binCount, cues) ?: return
-
+        
         stableHits = if (!lastOffset.isNaN() &&
-            abs(result.offsetSeconds - lastOffset) <= 0.25
-        ) stableHits + 1 else 1
+            abs(result.offsetSeconds - lastOffset) <= 0.25) stableHits + 1 else 1
         lastOffset = result.offsetSeconds
+        
+        // drift detection from segment offsets
+        driftTracker.add(posMs / 1000.0, result.offsetSeconds)
+        val (base, speedF) = driftTracker.getCorrection(posMs / 1000.0)
+        
+        AppLog.d("SYNC", "eval t=${posMs/1000}s off=${result.offsetSeconds}s speed=$speedF hits=$stableHits")
 
         if (stableHits >= 2) {
             locked = true
-            AppLog.d("SYNC", "LOCKED offset=" + result.offsetSeconds + "s")
-            listener.onSyncLocked(result.offsetSeconds.toFloat())
+            listener.onSyncLocked(base.toFloat(), speedF)
         }
+    }
+
+    companion object {
+        fun min(a: Double, b: Double): Double = if (a < b) a else b
+        fun max(a: Long, b: Int): Long = if (a > b) a else b.toLong()
+        fun max(a: Double, b: Double): Double = if (a > b) a else b
+        fun max(a: Float, b: Float): Float = if (a > b) a else b
+        fun max(a: Int, b: Int): Int = if (a > b) a else b
     }
 }

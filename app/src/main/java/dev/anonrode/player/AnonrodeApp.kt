@@ -40,9 +40,10 @@ class AnonrodeApp : Application() {
                 AppLog.d("PLAYER", "save pos=" + pos + "ms dur=" + dur + " finished=" + finished)
                 stateStore.updatePosition(uri, pos, dur, finished)
             },
-            onAutoSyncSave = { uri, offsetMs ->
-                AppLog.d("SYNC", "persist auto offset " + offsetMs + "ms")
+            onAutoSyncSave = { uri, offsetMs, speedF ->
+                AppLog.d("SYNC", "persist auto offset=" + offsetMs + "ms speed=" + speedF)
                 stateStore.updateAutoSyncOffset(uri, offsetMs)
+                stateStore.updateAutoSyncSpeed(uri, speedF)
             },
         )
         PlayerServiceHolder.engine = engine

@@ -110,7 +110,9 @@ class PlayerActivity : ComponentActivity() {
                 val p = engine.player
                 positionSec = p.currentPosition / 1000f
                 durationSec = (p.duration.takeIf { it > 0 } ?: 0L) / 1000f
-                val t = p.currentPosition / 1000.0 - engine.subtitleOffsetMs / 1000.0
+                val tRaw = p.currentPosition / 1000.0
+                val spd = engine.subtitleSpeedFactor.coerceAtLeast(0.5f)
+                val t = (tRaw - engine.subtitleOffsetMs / 1000.0) / spd
                 cueText = findCue(cues, t)?.lines?.joinToString("\n")
                 handler.postDelayed(this, 100)
             }

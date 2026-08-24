@@ -38,7 +38,7 @@ class PlaybackEngine(
     private val settingsProvider: () -> PlayerSettings,
     private val positionRestore: suspend (String) -> Long?,
     private val onPositionSave: suspend (uri: String, positionMs: Long, durationMs: Long?, finished: Boolean) -> Unit,
-    private val onAutoSyncSave: suspend (uri: String, offsetMs: Long) -> Unit = { _, _ -> },
+    private val onAutoSyncSave: suspend (uri: String, offsetMs: Long, speedFactor: Float) -> Unit = { _, _, _ -> },
 ) : SyncListener {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -48,6 +48,7 @@ class PlaybackEngine(
     /** Applied subtitle offset in ms: persisted auto lock + manual delay. */
     var subtitleOffsetMs: Long = 0L
         private set
+    /** Speed correction factor from drift detection (1.0 = no drift). */
     var subtitleSpeedFactor: Float = 1f
         private set
 
@@ -107,14 +108,14 @@ class PlaybackEngine(
         subtitleOffsetMs = manualDelayMs
     }
 
-    override fun onSyncLocked(offsetSeconds: Float) {
-        AppLog.d("SYNC", "LOCKED at " + offsetSeconds + "s")
-        // Additive semantics: applied = persisted/refined auto lock + manual.
+    override fun onSyncLocked(offsetSeconds: Float, speedFactor: Float) {
+        AppLog.d("SYNC", "LOCKED offset=" + offsetSeconds + "s speed=" + speedFactor)
         val autoMs = (offsetSeconds * 1000f).toLong()
         subtitleOffsetMs = autoMs + manualDelayMs
+        subtitleSpeedFactor = speedFactor
         val uri = currentUri
         if (uri != null) {
-            scope.launch { onAutoSyncSave(uri, autoMs) }
+            scope.launch { onAutoSyncSave(uri, autoMs, speedFactor) }
         }
     }
 
@@ -128,12 +129,13 @@ class PlaybackEngine(
         cues: List<SubtitleCue>,
         manualDelayMs: Long,
         persistedAutoOffsetMs: Long = 0L,
+        persistedSpeedFactor: Float = 1f,
     ) {
         currentUri = uri
         this.manualDelayMs = manualDelayMs
-        // Instant sync from the persisted offset; the engine refines live.
         subtitleOffsetMs = persistedAutoOffsetMs + manualDelayMs
-        attachSyncProcessor(cues, /* startPositionMs = */ 0L)
+        subtitleSpeedFactor = persistedSpeedFactor
+        attachSyncProcessor(cues, 0L)
 
         AppLog.d("ENGINE", "play: setMediaItem+prepare")
         player.setMediaItem(mediaItem)
