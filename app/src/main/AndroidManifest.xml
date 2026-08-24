@@ -37,7 +37,8 @@
             android:name=".PlayerActivity"
             android:exported="false"
             android:launchMode="singleTask"
-            android:configChanges="orientation|screenSize|keyboardHidden" />
+            android:supportsPictureInPicture="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden" />
 
         <service
             android:name="dev.anonrode.player.feature.player.PlayerService"

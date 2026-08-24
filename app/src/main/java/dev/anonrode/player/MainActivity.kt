@@ -13,12 +13,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,25 +54,16 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AnonrodeTheme {
-                Scaffold(
-                    topBar = {
-                        @OptIn(ExperimentalMaterial3Api::class)
-                        TopAppBar(title = { Text("Anonrode") })
-                    }
-                ) { padding ->
-                    if (hasVideoPermission()) {
-                        LibraryScreen(
-                            modifier = Modifier.padding(padding),
-                            loading = false,
-                            viewModelFactory = LibraryVmFactory(app.scanner, app.stateStore),
-                            onOpenVideo = { video -> play(video.uri, video.title) },
-                        )
-                    } else {
-                        PermissionGate(
-                            modifier = Modifier.padding(padding),
-                            onRequest = { permissionLauncher.launch(requiredPermissions()) },
-                        )
-                    }
+                // LibraryScreen draws its own top bar and bottom navigation.
+                if (hasVideoPermission()) {
+                    LibraryScreen(
+                        viewModelFactory = LibraryVmFactory(app.scanner, app.stateStore),
+                        onOpenVideo = { video -> play(video.uri, video.title) },
+                    )
+                } else {
+                    PermissionGate(
+                        onRequest = { permissionLauncher.launch(requiredPermissions()) },
+                    )
                 }
             }
         }
@@ -100,7 +89,10 @@ class LibraryVmFactory(
 @Composable
 fun PermissionGate(modifier: Modifier = Modifier, onRequest: () -> Unit) {
     Column(
-        modifier = modifier.fillMaxSize().padding(32.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {

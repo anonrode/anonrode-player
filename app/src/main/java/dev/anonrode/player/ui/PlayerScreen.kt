@@ -2,8 +2,10 @@ package dev.anonrode.player.ui
 
 import android.app.Activity
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -17,31 +19,45 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ScreenLockPortrait
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -57,17 +73,23 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import dev.anonrode.player.core.media.log.AppLog
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private val Accent = Color(0xFF6C63FF)
 private val Teal = Color(0xFF00D4AA)
+
+/** Show the Next-Episode shortcut pill within this many seconds of the end. */
+private const val NEXT_BUTTON_WINDOW_SEC = 30f
 
 private fun fmtTime(ms: Long): String {
     val s = ms / 1000
@@ -77,10 +99,46 @@ private fun fmtTime(ms: Long): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
 }
 
+/** Short m:ss formatting for the sleep-timer badge (remaining minutes:seconds). */
+private fun fmtCountdown(ms: Long): String {
+    val s = ms / 1000
+    return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
+}
+
+/** Options offered by the Bedtime (sleep timer) dropdown. [minutes] < 0 = end of episode. */
+private data class SleepOption(val label: String, val minutes: Int)
+
+private val SleepOptions = listOf(
+    SleepOption("Off", 0),
+    SleepOption("5min", 5),
+    SleepOption("10min", 10),
+    SleepOption("15min", 15),
+    SleepOption("30min", 30),
+    SleepOption("60min", 60),
+    SleepOption("End of episode", -1),
+)
+
+/**
+ * Zoom modes cycled by the resize button; [resizeMode] maps directly onto
+ * PlayerView's AspectRatioFrameLayout constants.
+ */
+private data class ZoomMode(val abbreviation: String, val resizeMode: Int)
+
+private val ZoomModes = listOf(
+    ZoomMode("FIT", AspectRatioFrameLayout.RESIZE_MODE_FIT),
+    ZoomMode("CROP", AspectRatioFrameLayout.RESIZE_MODE_ZOOM),
+    ZoomMode("STR", AspectRatioFrameLayout.RESIZE_MODE_FILL),
+)
+
 /**
  * Full-bleed player: gradient-scrim overlay controls, auto-hide while playing,
  * double-tap ±10s with flash, left/right vertical swipe = brightness/volume
  * with HUD pill, horizontal swipe = live seek. MX-style, per Section 3 spec.
+ *
+ * Extras: Bedtime dropdown arms a wall-clock sleep timer (or "end of
+ * episode" pause), the resize button cycles FIT → CROP → STR, and a PiP
+ * button delegates to the activity; while in PiP ([isPipMode]) every overlay
+ * (controls, subtitles, badges, diagnostics) hides.
  */
 @UnstableApi
 @Composable
@@ -91,6 +149,19 @@ fun PlayerScreen(
     positionSec: Float,
     durationSec: Float,
     onBack: () -> Unit,
+    initialSpeed: Float = 1f,
+    onSpeedChanged: (Float) -> Unit = {},
+    isPipMode: Boolean = false,
+    onEnterPip: () -> Unit = {},
+    hasNextEpisode: Boolean = false,
+    hasPreviousEpisode: Boolean = false,
+    onPlayNext: () -> Unit = {},
+    onPlayPrevious: () -> Unit = {},
+    nextCountdownSec: Int = -1,
+    onCancelNext: () -> Unit = {},
+    onHoldAutoAdvance: () -> Unit = {},
+    /** Clean display name of the next episode, for the Up Next surfaces. */
+    upNextTitle: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -104,13 +175,76 @@ fun PlayerScreen(
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var stateText by remember { mutableStateOf("IDLE") }
     var showCC by remember { mutableStateOf(true) }
-    var speedIdx by remember { mutableIntStateOf(2) }
     val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+    // Keyed on initialSpeed so the button re-syncs when the activity restores
+    // a different persisted speed (e.g. after an auto-advance episode switch).
+    var speedIdx by remember(initialSpeed) {
+        mutableIntStateOf(speeds.indexOfFirst { abs(it - initialSpeed) < 0.05f }.takeIf { it >= 0 } ?: 2)
+    }
 
     var hudIcon by remember { mutableStateOf<ImageVector?>(null) }
     var hudText by remember { mutableStateOf("") }
     var hudVisible by remember { mutableStateOf(false) }
     var flashSide by remember { mutableIntStateOf(0) } // -1 left, +1 right, 0 none
+
+    // ── feature state ────────────────────────────────────────────────
+    // Sleep timer: wall-clock expiry so re-arming mid-countdown simply moves
+    // the deadline. Null = no countdown armed.
+    var sleepTimerEndMs by remember { mutableStateOf<Long?>(null) }
+    /** True when armed for "end of episode" instead of a countdown. */
+    var sleepAtEpisodeEnd by remember { mutableStateOf(false) }
+    /** Last ticked remainder, purely for badge display. */
+    var sleepRemainingMs by remember { mutableLongStateOf(0L) }
+    /** Chosen dropdown entry, for the checkmark (reset to Off on fire). */
+    var sleepSelection by remember { mutableStateOf(SleepOptions.first()) }
+    var sleepMenuOpen by remember { mutableStateOf(false) }
+    val sleepTimerActive = sleepTimerEndMs != null || sleepAtEpisodeEnd
+
+    var rotationLocked by remember { mutableStateOf(false) }
+    /** Index into [ZoomModes]: FIT → CROP → STR. */
+    var zoomIdx by remember { mutableIntStateOf(0) }
+    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+
+    // Speed persistence: mirror the restored per-video speed into the player
+    // whenever it changes (also applied explicitly by the host before each
+    // episode; unconditional so a saved 1x resets a faster prior episode).
+    LaunchedEffect(initialSpeed) {
+        player.setPlaybackSpeed(initialSpeed)
+    }
+
+    // Apply the active zoom mode to the surface frame even if the PlayerView
+    // was created before this index changed.
+    LaunchedEffect(zoomIdx) {
+        playerViewRef?.resizeMode = ZoomModes[zoomIdx].resizeMode
+    }
+
+    // Rotation lock: sensor landscape while engaged, full sensor otherwise.
+    DisposableEffect(rotationLocked) {
+        activity?.requestedOrientation = if (rotationLocked) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        }
+        onDispose {
+            // Leaving the screen always restores free rotation.
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        }
+    }
+
+    // Sleep-timer countdown: checks every second; pause + clear past expiry.
+    LaunchedEffect(sleepTimerEndMs) {
+        while (sleepTimerEndMs != null) {
+            delay(1000)
+            val endMs = sleepTimerEndMs ?: break
+            val remaining = endMs - System.currentTimeMillis()
+            sleepRemainingMs = remaining.coerceAtLeast(0L)
+            if (remaining <= 0L) {
+                player.pause()
+                sleepTimerEndMs = null
+                sleepSelection = SleepOptions.first()
+            }
+        }
+    }
 
     DisposableEffect(player) {
         val l = object : Player.Listener {
@@ -127,9 +261,17 @@ fun PlayerScreen(
                     Player.STATE_ENDED -> "ENDED"
                     else -> "?"
                 }
+                // "End of episode" sleep timer fires when playback finishes.
+                if (playbackState == Player.STATE_ENDED && sleepAtEpisodeEnd) {
+                    player.pause()
+                    sleepAtEpisodeEnd = false
+                    sleepSelection = SleepOptions.first()
+                    // Tell the activity to hold auto-advance for this finish.
+                    onHoldAutoAdvance()
+                }
             }
 
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            override fun onPlayerError(error: PlaybackException) {
                 errorMsg = error.errorCodeName + ": " + (error.cause?.message ?: error.message ?: "unknown")
             }
         }
@@ -144,6 +286,36 @@ fun PlayerScreen(
         view.postDelayed({ hudVisible = false }, 900)
     }
 
+    fun selectSleep(opt: SleepOption) {
+        sleepMenuOpen = false
+        when {
+            opt.minutes > 0 -> {
+                sleepAtEpisodeEnd = false
+                sleepRemainingMs = opt.minutes * 60_000L
+                sleepTimerEndMs = System.currentTimeMillis() + sleepRemainingMs
+            }
+            opt.minutes < 0 -> { // End of episode
+                sleepTimerEndMs = null
+                sleepAtEpisodeEnd = true
+            }
+            else -> { // Off
+                sleepTimerEndMs = null
+                sleepAtEpisodeEnd = false
+            }
+        }
+        sleepSelection = opt
+    }
+
+    /** Checkmark condition for the dropdown entry matching the armed timer. */
+    val isSleepSelected: (SleepOption) -> Boolean = { opt ->
+        when {
+            opt.minutes > 0 ->
+                sleepTimerEndMs != null && !sleepAtEpisodeEnd && sleepSelection == opt
+            opt.minutes < 0 -> sleepAtEpisodeEnd
+            else -> !sleepTimerActive
+        }
+    }
+
     fun seekBy(sec: Int) {
         val d = player.duration.takeIf { it > 0 } ?: return
         player.seekTo((player.currentPosition + sec * 1000L).coerceIn(0L, d))
@@ -151,8 +323,8 @@ fun PlayerScreen(
         view.postDelayed({ flashSide = 0 }, 420)
     }
 
-    LaunchedEffect(controlsVisible, isPlaying, locked) {
-        if (controlsVisible && isPlaying && !locked) {
+    LaunchedEffect(controlsVisible, isPlaying, locked, sleepMenuOpen) {
+        if (controlsVisible && isPlaying && !locked && !sleepMenuOpen) {
             kotlinx.coroutines.delay(3500)
             controlsVisible = false
         }
@@ -174,24 +346,24 @@ fun PlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .onSizeChanged { scrW = it.width.toFloat(); scrH = it.height.toFloat() }
-            .pointerInput(locked) {
+            .pointerInput(locked, isPipMode) {
                 detectTapGestures(
                     onTap = {
+                        if (isPipMode) return@detectTapGestures
                         if (!locked) controlsVisible = !controlsVisible else locked = false
                     },
                     onDoubleTap = { off ->
-                        if (!locked) {
-                            val dir = if (off.x < scrW / 2) -1 else 1
-                            seekBy(dir * 10)
-                            controlsVisible = false
-                        }
+                        if (isPipMode || locked) return@detectTapGestures
+                        val dir = if (off.x < scrW / 2) -1 else 1
+                        seekBy(dir * 10)
+                        controlsVisible = false
                     }
                 )
             }
-            .pointerInput(locked) {
+            .pointerInput(locked, isPipMode) {
                 detectDragGestures(
                     onDragStart = { off ->
-                        if (locked) return@detectDragGestures
+                        if (locked || isPipMode) return@detectDragGestures
                         mode = null
                         startX = off.x
                         startY = off.y
@@ -202,7 +374,7 @@ fun PlayerScreen(
                             ?.takeIf { it >= 0 } ?: 0.5f
                     },
                     onDrag = { change, _ ->
-                        if (locked) return@detectDragGestures
+                        if (locked || isPipMode) return@detectDragGestures
                         change.consume()
                         val x = change.position.x
                         val y = change.position.y
@@ -265,12 +437,16 @@ fun PlayerScreen(
                     this.player = player
                     useController = false
                     setShutterBackgroundColor(android.graphics.Color.BLACK)
-                }
+                    resizeMode = ZoomModes[zoomIdx].resizeMode
+                }.also { playerViewRef = it }
+            },
+            update = { pv ->
+                pv.resizeMode = ZoomModes[zoomIdx].resizeMode
             }
         )
 
         // ── subtitle ─────────────────────────────────────────────────
-        if (showCC) {
+        if (showCC && !isPipMode) {
             cueText?.let { txt ->
                 Text(
                     txt,
@@ -288,7 +464,7 @@ fun PlayerScreen(
         }
 
         // ── double-tap flash ─────────────────────────────────────────
-        if (flashSide != 0) {
+        if (flashSide != 0 && !isPipMode) {
             Box(
                 modifier = Modifier
                     .align(if (flashSide < 0) Alignment.CenterStart else Alignment.CenterEnd)
@@ -311,7 +487,7 @@ fun PlayerScreen(
         }
 
         // ── gesture HUD pill ─────────────────────────────────────────
-        if (hudVisible) {
+        if (hudVisible && !isPipMode) {
             Row(
                 modifier = Modifier
                     .align(Alignment.Center)
@@ -326,7 +502,7 @@ fun PlayerScreen(
         }
 
         // ── lock badge ───────────────────────────────────────────────
-        if (locked) {
+        if (locked && !isPipMode) {
             IconButton(
                 onClick = { locked = false },
                 modifier = Modifier
@@ -339,7 +515,7 @@ fun PlayerScreen(
         }
 
         // diagnostics overlay (temporary - engine debugging)
-        if (errorMsg != null || stateText != "READY") {
+        if (!isPipMode && (errorMsg != null || stateText != "READY")) {
             val diag = buildString {
                 errorMsg?.let { append("ERROR: ").append(it).append('\n') }
                 append("state=").append(stateText)
@@ -357,8 +533,8 @@ fun PlayerScreen(
             )
         }
 
-        // ── controls overlay ─────────────────────────────────────────
-        if (controlsVisible && !locked) {
+        // ── controls overlay (hidden entirely while in PiP) ──────────
+        if (controlsVisible && !locked && !isPipMode) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -400,22 +576,63 @@ fun PlayerScreen(
                         .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
                         .padding(horizontal = 10.dp, vertical = 4.dp)
                 )
+                IconButton(onClick = { rotationLocked = !rotationLocked }) {
+                    Icon(
+                        if (rotationLocked) Icons.Filled.ScreenLockPortrait
+                        else Icons.Filled.ScreenRotation,
+                        contentDescription = if (rotationLocked) "Rotation locked"
+                        else "Rotation unlocked",
+                        tint = if (rotationLocked) Teal else Color.White
+                    )
+                }
                 IconButton(onClick = { locked = true }) {
                     Icon(Icons.Filled.Lock, null, tint = Color.White)
                 }
             }
 
-            IconButton(
-                onClick = { if (player.isPlaying) player.pause() else player.play() },
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(72.dp)
-                    .background(Color.White.copy(alpha = 0.14f), CircleShape)
+            // ── center transport: previous · play/pause · next ────────
+            Row(
+                modifier = Modifier.align(Alignment.Center),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(26.dp)
             ) {
-                Icon(
-                    if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    null, tint = Color.White, modifier = Modifier.size(40.dp)
-                )
+                if (hasPreviousEpisode) {
+                    IconButton(
+                        onClick = onPlayPrevious,
+                        modifier = Modifier.size(52.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.SkipPrevious,
+                            contentDescription = "Previous episode",
+                            tint = Color.White,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = { if (player.isPlaying) player.pause() else player.play() },
+                    modifier = Modifier
+                        .size(72.dp)
+                        .background(Color.White.copy(alpha = 0.14f), CircleShape)
+                ) {
+                    Icon(
+                        if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        null, tint = Color.White, modifier = Modifier.size(40.dp)
+                    )
+                }
+                if (hasNextEpisode) {
+                    IconButton(
+                        onClick = onPlayNext,
+                        modifier = Modifier.size(52.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.SkipNext,
+                            contentDescription = "Next episode",
+                            tint = Color.White,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                }
             }
 
             Column(
@@ -457,19 +674,143 @@ fun PlayerScreen(
                         Icon(Icons.Filled.ClosedCaption, null,
                             tint = if (showCC) Color.White else Color.White.copy(alpha = 0.35f))
                     }
+                    // ── zoom mode cycle: FIT → CROP → STR ─────────────
+                    IconButton(
+                        onClick = {
+                            zoomIdx = (zoomIdx + 1) % ZoomModes.size
+                            showHud(Icons.Filled.AspectRatio, ZoomModes[zoomIdx].abbreviation)
+                        },
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Text(
+                            ZoomModes[zoomIdx].abbreviation,
+                            color = if (zoomIdx != 0) Color.White
+                            else Color.White.copy(alpha = 0.7f),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    // ── picture-in-picture ────────────────────────────
+                    IconButton(onClick = onEnterPip, modifier = Modifier.size(34.dp)) {
+                        Icon(
+                            Icons.Filled.PictureInPictureAlt,
+                            contentDescription = "Picture-in-picture",
+                            tint = Color.White
+                        )
+                    }
                     IconButton(onClick = {
                         speedIdx = (speedIdx + 1) % speeds.size
-                        player.setPlaybackSpeed(speeds[speedIdx])
+                        val sp = speeds[speedIdx]
+                        player.setPlaybackSpeed(sp)
+                        onSpeedChanged(sp)
                     }, modifier = Modifier.size(34.dp)) {
                         Text(speeds[speedIdx].toString() + "×", color = Color.White,
                             style = MaterialTheme.typography.labelSmall)
                     }
-                    IconButton(onClick = { /* sleep timer v2 */ }, modifier = Modifier.size(34.dp)) {
-                        Icon(Icons.Filled.Bedtime, null, tint = Color.White)
+                    // ── sleep timer ───────────────────────────────────
+                    Box {
+                        IconButton(
+                            onClick = { sleepMenuOpen = true },
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            BadgedBox(
+                                badge = {
+                                    if (sleepTimerActive) {
+                                        Badge(containerColor = Accent) {
+                                            Text(
+                                                if (sleepAtEpisodeEnd) "END"
+                                                else fmtCountdown(sleepRemainingMs),
+                                                color = Color.White,
+                                                fontSize = 9.sp,
+                                            )
+                                        }
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Filled.Bedtime,
+                                    contentDescription = "Sleep timer",
+                                    tint = if (sleepTimerActive) Teal else Color.White
+                                )
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = sleepMenuOpen,
+                            onDismissRequest = { sleepMenuOpen = false },
+                            containerColor = Color(0xFF1C1C24),
+                        ) {
+                            SleepOptions.forEach { opt ->
+                                DropdownMenuItem(
+                                    text = { Text(opt.label, color = Color.White) },
+                                    trailingIcon = {
+                                        if (isSleepSelected(opt)) {
+                                            Icon(Icons.Filled.Check, null,
+                                                tint = Teal, modifier = Modifier.size(18.dp))
+                                        }
+                                    },
+                                    onClick = { selectSleep(opt) }
+                                )
+                            }
+                        }
                     }
+                }
+            }
+        }
+
+        // ── Up Next pill (final 30 s of an episode) ──────────────────
+        if (!isPipMode && hasNextEpisode && durationSec > 0f &&
+            durationSec - positionSec <= NEXT_BUTTON_WINDOW_SEC && nextCountdownSec < 0
+        ) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 110.dp)
+                    .background(Accent.copy(alpha = 0.92f), RoundedCornerShape(20.dp))
+                    .clickable { onPlayNext() }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    Icons.Filled.SkipNext,
+                    contentDescription = "Next episode",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    if (upNextTitle.isNullOrEmpty()) "Next episode"
+                    else "Up Next: $upNextTitle",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 280.dp)
+                )
+            }
+        }
+
+        // ── auto-advance countdown overlay ("Next episode in N...") ──
+        if (!isPipMode && nextCountdownSec > 0) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 22.dp, vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Next episode in $nextCountdownSec...",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Row(
+                    modifier = Modifier.padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(onClick = onCancelNext) { Text("Cancel") }
+                    TextButton(onClick = onPlayNext) { Text("Play now") }
                 }
             }
         }
     }
 }
-

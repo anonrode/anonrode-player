@@ -1,29 +1,38 @@
 package dev.anonrode.player
 
+import android.app.PictureInPictureParams
 import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import dev.anonrode.player.core.datastore.playerSettingsDataStore
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.subtitle.SubtitleParser
 import dev.anonrode.player.core.model.SubtitleCue
+import dev.anonrode.player.core.model.Video
 import dev.anonrode.player.core.ui.theme.AnonrodeTheme
 import dev.anonrode.player.ui.PlayerScreen
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -32,6 +41,16 @@ import kotlinx.coroutines.withContext
  * persisted auto-sync offset + manual delay (additive), resolve sidecar
  * subtitles, and drive the subtitle render loop (binary search + offset).
  * State fields are Compose-backed so only affected UI recomposes.
+ *
+ * Picture-in-Picture: [onUserLeaveHint] auto-enters PiP (16:9) when the user
+ * leaves mid-playback; [onPictureInPictureModeChanged] mirrors PiP state into
+ * a Compose field that hides all overlay UI while the window is miniaturized.
+ *
+ * Episodes: after starting playback an [EpisodeQueue] is built from the
+ * sibling videos in the same folder (sorted by [dev.anonrode.player.core.model.EpisodePattern]).
+ * STATE_ENDED marks the episode finished and counts down to the next one;
+ * the screen exposes manual Next/Previous skips and an "Up Next" overlay over
+ * the final 30 seconds. Playback speed changes are persisted per-video.
  */
 @UnstableApi
 class PlayerActivity : ComponentActivity() {
@@ -40,14 +59,61 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_URI = "uri"
         const val EXTRA_TITLE = "title"
         private val SUB_EXTS = listOf("srt", "vtt", "ass", "ssa")
+        private const val NEXT_COUNTDOWN_SEC = 5
     }
 
     private val handler = Handler(Looper.getMainLooper())
 
+    private var title by mutableStateOf("")
     private var cueText by mutableStateOf<String?>(null)
     private var positionSec by mutableFloatStateOf(0f)
     private var durationSec by mutableFloatStateOf(0f)
     private var syncSpeedFactor by mutableFloatStateOf(1f)
+
+    /** Playback speed applied to the current video (drives the speed button). */
+    private var restoredSpeed by mutableFloatStateOf(1f)
+
+    /** URI of the media the engine is playing (speed persistence target). */
+    private var currentUriStr: String? = null
+
+    /** True while the activity renders inside the system PiP window. */
+    private var pipMode by mutableStateOf(false)
+
+    /** Speed last applied this session; fallback when an episode has no saved value. */
+    private var sessionSpeed = 1f
+
+    // ── auto-advance (next episode) state ────────────────────────────
+
+    /** Sibling episodes of the playing video; built once per [openVideo]. */
+    private var episodeQueue by mutableStateOf<EpisodeQueue?>(null)
+
+    /** Seconds left in the auto-advance countdown; -1 = inactive. */
+    private var nextCountdownSec by mutableIntStateOf(-1)
+
+    @Volatile
+    private var pendingNext: Video? = null
+
+    @Volatile
+    private var switching = false
+
+    /** One-shot set by the End-of-Episode sleep timer to stop auto-advance. */
+    @Volatile
+    private var holdAutoAdvanceOnce = false
+
+    /** Render-loop runnable so an episode switch replaces the old loop. */
+    private var renderTick: Runnable? = null
+
+    private val playerEventListener = object : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED && !switching) onEpisodeEnded()
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            // User resumed playback mid-countdown → stay on this episode.
+            if (isPlaying && !switching && pendingNext != null) cancelNextCountdown()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) updatePipAutoEnter(isPlaying)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,9 +129,11 @@ class PlayerActivity : ComponentActivity() {
             finish()
             return
         }
-        val title = intent.getStringExtra(EXTRA_TITLE) ?: uriStr
+        title = intent.getStringExtra(EXTRA_TITLE) ?: uriStr
         val app = AnonrodeApp.get(this)
         val engine = app.engine
+
+        engine.player.addListener(playerEventListener)
 
         setContent {
             AnonrodeTheme {
@@ -76,11 +144,53 @@ class PlayerActivity : ComponentActivity() {
                     positionSec = positionSec,
                     durationSec = durationSec,
                     onBack = { finish() },
+                    initialSpeed = restoredSpeed,
+                    onSpeedChanged = { speed ->
+                        // Persist per-video playback speed (Room, media_state).
+                        sessionSpeed = speed
+                        val targetUri = currentUriStr
+                        if (targetUri != null) {
+                            lifecycleScope.launch(Dispatchers.IO) {
+                                app.stateStore.updatePlaybackSpeed(targetUri, speed)
+                                AppLog.d("SPEED", "persisted $speed for $targetUri")
+                            }
+                        }
+                    },
+                    isPipMode = pipMode,
+                    onEnterPip = { enterPip() },
+                    hasNextEpisode = episodeQueue?.next() != null,
+                    hasPreviousEpisode = episodeQueue?.previous() != null,
+                    onPlayNext = { playNextNow() },
+                    onPlayPrevious = { playPreviousNow() },
+                    nextCountdownSec = nextCountdownSec,
+                    onCancelNext = { cancelNextCountdown() },
+                    onHoldAutoAdvance = { holdAutoAdvance() },
+                    upNextTitle = episodeQueue?.next()
+                        ?.let { it.title.substringAfterLast('/').substringBeforeLast('.') },
                 )
             }
         }
 
-        // Resolve sidecar subtitles + start playback off the main thread.
+        openVideo(uriStr, title)
+    }
+
+    /**
+     * Resolve sidecar subtitles + persisted state off the main thread, build
+     * the [EpisodeQueue] from sibling videos sharing the folder, then start
+     * playback. Reused for the initial open and every episode switch; resets
+     * Compose-backed state for a fresh start each time.
+     */
+    private fun openVideo(uriStr: String, displayTitle: String) {
+        val app = AnonrodeApp.get(this)
+        val engine = app.engine
+        currentUriStr = uriStr
+
+        // Fresh UI state for the new media item.
+        cueText = null
+        positionSec = 0f
+        durationSec = 0f
+        title = displayTitle
+
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 AppLog.d("PLAY", "opening " + uriStr)
@@ -93,17 +203,182 @@ class PlayerActivity : ComponentActivity() {
                 AppLog.d("PLAY", "parsed " + parsed.size + " cues")
                 val manual = state?.subtitleDelayMs ?: 0L
                 val auto = state?.autoSyncOffsetMs ?: 0L
+
+                // Speed persistence: apply this video's saved speed; fall back
+                // to the last speed used this session so binge sessions keep
+                // momentum when an episode was never individually set.
+                val speed = app.stateStore.savedPlaybackSpeed(uriStr) ?: sessionSpeed
+                sessionSpeed = speed
+
+                // Episode queue: every MediaStore video sharing this folder,
+                // sorted by season/episode number, index resolved to uriStr.
+                val queue = EpisodeQueue.build(app.scanner, uriStr)
+
                 withContext(Dispatchers.Main) {
+                    restoredSpeed = speed
+                    queue?.current?.title?.let { title = it }
+                    val player = engine.player
+                    player.setPlaybackSpeed(speed)
                     engine.play(MediaItem.fromUri(uriStr), uriStr, parsed, manual, auto)
-                    startRenderLoop(parsed)
+                    // Fully-watched episodes restart from the top instead of
+                    // resuming at the final frame; the resulting seek
+                    // discontinuity re-anchors the sync processor.
+                    if (state?.finished == true) player.seekTo(0)
+                    restartRenderLoop(parsed)
+                    episodeQueue = queue
+                    switching = false
                 }
             } catch (e: Exception) {
+                switching = false
                 AppLog.e("PLAY", "FAILED to start playback", e)
             }
         }
     }
 
-    private fun startRenderLoop(cues: List<SubtitleCue>) {
+    /** Enter Picture-in-Picture with a fixed 16:9 aspect ratio (API 26+). */
+    private fun enterPip() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(16, 9))
+                .build()
+            enterPictureInPictureMode(params)
+        }
+    }
+
+    /**
+     * Home gesture / app switch while playing: hand playback off to the
+     * floating PiP window instead of stopping it.
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        val engine = AnonrodeApp.get(this).engine
+        if (Build.VERSION.SDK_INT >= 26 && engine.player.isPlaying) {
+            enterPip()
+        }
+    }
+
+    /** Mirror PiP transitions into Compose state; PlayerScreen hides overlays. */
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        pipMode = isInPictureInPictureMode
+        AppLog.d("PIP", "pip mode = " + isInPictureInPictureMode)
+    }
+
+    // ── auto-advance: queue-driven navigation + countdown ────────────
+
+    /** STATE_ENDED: persist completion, then maybe queue the next episode. */
+    private fun onEpisodeEnded() {
+        val app = AnonrodeApp.get(this)
+        // Position == duration here, so savePositionNow marks it finished.
+        app.engine.savePositionNow()
+        lifecycleScope.launch {
+            val autoAdvance = try {
+                app.playerSettingsDataStore.data.first().autoAdvance
+            } catch (e: Exception) {
+                AppLog.e("NEXT", "settings read failed", e)
+                true
+            }
+            val next = episodeQueue?.next()
+            if (autoAdvance && next != null && !consumeAutoAdvanceHold()) {
+                AppLog.d("NEXT", "queuing " + next.title)
+                beginNextCountdown(next)
+            }
+        }
+    }
+
+    private fun consumeAutoAdvanceHold(): Boolean =
+        holdAutoAdvanceOnce.also { holdAutoAdvanceOnce = false }
+
+    /** Sleep timer chose "End of episode": stop instead of advancing. */
+    private fun holdAutoAdvance() {
+        holdAutoAdvanceOnce = true
+        cancelNextCountdown()
+    }
+
+    private fun beginNextCountdown(ep: Video) {
+        pendingNext = ep
+        nextCountdownSec = NEXT_COUNTDOWN_SEC
+        handler.removeCallbacks(countdownTick)
+        handler.postDelayed(countdownTick, 1000L)
+    }
+
+    private val countdownTick = object : Runnable {
+        override fun run() {
+            val ep = pendingNext ?: run {
+                nextCountdownSec = -1
+                return
+            }
+            val n = nextCountdownSec - 1
+            if (n <= 0) {
+                performSwitch(ep)
+            } else {
+                nextCountdownSec = n
+                handler.postDelayed(this, 1000L)
+            }
+        }
+    }
+
+    private fun cancelNextCountdown() {
+        pendingNext = null
+        nextCountdownSec = -1
+        handler.removeCallbacks(countdownTick)
+    }
+
+    /** Jump straight to the next episode (Up Next pill or "Play now"). */
+    private fun playNextNow() {
+        val ep = pendingNext ?: episodeQueue?.next() ?: return
+        performSwitch(ep)
+    }
+
+    /** Jump to the previous episode (transport skip-back). */
+    private fun playPreviousNow() {
+        val ep = episodeQueue?.previous() ?: return
+        performSwitch(ep)
+    }
+
+    /**
+     * Switch to [ep]. Saving progress first means an episode that genuinely
+     * reached the end persists as finished, while early manual skips keep
+     * their resume position unmarked.
+     */
+    private fun performSwitch(ep: Video) {
+        AppLog.d("NEXT", "switching to " + ep.title)
+        pendingNext = null
+        nextCountdownSec = -1
+        handler.removeCallbacks(countdownTick)
+        switching = true
+        // Capture + persist current progress before currentUriStr moves on.
+        AnonrodeApp.get(this).engine.savePositionNow()
+        openVideo(ep.uri, ep.title)
+    }
+
+    // ── Picture-in-Picture helpers ───────────────────────────────────
+
+    /**
+     * Keep the S+ gesture-nav auto-enter flag in sync with play/pause:
+     * leaving the app while playing pops PiP automatically; leaving while
+     * paused does not.
+     */
+    @RequiresApi(Build.VERSION_CODES.S)
+    private fun updatePipAutoEnter(playing: Boolean) {
+        if (pipMode) return
+        try {
+            setPictureInPictureParams(
+                PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(16, 9))
+                    .setAutoEnterEnabled(playing)
+                    .build()
+            )
+        } catch (e: Exception) {
+            AppLog.e("PIP", "param update failed", e)
+        }
+    }
+
+    private fun restartRenderLoop(cues: List<SubtitleCue>) {
+        renderTick?.let { handler.removeCallbacks(it) }
         val tick = object : Runnable {
             override fun run() {
                 val engine = AnonrodeApp.get(this@PlayerActivity).engine
@@ -117,6 +392,7 @@ class PlayerActivity : ComponentActivity() {
                 handler.postDelayed(this, 100)
             }
         }
+        renderTick = tick
         handler.post(tick)
     }
 
@@ -197,7 +473,11 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        AnonrodeApp.get(this).engine.savePositionNow()
+        renderTick = null
+        pendingNext = null
+        val engine = AnonrodeApp.get(this).engine
+        engine.player.removeListener(playerEventListener)
+        engine.savePositionNow()
         super.onDestroy()
     }
 }
