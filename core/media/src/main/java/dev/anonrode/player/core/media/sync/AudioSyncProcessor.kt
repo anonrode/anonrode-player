@@ -8,6 +8,7 @@ import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.model.SubtitleCue
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -137,17 +138,19 @@ class AudioSyncProcessor(
                 }
                 val zcrNorm = zcr.toFloat() / windowN
                 val meanAmp = windowSamples.take(windowN).map { abs(it.toFloat()) }.average().toFloat()
-                varianceBuf = windowSamples.take(windowN).map { (it - meanAmp).let { d -> d*d } }.average().toFloat()
+                val varianceBuf = windowSamples.take(windowN)
+                    .map { d -> (d - meanAmp) * (d - meanAmp) }
+                    .average().toFloat()
                 val normVar = varianceBuf / max(meanAmp * meanAmp, 1f)
-                
+
                 val uf = floor * 1.08; val up = max(uf + 0.0012, peak)
                 val energyScore = ((rms - uf) / (up - uf).coerceAtLeast(0.001)).coerceIn(0.0, 1.0).toFloat()
                 val varianceScore = min(normVar / 2f, 1f)
                 val zcrScore = when { zcrNorm in 0.02f..0.15f -> 1f; zcrNorm < 0.02f -> 0.5f; else -> max(0f, 1f - (zcrNorm - 0.15f) / 0.2f) }
-                
-                val sp = (energyScore * 0.5 + varianceScore * 0.3 + zcrScore * 0.2).coerceIn(0f, 1f)
-                lastSpeech = sp * 0.72 + lastSpeech * 0.28
-                
+
+                val sp = (energyScore * 0.5f + varianceScore * 0.3f + zcrScore * 0.2f).coerceIn(0f, 1f)
+                lastSpeech = sp.toDouble() * 0.72 + lastSpeech * 0.28
+
                 // adapt floor/peak
                 if (floor == 0.0) { floor = rms; peak = rms*1.9+0.0001 }
                 else { floor = floor*0.986 + min(rms, floor*1.45)*0.014; peak = max(floor+0.00035, max(peak*0.992, rms)) }
