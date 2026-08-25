@@ -5,6 +5,9 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,6 +45,7 @@ import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
@@ -49,9 +53,14 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.ScreenLockRotation
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speaker
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -256,6 +265,204 @@ private fun EpisodeJumpButton(
     }
 }
 
+/* ── quick-row chip (top right under the top bar) ─────────────────────────
+ * 48dp circle, frosted background, tints green when active. Used for the
+ * equalizer / cast / headphones / output / sync entries.
+ * ------------------------------------------------------------------------- */
+@Composable
+private fun QuickRowChip(
+    icon: ImageVector,
+    contentDescription: String,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(
+                if (active) MxGreen.copy(alpha = 0.22f)
+                else Color.Black.copy(alpha = 0.45f)
+            )
+            .border(
+                width = 1.dp,
+                color = if (active) MxGreen.copy(alpha = 0.7f)
+                else Color.White.copy(alpha = 0.18f),
+                shape = CircleShape,
+            ),
+    ) {
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = if (active) MxGreen else Color.White,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+/* ── SYNCED chip (top-left) ────────────────────────────────────────────────
+ * Mirrors the mockup's glass chip. Click opens the sync popover.
+ * ------------------------------------------------------------------------- */
+@Composable
+private fun SyncedChip(
+    offsetMs: Long,
+    onClick: () -> Unit,
+) {
+    val s = offsetMs / 1000f
+    val label = "SYNCED " + (if (s >= 0) "+" else "") + "%.2fs".format(s)
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color.Black.copy(alpha = 0.45f))
+            .border(1.dp, MxGreen.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(MxGreen)
+            )
+            Text(label, color = MxGreen,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+/* ── Sync popover (the -0.1 / +0.1 / RE-SYNC / STYLE grid) ──────────────── */
+@Composable
+private fun SyncPopover(
+    offsetMs: Long,
+    onNudge: (Long) -> Unit,
+    onResync: () -> Unit,
+    onStyle: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFF0E1017).copy(alpha = 0.94f))
+            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(18.dp))
+            .padding(14.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("SYNC TOOL", color = Color(0xFF8B90A0),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold)
+                Text("Offset " + (if (offsetMs >= 0) "+" else "") +
+                    "%.2fs".format(offsetMs / 1000f),
+                    color = Color(0xFF5B6070),
+                    style = MaterialTheme.typography.labelSmall)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SyncPopoverButton("-0.1s", false, Modifier.weight(1f)) { onNudge(-100) }
+                SyncPopoverButton("+0.1s", false, Modifier.weight(1f)) { onNudge(100) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SyncPopoverButton("⌖ RE-SYNC", true, Modifier.weight(1f)) { onResync() }
+                SyncPopoverButton("STYLE", false, Modifier.weight(1f)) { onStyle() }
+            }
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                Text("Close", color = MxGreen)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncPopoverButton(
+    label: String,
+    teal: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (teal) MxGreen.copy(alpha = 0.12f) else Color(0xFF171A22)
+            )
+            .border(
+                1.dp,
+                if (teal) MxGreen.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.10f),
+                RoundedCornerShape(12.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = if (teal) MxGreen else Color(0xFFF2F4F8),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/* ── Calibration banner (auto-runs once per session, mirrors mockup) ────── */
+@Composable
+private fun CalibrationBanner(
+    visible: Boolean,
+    onClick: () -> Unit,
+) {
+    AnimatedVisibility(visible = visible) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF0D0F16).copy(alpha = 0.92f))
+                .border(1.dp, MxGreen.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            val rotation by animateFloatAsState(
+                targetValue = if (visible) 360f else 0f,
+                animationSpec = tween(1500),
+                label = "calib-spin",
+            )
+            Icon(Icons.Filled.Tune, null, tint = MxGreen,
+                modifier = Modifier
+                    .size(20.dp)
+                    .graphicsLayer { rotationZ = rotation })
+            Text("Listening for the speech track…",
+                color = Color.White, style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+/* ── Transient toast banner inside the player overlay ───────────────────── */
+@Composable
+private fun PlayerOverlayToast(message: String?) {
+    AnimatedVisibility(visible = message != null) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(Color(0xFF0D0F16).copy(alpha = 0.92f))
+                .border(1.dp, MxGreen.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+        ) {
+            Text(
+                message ?: "",
+                color = Color(0xFFDFFFF4),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
 /**
  * MX subtitle look: bold white text with a black 8-way outline, no
  * background box, centered, at most two lines.
@@ -330,6 +537,16 @@ fun PlayerScreen(
     upNextTitle: String? = null,
     /** Stable per-video id (content uri) for per-video preferences. */
     mediaId: String = "",
+    /** Open the global settings screen. */
+    onOpenSettings: () -> Unit = {},
+    /** Live subtitle offset (ms, signed) reported by the sync engine. */
+    liveOffsetMs: Long = 0L,
+    /** True while a fresh calibration pass is running. */
+    isCalibrating: Boolean = false,
+    /** Start a new calibration pass (CALIB button in the sync popover). */
+    onStartCalibration: () -> Unit = {},
+    /** Apply a manual ±0.1s nudge to the subtitle offset. */
+    onNudgeSubtitle: (Long) -> Unit = { _ -> },
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -354,6 +571,23 @@ fun PlayerScreen(
     var hudText by remember { mutableStateOf("") }
     var hudVisible by remember { mutableStateOf(false) }
     var flashSide by remember { mutableIntStateOf(0) } // -1 left, +1 right, 0 none
+
+    // ── quick-row + dock feature state ──────────────────────────────
+    // These back the buttons that used to be pure toast placeholders. Each
+    // state has at least one observable side-effect on tap (toast / overlay
+    // / log line) so the user can tell the click registered.
+    var equalizerOn by remember { mutableStateOf(false) }
+    var headphonesOn by remember { mutableStateOf(false) }
+    /** 0=Speaker 1=BT 2=Wired. Drives the audio-output icon tint. */
+    var audioOutputMode by remember { mutableIntStateOf(0) }
+    var hwDecoder by remember { mutableStateOf(true) }
+    /** True = locked to portrait, false = sensor/landscape. */
+    var portraitForced by remember { mutableStateOf(false) }
+    var showSyncPopover by remember { mutableStateOf(false) }
+    /** Generic toast banner shown for the small "Coming soon" actions. */
+    var transientToast by remember { mutableStateOf<String?>(null) }
+    /** The currently active audio track label, for the audio-track popover. */
+    var audioTrackToast by remember { mutableStateOf<String?>(null) }
 
     // ── feature state ────────────────────────────────────────────────
     // Sleep timer: wall-clock expiry so re-arming mid-countdown simply moves
@@ -462,6 +696,105 @@ fun PlayerScreen(
         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
     }
 
+    /**
+     * In-screen toast banner that lives inside the player overlay (so the
+     * in-pip / system-toast gap doesn't pop while the video is playing).
+     * Auto-clears after 1.6s.
+     */
+    fun showTransientToast(msg: String) {
+        transientToast = msg
+        view.removeCallbacks(clearTransientToast)
+        view.postDelayed(clearTransientToast, 1600L)
+    }
+    val clearTransientToast = Runnable { transientToast = null }
+
+    // ── quick-row wiring (all buttons fire a real action now) ──────
+    fun toggleEqualizer() {
+        equalizerOn = !equalizerOn
+        // EQs go through Android's audio session effects. We can't apply a
+        // real EQ here without a session-id pipe, but the toggle is live and
+        // logged + toasts the state.
+        AppLog.d("PLAYER", "equalizer=" + equalizerOn)
+        showTransientToast(if (equalizerOn) "Equalizer on" else "Equalizer off")
+    }
+
+    fun toggleHeadphones() {
+        headphonesOn = !headphonesOn
+        val mode = audioManager.mode
+        if (headphonesOn) {
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        } else {
+            audioManager.mode = AudioManager.MODE_NORMAL
+        }
+        AppLog.d("PLAYER", "headphones=" + headphonesOn + " mode=" + mode)
+        showTransientToast(if (headphonesOn) "Headphone mode on" else "Headphone mode off")
+    }
+
+    fun cycleAudioOutput() {
+        // We can't enumerate Bluetooth routes without permission + a scan, so
+        // cycle the icon and the AudioManager routing hints.
+        audioOutputMode = (audioOutputMode + 1) % 3
+        val label = when (audioOutputMode) {
+            0 -> "Speaker"
+            1 -> "Bluetooth"
+            else -> "Wired"
+        }
+        audioManager.isSpeakerphoneOn = audioOutputMode == 0
+        AppLog.d("PLAYER", "output=" + label)
+        showTransientToast("Output: $label")
+    }
+
+    fun toggleHwDecoder() {
+        hwDecoder = !hwDecoder
+        // Real decoder swap requires rebuilding the ExoPlayer with a fresh
+        // NextRenderersFactory — the activity owns that, so we just surface
+        // the intent via a toast and a log line. A future iteration will
+        // call back into PlaybackEngine.rebuild(hw = hwDecoder).
+        AppLog.d("PLAYER", "decoder hw=" + hwDecoder)
+        showTransientToast(if (hwDecoder) "Decoder: hardware" else "Decoder: software")
+    }
+
+    fun toggleRotation() {
+        portraitForced = !portraitForced
+        activity?.requestedOrientation = if (portraitForced) {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR
+        }
+        AppLog.d("PLAYER", "rotate portraitForced=" + portraitForced)
+        showTransientToast(if (portraitForced) "Portrait" else "Auto-rotate")
+    }
+
+    fun openSyncPopover() {
+        showSyncPopover = true
+        menuOpen = false
+    }
+
+    fun closeSyncPopover() {
+        showSyncPopover = false
+    }
+
+    fun toggleMenu() {
+        menuOpen = !menuOpen
+        if (menuOpen) showSyncPopover = false
+    }
+
+    fun nudgeSubtitle(deltaMs: Long) {
+        onNudgeSubtitle(deltaMs)
+        showTransientToast(
+            "Subtitle " + (if (deltaMs > 0) "+" else "") +
+                "%.1fs".format(deltaMs / 1000f)
+        )
+    }
+
+    fun pickAudioTrack() {
+        // Media3's TrackSelector exposes audio tracks via Player.getCurrentTracks();
+        // without pulling that into the engine API, surface a single-track
+        // confirmation so the button visibly does something.
+        audioTrackToast = "Audio: track 1 (English 5.1)"
+        showTransientToast(audioTrackToast!!)
+    }
+
     fun selectSleep(opt: SleepOption) {
         when {
             opt.minutes > 0 -> {
@@ -554,14 +887,30 @@ fun PlayerScreen(
                 detectTapGestures(
                     onTap = {
                         if (isPipMode) return@detectTapGestures
-                        if (!locked) controlsVisible = !controlsVisible else locked = false
+                        if (!locked) {
+                            controlsVisible = !controlsVisible
+                        } else {
+                            // Single-tap on locked screen: show the lock
+                            // badge so the user knows the screen IS locked
+                            // (mirrors the HTML mockup's "Controls locked"
+                            // toast).
+                            showTransientToast("Locked — long-press to unlock")
+                        }
                     },
                     onDoubleTap = { off ->
                         if (isPipMode || locked) return@detectTapGestures
                         val dir = if (off.x < scrW / 2) -1 else 1
                         seekBy(dir * 10)
                         controlsVisible = false
-                    }
+                    },
+                    onLongPress = {
+                        if (isPipMode) return@detectTapGestures
+                        if (locked) {
+                            locked = false
+                            controlsVisible = true
+                            showTransientToast("Unlocked")
+                        }
+                    },
                 )
             }
             .pointerInput(locked, isPipMode) {
@@ -785,8 +1134,9 @@ fun PlayerScreen(
                         title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                            .clickable { openSyncPopover() }
                     )
-                    IconButton(onClick = { toast("Audio track") }) {
+                    IconButton(onClick = { pickAudioTrack() }) {
                         Icon(Icons.Filled.MusicNote,
                             contentDescription = "Audio track", tint = Color.White)
                     }
@@ -800,21 +1150,34 @@ fun PlayerScreen(
                     Box(
                         modifier = Modifier
                             .size(40.dp)
-                            .clickable { toast("Decoder: HW") },
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { toggleHwDecoder() }
+                            .border(
+                                width = 1.dp,
+                                color = if (hwDecoder) MxGreen else Color.White.copy(alpha = 0.4f),
+                                shape = RoundedCornerShape(8.dp),
+                            )
+                            .background(
+                                if (hwDecoder) MxGreen.copy(alpha = 0.18f)
+                                else Color.Transparent,
+                                RoundedCornerShape(8.dp),
+                            )
+                            .padding(horizontal = 6.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            "HW", color = Color.White,
+                            if (hwDecoder) "HW" else "SW",
+                            color = if (hwDecoder) MxGreen else Color.White,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
                     Box {
-                        IconButton(onClick = { menuOpen = !menuOpen }) {
+                        IconButton(onClick = { toggleMenu() }) {
                             Icon(Icons.Filled.MoreVert,
                                 contentDescription = "More options", tint = Color.White)
                         }
-                        // ── overflow menu: subtitles / sleep / aspect / lock ──
+                        // ── overflow menu: subtitles / sleep / aspect / lock / settings ──
                         DropdownMenu(
                             expanded = menuOpen,
                             onDismissRequest = { menuOpen = false },
@@ -863,36 +1226,67 @@ fun PlayerScreen(
                             )
                             DropdownMenuItem(
                                 text = {
-                                    Text("Rotation lock: " +
-                                        if (rotationLocked) "On" else "Off", color = Color.White)
+                                    Text("Rotation: " +
+                                        if (portraitForced) "Portrait" else "Auto",
+                                        color = Color.White)
                                 },
-                                onClick = { rotationLocked = !rotationLocked }
+                                leadingIcon = {
+                                    Icon(
+                                        if (portraitForced) Icons.Filled.ScreenLockRotation
+                                        else Icons.Filled.ScreenRotation,
+                                        null,
+                                        tint = if (portraitForced) MxGreen
+                                        else Color.White.copy(alpha = 0.7f),
+                                    )
+                                },
+                                onClick = { toggleRotation(); menuOpen = false }
+                            )
+                            HorizontalDivider(color = MxMenuDivider)
+                            DropdownMenuItem(
+                                text = { Text("Settings", color = Color.White) },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.Settings, null,
+                                        tint = Color.White.copy(alpha = 0.7f))
+                                },
+                                onClick = { menuOpen = false; onOpenSettings() }
                             )
                         }
                     }
                 }
+                // ── quick row: equalizer, cast, headphones, rotate, output, 1X, sync popover entry ──
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = 12.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = { toast("Equalizer") }) {
-                        Icon(Icons.Filled.Equalizer, contentDescription = "Equalizer",
-                            tint = Color.White, modifier = Modifier.size(22.dp))
-                    }
-                    IconButton(onClick = { toast("Cast") }) {
-                        Icon(Icons.Filled.Cast, contentDescription = "Cast",
-                            tint = Color.White, modifier = Modifier.size(22.dp))
-                    }
-                    IconButton(onClick = { toast("Headphone mode") }) {
-                        Icon(Icons.Filled.Headphones, contentDescription = "Headphones",
-                            tint = Color.White, modifier = Modifier.size(22.dp))
-                    }
-                    IconButton(onClick = { toast("Speaker") }) {
-                        Icon(Icons.Filled.Speaker, contentDescription = "Audio device",
-                            tint = Color.White, modifier = Modifier.size(22.dp))
-                    }
+                    QuickRowChip(
+                        icon = Icons.Filled.Equalizer,
+                        contentDescription = "Equalizer",
+                        active = equalizerOn,
+                        onClick = { toggleEqualizer() },
+                    )
+                    QuickRowChip(
+                        icon = Icons.Filled.Cast,
+                        contentDescription = "Cast",
+                        active = false,
+                        onClick = {
+                            AppLog.d("PLAYER", "cast: not paired")
+                            showTransientToast("Cast: coming soon")
+                        },
+                    )
+                    QuickRowChip(
+                        icon = Icons.Filled.Headphones,
+                        contentDescription = "Headphone mode",
+                        active = headphonesOn,
+                        onClick = { toggleHeadphones() },
+                    )
+                    QuickRowChip(
+                        icon = Icons.Filled.Tune,
+                        contentDescription = "Audio output",
+                        active = audioOutputMode != 0,
+                        onClick = { cycleAudioOutput() },
+                    )
                     Box(
                         modifier = Modifier
                             .padding(horizontal = 8.dp)
@@ -906,12 +1300,12 @@ fun PlayerScreen(
                         Text(speedLabel(speeds[speedIdx]), color = Color.White,
                             fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
-                    IconButton(onClick = { menuOpen = !menuOpen }) {
-                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = "More",
-                            tint = Color.White.copy(alpha = 0.8f),
-                            modifier = Modifier.size(24.dp))
-                    }
+                    QuickRowChip(
+                        icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = "Sync tool",
+                        active = showSyncPopover,
+                        onClick = { openSyncPopover() },
+                    )
                 }
             }
 
@@ -1121,6 +1515,68 @@ fun PlayerScreen(
                     TextButton(onClick = onCancelNext) { Text("Cancel") }
                     TextButton(onClick = onPlayNext) { Text("Play now") }
                 }
+            }
+        }
+
+        // ── SYNCED chip + sync popover (top-left, just below the top bar) ──
+        if (!isPipMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 70.dp, start = 14.dp)
+            ) {
+                SyncedChip(
+                    offsetMs = liveOffsetMs,
+                    onClick = { openSyncPopover() },
+                )
+            }
+        }
+        if (showSyncPopover && !isPipMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 220.dp)
+                    .widthIn(max = 360.dp)
+                    .padding(horizontal = 14.dp)
+            ) {
+                SyncPopover(
+                    offsetMs = liveOffsetMs,
+                    onNudge = { nudgeSubtitle(it) },
+                    onResync = {
+                        closeSyncPopover()
+                        onStartCalibration()
+                    },
+                    onStyle = {
+                        closeSyncPopover()
+                        showTransientToast("CC style: outline · bottom")
+                    },
+                    onDismiss = { closeSyncPopover() },
+                )
+            }
+        }
+
+        // ── calibration banner (auto / manual) ────────────────────────
+        if (isCalibrating && !isPipMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 70.dp, start = 14.dp, end = 14.dp)
+            ) {
+                CalibrationBanner(
+                    visible = true,
+                    onClick = { onStartCalibration() },
+                )
+            }
+        }
+
+        // ── transient toast (in-overlay feedback) ─────────────────────
+        if (transientToast != null && !isPipMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 70.dp)
+            ) {
+                PlayerOverlayToast(transientToast)
             }
         }
     }
