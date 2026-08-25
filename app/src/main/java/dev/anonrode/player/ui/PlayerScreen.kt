@@ -341,8 +341,22 @@ private fun SyncedChip(
 ) {
     val s = offsetMs / 1000f
     val label = "SYNCED " + (if (s >= 0) "+" else "") + "%.2fs".format(s)
+    // Spring scale on the offset key — when a fresh lock lands the chip
+    // briefly pops (~1.08) then settles to 1.0 with a tiny overshoot,
+    // so the user sees "yes, something just happened" without any banner.
+    val pulseKey = (offsetMs / 100).toInt()
+    val scale by androidx.compose.animation.core.remember(pulseKey) {
+        androidx.compose.animation.core.Animatable(0.85f)
+    }.let { anim ->
+        androidx.compose.runtime.LaunchedEffect(pulseKey) { anim.animateTo(1f,
+            androidx.compose.animation.core.spring(
+                dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
+                stiffness = androidx.compose.animation.core.Spring.StiffnessMedium)) }
+        anim
+    }
     Box(
         modifier = Modifier
+            .graphicsLayer { this.scaleX = scale; this.scaleY = scale }
             .clip(RoundedCornerShape(999.dp))
             .background(Color.Black.copy(alpha = 0.45f))
             .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
