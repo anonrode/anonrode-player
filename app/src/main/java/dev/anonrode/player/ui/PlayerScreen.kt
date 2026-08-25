@@ -21,6 +21,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -314,29 +315,61 @@ private fun QuickRowChip(
     active: Boolean,
     accent: Color,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
 ) {
-    IconButton(
-        onClick = onClick,
-        modifier = Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(
-                if (active) accent.copy(alpha = 0.22f)
-                else Color.Black.copy(alpha = 0.45f)
-            )
-            .border(
-                width = 1.dp,
-                color = if (active) accent.copy(alpha = 0.7f)
-                else Color.White.copy(alpha = 0.18f),
-                shape = CircleShape,
-            ),
-    ) {
-        Icon(
-            icon,
-            contentDescription = contentDescription,
-            tint = if (active) accent else Color.White,
-            modifier = Modifier.size(20.dp),
+    val view = LocalView.current
+    val baseModifier = Modifier
+        .size(44.dp)
+        .clip(CircleShape)
+        .background(
+            if (active) accent.copy(alpha = 0.22f)
+            else Color.Black.copy(alpha = 0.45f)
         )
+        .border(
+            width = 1.dp,
+            color = if (active) accent.copy(alpha = 0.7f)
+            else Color.White.copy(alpha = 0.18f),
+            shape = CircleShape,
+        )
+    if (onLongClick != null) {
+        // combinedClickable supports long-press; IconButton does not.
+        androidx.compose.foundation.layout.Box(
+            modifier = baseModifier.combinedClickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = androidx.compose.material.ripple.rememberRipple(bounded = true, color = accent),
+                onClick = {
+                    view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                    onClick()
+                },
+                onLongClick = {
+                    view.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                    onLongClick()
+                },
+            ),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
+            Icon(
+                icon,
+                contentDescription = contentDescription,
+                tint = if (active) accent else Color.White,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    } else {
+        IconButton(
+            onClick = {
+                view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                onClick()
+            },
+            modifier = baseModifier,
+        ) {
+            Icon(
+                icon,
+                contentDescription = contentDescription,
+                tint = if (active) accent else Color.White,
+                modifier = Modifier.size(20.dp),
+            )
+        }
     }
 }
 
@@ -680,6 +713,12 @@ fun PlayerScreen(
      * sheet of available routes and calls [mediaRouter] select on pick.
      */
     onOpenCastPicker: () -> Unit = {},
+    /**
+     * Open the 5-band equalizer panel. The host (PlayerActivity) shows
+     * [EqualizerPanelSheet] when this is invoked. Tap on the EQ quick-row
+     * chip toggles on/off; long-press opens the panel.
+     */
+    onOpenEqPanel: () -> Unit = {},
     /** True if a decoder swap is currently in flight; hides the HW chip. */
     isRebuildingDecoder: Boolean = false,
     /** Name of the currently selected Cast route, for the chip tooltip. */
@@ -725,6 +764,8 @@ fun PlayerScreen(
     // state has at least one observable side-effect on tap (toast / overlay
     // / log line) so the user can tell the click registered.
     var equalizerOn by remember { mutableStateOf(false) }
+    /** When true, shows the [EqualizerPanelSheet] with band sliders. */
+    var eqPanelOpen by remember { mutableStateOf(false) }
     var headphonesOn by remember { mutableStateOf(false) }
     /** 0=Speaker 1=BT 2=Wired. Drives the audio-output icon tint. */
     var audioOutputMode by remember { mutableIntStateOf(0) }
@@ -1033,6 +1074,18 @@ fun PlayerScreen(
     var subPos by rememberSaveable { mutableStateOf(1) }          // 0=low 1=mid
     var subColor by rememberSaveable { mutableIntStateOf(0) }     // 0=white 1=yellow 2=green
 
+    // Long-press subtitle menu: a small DropdownMenu with Size / Position /
+    // Color / Reset. The first long-press opens it; the user can pick an
+    // option or long-press again to begin a drag. Cycling options are
+    // stored in remember-blocks so a single tap fires the next state.
+    var showSubtitleMenu by remember { mutableStateOf(false) }
+    /** S/M/L. Drives the OutlinedSubtitleText font size. */
+    var subSizeIdx by remember { mutableIntStateOf(1) }
+    /** 0 = bottom (default y), 1 = middle. */
+    var subPositionIdx by remember { mutableIntStateOf(0) }
+    /** 0 = White, 1 = Yellow, 2 = Green. */
+    var subColorIdx by remember { mutableIntStateOf(0) }
+
     // Restore the saved position for this video (global default fallback)
     // whenever the media item changes.
     LaunchedEffect(mediaId) {
@@ -1237,8 +1290,29 @@ fun PlayerScreen(
                             alpha = if (subDragging) 0.9f else 1f
                         }
                         .pointerInput(showCC) {
+                            // First long-press opens a small context menu
+                            // (Size / Position / Color / Reset). If the user
+                            // long-presses again, or starts moving while the
+                            // menu is open, the existing drag behavior takes
+                            // over exactly as before. detectTapGestures'
+                            // onLongPress competes with the drag detector;
+                            // we explicitly prefer the menu the first time
+                            // and the drag the second.
+                            detectTapGestures(
+                                onLongPress = {
+                                    if (!showSubtitleMenu) {
+                                        showSubtitleMenu = true
+                                        view.performHapticFeedback(
+                                            HapticFeedbackConstants.VIRTUAL_KEY
+                                        )
+                                    }
+                                },
+                            )
                             detectDragGesturesAfterLongPress(
-                                onDragStart = { subDragging = true },
+                                onDragStart = {
+                                    subDragging = true
+                                    showSubtitleMenu = false
+                                },
                                 onDrag = { change, amount ->
                                     change.consume()
                                     subX = (subX + amount.x / scrW).coerceIn(SUB_X_MIN, SUB_X_MAX)
@@ -1519,6 +1593,7 @@ fun PlayerScreen(
                         active = equalizerOn,
                         accent = accent,
                         onClick = { toggleEqualizer() },
+                        onLongClick = { onOpenEqPanel() },
                     )
                     QuickRowChip(
                         icon = Icons.Filled.Cast,

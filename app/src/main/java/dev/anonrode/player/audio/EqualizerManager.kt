@@ -88,6 +88,14 @@ class EqualizerManager {
     val bandCount: Int
         get() = equalizer?.numberOfBands?.toInt() ?: 0
 
+    /**
+     * Band level range as `[minMb, maxMb]` in millibels (e.g. -1500..+1500).
+     * Returns `[0, 0]` when unbound. Callers can divide by 100 for dB.
+     */
+    val bandLevelRange: IntArray
+        get() = equalizer?.bandLevelRange?.let { intArrayOf(it[0].toInt(), it[1].toInt()) }
+            ?: intArrayOf(0, 0)
+
     /** Centre frequency (mHz) of [bandIndex], or 0 if out of range. */
     fun getCentreFreqMhz(bandIndex: Int): Int {
         val eq = equalizer ?: return 0

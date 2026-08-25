@@ -37,6 +37,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import dev.anonrode.player.audio.CastRoutePickerSheet
 import dev.anonrode.player.audio.EqualizerManager
+import dev.anonrode.player.audio.EqualizerPanelSheet
 import dev.anonrode.player.core.datastore.playerSettingsDataStore
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.subtitle.SubtitleParser
@@ -143,6 +144,7 @@ class PlayerActivity : ComponentActivity() {
      */
     private val equalizer = EqualizerManager()
     private var equalizerOn by mutableStateOf(false)
+    private var eqPanelOpen by mutableStateOf(false)
 
     /**
      * Android system MediaRouter. We use it (instead of the Google Cast
@@ -294,6 +296,7 @@ class PlayerActivity : ComponentActivity() {
                             onRebuildDecoder = { newHw -> requestDecoderRebuild(newHw) },
                             onToggleEqualizer = { request -> requestToggleEqualizer(request) },
                             onOpenCastPicker = { requestOpenCastPicker() },
+                            onOpenEqPanel = { eqPanelOpen = true },
                             castRouteName = castRouteName,
                         )
                     }
@@ -316,6 +319,28 @@ class PlayerActivity : ComponentActivity() {
                                     accent = palette.accent,
                                     onSelectRoute = { onCastRouteSelected(it) },
                                     onDismiss = { castPickerOpen = false },
+                                )
+                            }
+                        }
+                    }
+                    // ── Equalizer panel (5-band) ─────────────────────────
+                    if (eqPanelOpen) {
+                        Box(
+                            modifier = androidx.compose.ui.Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .clickable { eqPanelOpen = false },
+                            contentAlignment = androidx.compose.ui.Alignment.BottomCenter,
+                        ) {
+                            Box(
+                                modifier = androidx.compose.ui.Modifier
+                                    .clickable(enabled = false) { /* swallow */ }
+                                    .padding(12.dp),
+                            ) {
+                                EqualizerPanelSheet(
+                                    equalizer = equalizer,
+                                    accent = palette.accent,
+                                    onDismiss = { eqPanelOpen = false },
                                 )
                             }
                         }
