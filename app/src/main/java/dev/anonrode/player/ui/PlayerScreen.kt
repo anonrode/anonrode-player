@@ -84,6 +84,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -380,6 +381,41 @@ private fun SyncedChip(
     }
 }
 
+/* ── Subtitle style dropdown (long-press the subtitle to open) ─────────── */
+@Composable
+private fun SubtitleStyleDropdown(
+    size: Int, onSize: (Int) -> Unit,
+    pos: Int, onPos: (Int) -> Unit,
+    color: Int, onColor: (Int) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+    accent: Color,
+) {
+    androidx.compose.material3.DropdownMenu(
+        expanded = true,
+        onDismissRequest = onDismiss,
+        modifier = Modifier.background(Color(0xFF0E1017).copy(alpha = 0.96f), RoundedCornerShape(12.dp)),
+    ) {
+        androidx.compose.material3.DropdownMenuItem(
+            text = { Text("Size: ${if (size == 0) "S" else if (size == 1) "M" else "L"}", color = Color.White) },
+            onClick = { onSize((size + 1) % 3) },
+        )
+        androidx.compose.material3.DropdownMenuItem(
+            text = { Text("Position: ${if (pos == 0) "Low" else "Mid"}", color = Color.White) },
+            onClick = { onPos((pos + 1) % 2) },
+        )
+        androidx.compose.material3.DropdownMenuItem(
+            text = { Text("Color: ${listOf("White", "Yellow", "Green")[color]}", color = Color.White) },
+            onClick = { onColor((color + 1) % 3) },
+        )
+        androidx.compose.material3.HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+        androidx.compose.material3.DropdownMenuItem(
+            text = { Text("Reset", color = accent) },
+            onClick = onReset,
+        )
+    }
+}
+
 /* ── Sync popover (the -0.1 / +0.1 / RE-SYNC / STYLE grid) ──────────────── */
 @Composable
 private fun SyncPopover(
@@ -515,15 +551,24 @@ private fun PlayerOverlayToast(message: String?, accent: Color) {
  * background box, centered, at most two lines.
  */
 @Composable
-private fun OutlinedSubtitleText(text: String, modifier: Modifier = Modifier) {
+private fun OutlinedSubtitleText(
+    text: String,
+    modifier: Modifier = Modifier,
+    subSize: Int = 1,
+    subPos: Int = 1,
+    subColor: Int = 0,
+) {
+    val sizeSp = when (subSize) { 0 -> 15.sp; 1 -> 18.sp; else -> 22.sp }
+    val lineSp = (sizeSp.value * 1.5f).sp
+    val fillColor = when (subColor) { 1 -> Color(0xFFFFD75E); 2 -> Color(0xFF7CE487); else -> Color.White }
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         SubtitleOutlineOffsets.forEach { (dx, dy) ->
             Text(
                 text,
                 color = Color.Black,
                 fontWeight = FontWeight.Bold,
-                fontSize = 20.sp,
-                lineHeight = 30.sp,
+                fontSize = sizeSp,
+                lineHeight = lineSp,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
                 softWrap = true,
@@ -533,10 +578,10 @@ private fun OutlinedSubtitleText(text: String, modifier: Modifier = Modifier) {
         }
         Text(
             text,
-            color = Color.White,
+            color = fillColor,
             fontWeight = FontWeight.Bold,
-            fontSize = 20.sp,
-            lineHeight = 30.sp,
+            fontSize = sizeSp,
+            lineHeight = lineSp,
             textAlign = TextAlign.Center,
             maxLines = 2,
             softWrap = true,
@@ -965,6 +1010,10 @@ fun PlayerScreen(
     var subX by remember { mutableFloatStateOf(SUB_DEFAULT_X) }
     var subY by remember { mutableFloatStateOf(SUB_DEFAULT_Y) }
     var subDragging by remember { mutableStateOf(false) }
+    var subStyleMenuOpen by remember { mutableStateOf(false) }
+    var subSize by rememberSaveable { mutableStateOf(1) }          // 0=S 1=M 2=L
+    var subPos by rememberSaveable { mutableStateOf(1) }          // 0=low 1=mid
+    var subColor by rememberSaveable { mutableIntStateOf(0) }     // 0=white 1=yellow 2=green
 
     // Restore the saved position for this video (global default fallback)
     // whenever the media item changes.
@@ -1145,10 +1194,28 @@ fun PlayerScreen(
                                 onDragCancel = { subDragging = false },
                             )
                         }
+                        .combinedClickable(
+                            onClick = { /* no-op */ },
+                            onLongClick = {
+                                view.haptic(HapticFeedbackConstants.LONG_PRESS)
+                                subStyleMenuOpen = true
+                            },
+                        )
                         .padding(horizontal = 32.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    OutlinedSubtitleText(txt)
+                    OutlinedSubtitleText(txt, subSize = subSize, subPos = subPos, subColor = subColor)
+                    if (subStyleMenuOpen) {
+                        SubtitleStyleDropdown(
+                            size = subSize, onSize = { subSize = it; subStyleMenuOpen = false },
+                            pos = subPos, onPos = { subPos = it; subStyleMenuOpen = false },
+                            color = subColor, onColor = { subColor = it; subStyleMenuOpen = false },
+                            onReset = { subX = SUB_DEFAULT_X; subY = SUB_DEFAULT_Y; subSize = 1; subPos = 1; subColor = 0; subStyleMenuOpen = false
+                                PlayerPrefs.saveSubtitlePosition(context, mediaId, subX, subY) },
+                            onDismiss = { subStyleMenuOpen = false },
+                            accent = accent,
+                        )
+                    }
                 }
             }
         }
