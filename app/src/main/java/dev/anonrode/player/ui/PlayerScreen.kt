@@ -930,15 +930,24 @@ fun PlayerScreen(
     }
 
     fun toggleHeadphones() {
-        headphonesOn = !headphonesOn
-        val mode = audioManager.mode
-        if (headphonesOn) {
-            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-        } else {
-            audioManager.mode = AudioManager.MODE_NORMAL
+        view.haptic()
+        // The previous version forced AudioManager.MODE_IN_COMMUNICATION,
+        // which is the PHONE-CALL audio mode and breaks media playback
+        // (no music stream, mic open). Replaced with a safe, read-only
+        // detection: ask the system whether a Bluetooth A2DP output is
+        // currently connected and report it. The chip's `active` state
+        // mirrors that detection rather than a user-toggled boolean.
+        val btOn = try { audioManager.isBluetoothA2dpOn } catch (e: Throwable) { false }
+        val wiredOn = try { audioManager.isWiredHeadsetOn } catch (e: Throwable) { false }
+        headphonesOn = btOn
+        val label = when {
+            btOn && wiredOn -> "Bluetooth + wired headset connected"
+            btOn -> "Bluetooth headset connected"
+            wiredOn -> "Wired headset connected"
+            else -> "No external audio output detected"
         }
-        AppLog.d("PLAYER", "headphones=" + headphonesOn + " mode=" + mode)
-        showTransientToast(if (headphonesOn) "Headphone mode on" else "Headphone mode off")
+        AppLog.d("PLAYER", "headphones detect: bt=" + btOn + " wired=" + wiredOn)
+        showTransientToast(label)
     }
 
     fun cycleAudioOutput() {
