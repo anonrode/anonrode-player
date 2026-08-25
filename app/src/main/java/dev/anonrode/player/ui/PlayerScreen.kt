@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
+import android.view.HapticFeedbackConstants
+import android.view.View
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -112,6 +114,20 @@ import dev.anonrode.player.core.media.log.AppLog
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/**
+ * Fire a haptic blip on click. Default = light tap (KEYBOARD_TAP).
+ * The single most important piece of "feels like an app" polish — without
+ * it every button click is silent and the whole player feels like a
+ * webpage. Uses [View.performHapticFeedback] which is the
+ * platform-recommended path (respects user system settings, no
+ * permission needed).
+ */
+fun View.haptic(
+    @HapticFeedbackConstants type: Int = HapticFeedbackConstants.KEYBOARD_TAP,
+) {
+    try { performHapticFeedback(type) } catch (_: Throwable) { /* devices without haptics */ }
+}
 
 // ── Player overlay palette ─────────────────────────────────────────────
 // The video overlay (top bar, dock, sync popover) is intentionally dark and
@@ -1496,7 +1512,10 @@ fun PlayerScreen(
                         TimeSeekButton(
                             direction = TimeSeekDirection.BACK,
                             accent = accent,
-                            onClick = { seekBy(-10) },
+                            onClick = {
+                                view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+                                seekBy(-10)
+                            },
                         )
                     }
                     // 14dp divider gap between time-seek and episode-jump groups
@@ -1505,12 +1524,16 @@ fun PlayerScreen(
                     EpisodeJumpButton(
                         direction = EpisodeJumpDirection.PREVIOUS,
                         enabled = hasPreviousEpisode,
-                        onClick = onPlayPrevious,
+                        onClick = {
+                            view.haptic(HapticFeedbackConstants.VIRTUAL_KEY)
+                            onPlayPrevious()
+                        },
                     )
                     Spacer(Modifier.width(6.dp))
                     // ── BIG play / pause (unchanged) ──
                     IconButton(
                         onClick = {
+                            view.haptic(HapticFeedbackConstants.VIRTUAL_KEY)
                             if (livePlayer.isPlaying) livePlayer.pause() else livePlayer.play()
                         },
                         modifier = Modifier
@@ -1528,7 +1551,10 @@ fun PlayerScreen(
                     EpisodeJumpButton(
                         direction = EpisodeJumpDirection.NEXT,
                         enabled = hasNextEpisode,
-                        onClick = onPlayNext,
+                        onClick = {
+                            view.haptic(HapticFeedbackConstants.VIRTUAL_KEY)
+                            onPlayNext()
+                        },
                     )
                     Spacer(Modifier.width(14.dp))
                     // ── time-seek group (RIGHT side) ──
@@ -1539,7 +1565,10 @@ fun PlayerScreen(
                         TimeSeekButton(
                             direction = TimeSeekDirection.FORWARD,
                             accent = accent,
-                            onClick = { seekBy(10) },
+                            onClick = {
+                                view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+                                seekBy(10)
+                            },
                         )
                     }
                 }
