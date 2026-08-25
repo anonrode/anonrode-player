@@ -720,6 +720,12 @@ fun PlayerScreen(
      */
     onOpenEqPanel: () -> Unit = {},
     /**
+     * Open the subtitle style picker (size/position/color). The host shows
+     * a bottom sheet that mutates the live subtitle style and persists
+     * via PlayerSettings DataStore.
+     */
+    onOpenSubStyle: () -> Unit = {},
+    /**
      * Open the audio track picker. The host reads [Player.getCurrentTracks]
      * and shows a bottom sheet of available audio tracks for the current
      * media.
@@ -1940,7 +1946,7 @@ fun PlayerScreen(
                     },
                     onStyle = {
                         closeSyncPopover()
-                        showTransientToast("CC style: outline · bottom")
+                        onOpenSubStyle()
                     },
                     onDismiss = { closeSyncPopover() },
                 )

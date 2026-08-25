@@ -39,6 +39,8 @@ import dev.anonrode.player.audio.CastRoutePickerSheet
 import dev.anonrode.player.audio.EqualizerManager
 import dev.anonrode.player.audio.EqualizerPanelSheet
 import dev.anonrode.player.audio.AudioTrackPickerSheet
+import dev.anonrode.player.audio.SubtitleStyle
+import dev.anonrode.player.audio.SubtitleStyleSheet
 import dev.anonrode.player.core.datastore.playerSettingsDataStore
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.subtitle.SubtitleParser
@@ -147,6 +149,8 @@ class PlayerActivity : ComponentActivity() {
     private var equalizerOn by mutableStateOf(false)
     private var eqPanelOpen by mutableStateOf(false)
     private var audioTrackPickerOpen by mutableStateOf(false)
+    private var subStyleSheetOpen by mutableStateOf(false)
+    private var subStyle by mutableStateOf(SubtitleStyle())
 
     /**
      * Android system MediaRouter. We use it (instead of the Google Cast
@@ -300,6 +304,7 @@ class PlayerActivity : ComponentActivity() {
                             onOpenCastPicker = { requestOpenCastPicker() },
                             onOpenEqPanel = { eqPanelOpen = true },
                             onOpenAudioTrackPicker = { requestOpenAudioTrackPicker() },
+                            onOpenSubStyle = { subStyleSheetOpen = true },
                             castRouteName = castRouteName,
                         )
                     }
@@ -367,6 +372,29 @@ class PlayerActivity : ComponentActivity() {
                                     accent = palette.accent,
                                     onSelectTrack = { onAudioTrackSelected(it) },
                                     onDismiss = { audioTrackPickerOpen = false },
+                                )
+                            }
+                        }
+                    }
+                    // ── Subtitle style picker ───────────────────────────
+                    if (subStyleSheetOpen) {
+                        Box(
+                            modifier = androidx.compose.ui.Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .clickable { subStyleSheetOpen = false },
+                            contentAlignment = androidx.compose.ui.Alignment.BottomCenter,
+                        ) {
+                            Box(
+                                modifier = androidx.compose.ui.Modifier
+                                    .clickable(enabled = false) { /* swallow */ }
+                                    .padding(12.dp),
+                            ) {
+                                SubtitleStyleSheet(
+                                    style = subStyle,
+                                    accent = palette.accent,
+                                    onStyleChanged = { subStyle = it },
+                                    onDismiss = { subStyleSheetOpen = false },
                                 )
                             }
                         }
