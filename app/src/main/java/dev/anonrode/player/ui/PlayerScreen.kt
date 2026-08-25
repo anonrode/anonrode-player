@@ -111,8 +111,17 @@ import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-// ── MX Player palette ──────────────────────────────────────────────────
-private val MxGreen = Color(0xFF009103)
+// ── Player overlay palette ─────────────────────────────────────────────
+// The video overlay (top bar, dock, sync popover) is intentionally dark and
+// high-contrast on every skin — it sits on top of the video frame and must
+// stay readable. The skin's accent still bleeds through (TimeSeek pill,
+// HW chip, speed pill, SYNCED chip) but the scrims and panel stay dark.
+//
+// `MxGreen` is the default accent (MX GREEN skin) used by the private
+// composables before they have access to a remembered palette; the main
+// PlayerScreen composable resolves the live accent via [rememberSkinPalette]
+// and passes it down.
+private val MxGreen = Color(0xFF00E676)
 private val MxPanel = Color(0xFF1C1C24)
 private val MxMenuDivider = Color(0xFF33333B)
 
@@ -193,17 +202,18 @@ private enum class EpisodeJumpDirection { PREVIOUS, NEXT }
 @Composable
 private fun TimeSeekButton(
     direction: TimeSeekDirection,
+    accent: Color,
     onClick: () -> Unit,
 ) {
     Box(
         modifier = Modifier
             .size(width = 48.dp, height = 40.dp)
             .clip(RoundedCornerShape(10.dp))
-            .background(MxGreen.copy(alpha = 0.22f))
-            .border(1.dp, MxGreen.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+            .background(accent.copy(alpha = 0.22f))
+            .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = rememberRipple(bounded = true, color = MxGreen),
+                indication = rememberRipple(bounded = true, color = accent),
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
@@ -214,13 +224,13 @@ private fun TimeSeekButton(
         ) {
             Text(
                 text = if (direction == TimeSeekDirection.BACK) "«" else "»",
-                color = MxGreen,
+                color = accent,
                 fontWeight = FontWeight.Black,
                 fontSize = 13.sp,
             )
             Text(
                 text = "10s",
-                color = MxGreen,
+                color = accent,
                 fontWeight = FontWeight.Black,
                 fontSize = 12.sp,
             )
@@ -274,6 +284,7 @@ private fun QuickRowChip(
     icon: ImageVector,
     contentDescription: String,
     active: Boolean,
+    accent: Color,
     onClick: () -> Unit,
 ) {
     IconButton(
@@ -282,12 +293,12 @@ private fun QuickRowChip(
             .size(44.dp)
             .clip(CircleShape)
             .background(
-                if (active) MxGreen.copy(alpha = 0.22f)
+                if (active) accent.copy(alpha = 0.22f)
                 else Color.Black.copy(alpha = 0.45f)
             )
             .border(
                 width = 1.dp,
-                color = if (active) MxGreen.copy(alpha = 0.7f)
+                color = if (active) accent.copy(alpha = 0.7f)
                 else Color.White.copy(alpha = 0.18f),
                 shape = CircleShape,
             ),
@@ -295,7 +306,7 @@ private fun QuickRowChip(
         Icon(
             icon,
             contentDescription = contentDescription,
-            tint = if (active) MxGreen else Color.White,
+            tint = if (active) accent else Color.White,
             modifier = Modifier.size(20.dp),
         )
     }
@@ -307,6 +318,7 @@ private fun QuickRowChip(
 @Composable
 private fun SyncedChip(
     offsetMs: Long,
+    accent: Color,
     onClick: () -> Unit,
 ) {
     val s = offsetMs / 1000f
@@ -315,7 +327,7 @@ private fun SyncedChip(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
             .background(Color.Black.copy(alpha = 0.45f))
-            .border(1.dp, MxGreen.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+            .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
@@ -327,9 +339,9 @@ private fun SyncedChip(
                 modifier = Modifier
                     .size(6.dp)
                     .clip(CircleShape)
-                    .background(MxGreen)
+                    .background(accent)
             )
-            Text(label, color = MxGreen,
+            Text(label, color = accent,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold)
         }
@@ -340,6 +352,7 @@ private fun SyncedChip(
 @Composable
 private fun SyncPopover(
     offsetMs: Long,
+    accent: Color,
     onNudge: (Long) -> Unit,
     onResync: () -> Unit,
     onStyle: () -> Unit,
@@ -367,15 +380,15 @@ private fun SyncPopover(
                     style = MaterialTheme.typography.labelSmall)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SyncPopoverButton("-0.1s", false, Modifier.weight(1f)) { onNudge(-100) }
-                SyncPopoverButton("+0.1s", false, Modifier.weight(1f)) { onNudge(100) }
+                SyncPopoverButton("-0.1s", false, accent, Modifier.weight(1f)) { onNudge(-100) }
+                SyncPopoverButton("+0.1s", false, accent, Modifier.weight(1f)) { onNudge(100) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SyncPopoverButton("⌖ RE-SYNC", true, Modifier.weight(1f)) { onResync() }
-                SyncPopoverButton("STYLE", false, Modifier.weight(1f)) { onStyle() }
+                SyncPopoverButton("⌖ RE-SYNC", true, accent, Modifier.weight(1f)) { onResync() }
+                SyncPopoverButton("STYLE", false, accent, Modifier.weight(1f)) { onStyle() }
             }
             TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                Text("Close", color = MxGreen)
+                Text("Close", color = accent)
             }
         }
     }
@@ -385,6 +398,7 @@ private fun SyncPopover(
 private fun SyncPopoverButton(
     label: String,
     teal: Boolean,
+    accent: Color,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -392,18 +406,18 @@ private fun SyncPopoverButton(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (teal) MxGreen.copy(alpha = 0.12f) else Color(0xFF171A22)
+                if (teal) accent.copy(alpha = 0.12f) else Color(0xFF171A22)
             )
             .border(
                 1.dp,
-                if (teal) MxGreen.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.10f),
+                if (teal) accent.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.10f),
                 RoundedCornerShape(12.dp),
             )
             .clickable(onClick = onClick)
             .padding(vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = if (teal) MxGreen else Color(0xFFF2F4F8),
+        Text(label, color = if (teal) accent else Color(0xFFF2F4F8),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold)
     }
@@ -413,6 +427,7 @@ private fun SyncPopoverButton(
 @Composable
 private fun CalibrationBanner(
     visible: Boolean,
+    accent: Color,
     onClick: () -> Unit,
 ) {
     AnimatedVisibility(visible = visible) {
@@ -420,7 +435,7 @@ private fun CalibrationBanner(
             modifier = Modifier
                 .clip(RoundedCornerShape(14.dp))
                 .background(Color(0xFF0D0F16).copy(alpha = 0.92f))
-                .border(1.dp, MxGreen.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
                 .clickable(onClick = onClick)
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -431,7 +446,7 @@ private fun CalibrationBanner(
                 animationSpec = tween(1500),
                 label = "calib-spin",
             )
-            Icon(Icons.Filled.Tune, null, tint = MxGreen,
+            Icon(Icons.Filled.Tune, null, tint = accent,
                 modifier = Modifier
                     .size(20.dp)
                     .graphicsLayer { rotationZ = rotation })
@@ -444,13 +459,13 @@ private fun CalibrationBanner(
 
 /* ── Transient toast banner inside the player overlay ───────────────────── */
 @Composable
-private fun PlayerOverlayToast(message: String?) {
+private fun PlayerOverlayToast(message: String?, accent: Color) {
     AnimatedVisibility(visible = message != null) {
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(999.dp))
                 .background(Color(0xFF0D0F16).copy(alpha = 0.92f))
-                .border(1.dp, MxGreen.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+                .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
                 .padding(horizontal = 18.dp, vertical = 10.dp),
         ) {
             Text(
@@ -553,6 +568,11 @@ fun PlayerScreen(
     val view = LocalView.current
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val activity = context as? Activity
+
+    // Active accent follows the live skin so the dock chip, the SYNCED chip,
+    // the speed pill, the HW chip, and the CC icon all pick up the
+    // MX / SIGNAL / LIGHT / BLACK accent without per-call wiring.
+    val accent = dev.anonrode.player.core.ui.theme.rememberSkinPalette().accent
 
     var controlsVisible by remember { mutableStateOf(true) }
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
@@ -1086,7 +1106,7 @@ fun PlayerScreen(
                     .padding(14.dp)
                     .background(Color.Black.copy(alpha = 0.5f), CircleShape)
             ) {
-                Icon(Icons.Filled.Lock, null, tint = MxGreen)
+                Icon(Icons.Filled.Lock, null, tint = accent)
             }
         }
 
@@ -1144,7 +1164,7 @@ fun PlayerScreen(
                         Icon(
                             Icons.Filled.ClosedCaption,
                             contentDescription = if (showCC) "Subtitles on" else "Subtitles off",
-                            tint = if (showCC) MxGreen else Color.White.copy(alpha = 0.6f)
+                            tint = if (showCC) accent else Color.White.copy(alpha = 0.6f)
                         )
                     }
                     Box(
@@ -1154,11 +1174,11 @@ fun PlayerScreen(
                             .clickable { toggleHwDecoder() }
                             .border(
                                 width = 1.dp,
-                                color = if (hwDecoder) MxGreen else Color.White.copy(alpha = 0.4f),
+                                color = if (hwDecoder) accent else Color.White.copy(alpha = 0.4f),
                                 shape = RoundedCornerShape(8.dp),
                             )
                             .background(
-                                if (hwDecoder) MxGreen.copy(alpha = 0.18f)
+                                if (hwDecoder) accent.copy(alpha = 0.18f)
                                 else Color.Transparent,
                                 RoundedCornerShape(8.dp),
                             )
@@ -1167,7 +1187,7 @@ fun PlayerScreen(
                     ) {
                         Text(
                             if (hwDecoder) "HW" else "SW",
-                            color = if (hwDecoder) MxGreen else Color.White,
+                            color = if (hwDecoder) accent else Color.White,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -1190,7 +1210,7 @@ fun PlayerScreen(
                                 },
                                 leadingIcon = {
                                     Icon(Icons.Filled.ClosedCaption, null,
-                                        tint = if (showCC) MxGreen
+                                        tint = if (showCC) accent
                                         else Color.White.copy(alpha = 0.7f))
                                 },
                                 onClick = { showCC = !showCC; menuOpen = false }
@@ -1210,7 +1230,7 @@ fun PlayerScreen(
                                     leadingIcon = {
                                         if (isSleepSelected(opt)) {
                                             Icon(Icons.Filled.Check, null,
-                                                tint = MxGreen, modifier = Modifier.size(18.dp))
+                                                tint = accent, modifier = Modifier.size(18.dp))
                                         }
                                     },
                                     onClick = { selectSleep(opt); menuOpen = false }
@@ -1235,7 +1255,7 @@ fun PlayerScreen(
                                         if (portraitForced) Icons.Filled.ScreenLockRotation
                                         else Icons.Filled.ScreenRotation,
                                         null,
-                                        tint = if (portraitForced) MxGreen
+                                        tint = if (portraitForced) accent
                                         else Color.White.copy(alpha = 0.7f),
                                     )
                                 },
@@ -1264,12 +1284,14 @@ fun PlayerScreen(
                         icon = Icons.Filled.Equalizer,
                         contentDescription = "Equalizer",
                         active = equalizerOn,
+                        accent = accent,
                         onClick = { toggleEqualizer() },
                     )
                     QuickRowChip(
                         icon = Icons.Filled.Cast,
                         contentDescription = "Cast",
                         active = false,
+                        accent = accent,
                         onClick = {
                             AppLog.d("PLAYER", "cast: not paired")
                             showTransientToast("Cast: coming soon")
@@ -1279,12 +1301,14 @@ fun PlayerScreen(
                         icon = Icons.Filled.Headphones,
                         contentDescription = "Headphone mode",
                         active = headphonesOn,
+                        accent = accent,
                         onClick = { toggleHeadphones() },
                     )
                     QuickRowChip(
                         icon = Icons.Filled.Tune,
                         contentDescription = "Audio output",
                         active = audioOutputMode != 0,
+                        accent = accent,
                         onClick = { cycleAudioOutput() },
                     )
                     Box(
@@ -1292,7 +1316,7 @@ fun PlayerScreen(
                             .padding(horizontal = 8.dp)
                             .height(38.dp)
                             .clip(RoundedCornerShape(20.dp))
-                            .background(MxGreen)
+                            .background(accent)
                             .clickable { cycleSpeed() }
                             .padding(horizontal = 16.dp),
                         contentAlignment = Alignment.Center
@@ -1304,6 +1328,7 @@ fun PlayerScreen(
                         icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = "Sync tool",
                         active = showSyncPopover,
+                        accent = accent,
                         onClick = { openSyncPopover() },
                     )
                 }
@@ -1336,7 +1361,7 @@ fun PlayerScreen(
                     valueRange = 0f..durationSec.coerceAtLeast(1f),
                     colors = SliderDefaults.colors(
                         thumbColor = Color.White,
-                        activeTrackColor = MxGreen,
+                        activeTrackColor = accent,
                         inactiveTrackColor = Color.White.copy(alpha = 0.25f)),
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                 )
@@ -1374,7 +1399,7 @@ fun PlayerScreen(
                     Icon(
                         Icons.Filled.Lock,
                         contentDescription = "Lock controls",
-                        tint = if (locked) MxGreen else Color.White,
+                        tint = if (locked) accent else Color.White,
                     )
                 }
 
@@ -1390,6 +1415,7 @@ fun PlayerScreen(
                     ) {
                         TimeSeekButton(
                             direction = TimeSeekDirection.BACK,
+                            accent = accent,
                             onClick = { seekBy(-10) },
                         )
                     }
@@ -1432,6 +1458,7 @@ fun PlayerScreen(
                     ) {
                         TimeSeekButton(
                             direction = TimeSeekDirection.FORWARD,
+                            accent = accent,
                             onClick = { seekBy(10) },
                         )
                     }
@@ -1479,7 +1506,7 @@ fun PlayerScreen(
                 Icon(
                     Icons.Filled.SkipNext,
                     contentDescription = "Next episode",
-                    tint = MxGreen,
+                    tint = accent,
                     modifier = Modifier.size(18.dp)
                 )
                 Text(
@@ -1527,6 +1554,7 @@ fun PlayerScreen(
             ) {
                 SyncedChip(
                     offsetMs = liveOffsetMs,
+                    accent = accent,
                     onClick = { openSyncPopover() },
                 )
             }
@@ -1541,6 +1569,7 @@ fun PlayerScreen(
             ) {
                 SyncPopover(
                     offsetMs = liveOffsetMs,
+                    accent = accent,
                     onNudge = { nudgeSubtitle(it) },
                     onResync = {
                         closeSyncPopover()
@@ -1564,6 +1593,7 @@ fun PlayerScreen(
             ) {
                 CalibrationBanner(
                     visible = true,
+                    accent = accent,
                     onClick = { onStartCalibration() },
                 )
             }
@@ -1576,7 +1606,7 @@ fun PlayerScreen(
                     .align(Alignment.TopCenter)
                     .padding(top = 70.dp)
             ) {
-                PlayerOverlayToast(transientToast)
+                PlayerOverlayToast(transientToast, accent)
             }
         }
     }

@@ -57,14 +57,16 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.anonrode.player.core.model.Series
 import dev.anonrode.player.core.model.Video
+import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 
-// ── Anonrode brand palette ──────────────────────────────────────────────
-private val LibraryBackground = Color(0xFF0D0F14)
-private val LibrarySurface = Color(0xFF161922)
+// ── Anonrode brand palette (legacy) ─────────────────────────────────────
+// Kept for any non-themed callers; new code should use rememberSkinPalette()
+// to pick up the active skin. The library now reads its surface / text
+// colours from the live skin so it stays in sync with player + settings.
 private val AccentPurple = Color(0xFF6C63FF)
 private val AccentTeal = Color(0xFF00D4AA)
-private val TextPrimary = Color(0xFFF0F2F8)
-private val TextSecondary = Color(0xFFF0F2F8).copy(alpha = 0.45f)
+private val BrandTextPrimary = Color(0xFFF0F2F8)
+private val BrandTextSecondary = Color(0xFFF0F2F8).copy(alpha = 0.45f)
 
 private val ProgressBrush = Brush.horizontalGradient(listOf(Color(0xFF6C63FF), Color(0xFF00D4AA)))
 
@@ -94,37 +96,47 @@ private fun posterHue(title: String): Float = Math.floorMod(title.hashCode(), 36
 fun LibraryScreen(
     viewModelFactory: androidx.lifecycle.ViewModelProvider.Factory,
     onOpenVideo: (Video) -> Unit,
+    onOpenSettings: () -> Unit = {},
     modifier: Modifier = Modifier,
     loading: Boolean = false,
 ) {
     val vm: dev.anonrode.player.feature.library.LibraryViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel(factory = viewModelFactory)
     val state by vm.ui.collectAsState()
+    val palette = rememberSkinPalette()
+    val libBg = palette.background
+    val libSurface = palette.surface
+    val libOnSurface = palette.text
+    val libAccent = palette.accent
+    val libSecondary = palette.textDim
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        containerColor = LibraryBackground,
+        containerColor = libBg,
         topBar = {
             TopAppBar(
                 title = {
-                    Text("Anonrode", color = TextPrimary, fontWeight = FontWeight.Bold)
+                    Text("Anonrode", color = libOnSurface, fontWeight = FontWeight.Bold)
                 },
                 actions = {
                     IconButton(onClick = { /* search: future iteration */ }) {
-                        Icon(Icons.Filled.Search, contentDescription = "Search", tint = TextPrimary)
+                        Icon(Icons.Filled.Search, contentDescription = "Search", tint = libOnSurface)
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = libOnSurface)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = LibraryBackground),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = libBg),
             )
         },
-        bottomBar = { LibraryBottomNav() },
+        bottomBar = { LibraryBottomNav(libSurface = libSurface, accent = libAccent, onOpenSettings = onOpenSettings) },
     ) { padding ->
         if (loading || state.loading) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AccentPurple)
+                    CircularProgressIndicator(color = libAccent)
                     Spacer(Modifier.height(12.dp))
-                    Text("Scanning library…", color = TextSecondary, style = MaterialTheme.typography.bodyMedium)
+                    Text("Scanning library…", color = libSecondary, style = MaterialTheme.typography.bodyMedium)
                 }
             }
             return@Scaffold
@@ -173,7 +185,7 @@ fun LibraryScreen(
                 item(key = "videos-empty") {
                     Text(
                         "No videos found on this device.",
-                        color = TextSecondary,
+                        color = libSecondary,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
                     )
@@ -188,21 +200,29 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun LibraryBottomNav() {
+private fun LibraryBottomNav(
+    libSurface: Color,
+    accent: Color,
+    onOpenSettings: () -> Unit = {},
+) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
-    NavigationBar(containerColor = LibrarySurface) {
+    NavigationBar(containerColor = libSurface) {
         bottomTabs.forEachIndexed { index, tab ->
+            val isSettings = tab.label == "Settings"
             NavigationBarItem(
                 selected = selected == index,
-                onClick = { selected = index },
+                onClick = {
+                    selected = index
+                    if (isSettings) onOpenSettings()
+                },
                 icon = { Icon(tab.icon, contentDescription = tab.label) },
                 label = { Text(tab.label) },
                 colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = AccentPurple,
-                    selectedTextColor = TextPrimary,
-                    indicatorColor = AccentPurple.copy(alpha = 0.18f),
-                    unselectedIconColor = TextSecondary,
-                    unselectedTextColor = TextSecondary,
+                    selectedIconColor = accent,
+                    selectedTextColor = BrandTextPrimary,
+                    indicatorColor = accent.copy(alpha = 0.18f),
+                    unselectedIconColor = BrandTextSecondary,
+                    unselectedTextColor = BrandTextSecondary,
                 ),
             )
         }
@@ -215,7 +235,7 @@ private fun SectionHeader(text: String) {
         text,
         style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.Bold,
-        color = TextSecondary,
+        color = BrandTextSecondary,
         modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 20.dp, bottom = 10.dp),
     )
 }
@@ -264,10 +284,11 @@ private fun GradientProgressBar(fraction: Float, modifier: Modifier = Modifier) 
 
 @Composable
 private fun ContinueCard(item: InProgressItem, onClick: () -> Unit) {
+    val palette = rememberSkinPalette()
     Card(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = LibrarySurface),
+        colors = CardDefaults.cardColors(containerColor = palette.surface),
         modifier = Modifier.width(150.dp),
     ) {
         Box {
@@ -294,14 +315,14 @@ private fun ContinueCard(item: InProgressItem, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
-                color = TextPrimary,
+                color = palette.text,
             )
             Text(
                 item.label,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.labelSmall,
-                color = TextSecondary,
+                color = palette.textDim,
             )
             GradientProgressBar(item.fraction, modifier = Modifier.padding(top = 8.dp))
         }
@@ -310,10 +331,11 @@ private fun ContinueCard(item: InProgressItem, onClick: () -> Unit) {
 
 @Composable
 private fun SeriesCard(s: Series, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val palette = rememberSkinPalette()
     Card(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = LibrarySurface),
+        colors = CardDefaults.cardColors(containerColor = palette.surface),
         modifier = modifier,
     ) {
         PosterArt(s.name, modifier = Modifier.fillMaxWidth().height(110.dp), cornerRadius = 0.dp)
@@ -324,14 +346,14 @@ private fun SeriesCard(s: Series, modifier: Modifier = Modifier, onClick: () -> 
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Bold,
-                color = TextPrimary,
+                color = palette.text,
             )
             Text(
                 "${s.totalEpisodes} episodes · ${s.totalWatched} watched",
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.labelSmall,
-                color = TextSecondary,
+                color = palette.textDim,
             )
             GradientProgressBar(s.progress, modifier = Modifier.padding(top = 9.dp))
         }
@@ -340,6 +362,7 @@ private fun SeriesCard(s: Series, modifier: Modifier = Modifier, onClick: () -> 
 
 @Composable
 private fun VideoRow(v: Video, onClick: () -> Unit) {
+    val palette = rememberSkinPalette()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -359,12 +382,12 @@ private fun VideoRow(v: Video, onClick: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyMedium,
-                color = TextPrimary,
+                color = palette.text,
             )
             Text(
                 "${formatDuration(v.durationMs)} · ${formatSize(v.sizeBytes)}",
                 style = MaterialTheme.typography.labelSmall,
-                color = TextSecondary,
+                color = palette.textDim,
             )
         }
     }

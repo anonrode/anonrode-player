@@ -14,6 +14,9 @@ import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -30,7 +33,9 @@ import dev.anonrode.player.core.media.subtitle.SubtitleParser
 import dev.anonrode.player.core.model.SubtitleCue
 import dev.anonrode.player.core.model.Video
 import dev.anonrode.player.core.ui.theme.AnonrodeTheme
+import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 import dev.anonrode.player.ui.PlayerScreen
+import dev.anonrode.player.ui.SettingsScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -103,6 +108,22 @@ class PlayerActivity : ComponentActivity() {
     /** Render-loop runnable so an episode switch replaces the old loop. */
     private var renderTick: Runnable? = null
 
+    /** True while the in-player settings screen is on top of the player. */
+    private var settingsOpen by mutableStateOf(false)
+
+    /** True while the in-player calibration banner is showing. */
+    private var isCalibrating by mutableStateOf(false)
+
+    /**
+     * Live subtitle offset for the SYNCED chip. Mirrors the engine's
+     * computed offset (auto-lock + manual delay) plus any ±0.1s nudge the
+     * user fires from the sync popover. Re-read every render tick.
+     */
+    private var liveOffsetMs by mutableStateOf(0L)
+
+    /** Cumulative manual nudge in ms (persisted in Room). */
+    private var manualNudgeMs by mutableStateOf(0L)
+
     private val playerEventListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED && !switching) onEpisodeEnded()
@@ -137,40 +158,72 @@ class PlayerActivity : ComponentActivity() {
 
         setContent {
             AnonrodeTheme {
-                PlayerScreen(
-                    player = engine.player,
-                    title = title,
-                    mediaId = currentUriStr ?: "",
-                    cueText = cueText,
-                    positionSec = positionSec,
-                    durationSec = durationSec,
-                    onBack = { finish() },
-                    initialSpeed = restoredSpeed,
-                    onSpeedChanged = { speed ->
-                        // Persist per-video playback speed (Room, media_state)
-                        // plus the global play_speed preference.
-                        sessionSpeed = speed
-                        PlayerPrefs.saveGlobalSpeed(this, speed)
-                        val targetUri = currentUriStr
-                        if (targetUri != null) {
-                            lifecycleScope.launch(Dispatchers.IO) {
-                                app.stateStore.updatePlaybackSpeed(targetUri, speed)
-                                AppLog.d("SPEED", "persisted $speed for $targetUri")
-                            }
-                        }
-                    },
-                    isPipMode = pipMode,
-                    onEnterPip = { enterPip() },
-                    hasNextEpisode = episodeQueue?.next() != null,
-                    hasPreviousEpisode = episodeQueue?.previous() != null,
-                    onPlayNext = { playNextNow() },
-                    onPlayPrevious = { playPreviousNow() },
-                    nextCountdownSec = nextCountdownSec,
-                    onCancelNext = { cancelNextCountdown() },
-                    onHoldAutoAdvance = { holdAutoAdvance() },
-                    upNextTitle = episodeQueue?.next()
-                        ?.let { it.title.substringAfterLast('/').substringBeforeLast('.') },
-                )
+                if (settingsOpen) {
+                    SettingsScreen(onBack = { settingsOpen = false })
+                } else {
+                    val palette = rememberSkinPalette()
+                    Box(modifier = androidx.compose.ui.Modifier
+                        .fillMaxWidth()
+                        .fillMaxSize()) {
+                        PlayerScreen(
+                            player = engine.player,
+                            title = title,
+                            mediaId = currentUriStr ?: "",
+                            cueText = cueText,
+                            positionSec = positionSec,
+                            durationSec = durationSec,
+                            onBack = { finish() },
+                            initialSpeed = restoredSpeed,
+                            onSpeedChanged = { speed ->
+                                // Persist per-video playback speed (Room, media_state)
+                                // plus the global play_speed preference.
+                                sessionSpeed = speed
+                                PlayerPrefs.saveGlobalSpeed(this, speed)
+                                val targetUri = currentUriStr
+                                if (targetUri != null) {
+                                    lifecycleScope.launch(Dispatchers.IO) {
+                                        app.stateStore.updatePlaybackSpeed(targetUri, speed)
+                                        AppLog.d("SPEED", "persisted $speed for $targetUri")
+                                    }
+                                }
+                            },
+                            isPipMode = pipMode,
+                            onEnterPip = { enterPip() },
+                            hasNextEpisode = episodeQueue?.next() != null,
+                            hasPreviousEpisode = episodeQueue?.previous() != null,
+                            onPlayNext = { playNextNow() },
+                            onPlayPrevious = { playPreviousNow() },
+                            nextCountdownSec = nextCountdownSec,
+                            onCancelNext = { cancelNextCountdown() },
+                            onHoldAutoAdvance = { holdAutoAdvance() },
+                            upNextTitle = episodeQueue?.next()
+                                ?.let { it.title.substringAfterLast('/').substringBeforeLast('.') },
+                            onOpenSettings = { settingsOpen = true },
+                            liveOffsetMs = liveOffsetMs,
+                            isCalibrating = isCalibrating,
+                            onStartCalibration = {
+                                isCalibrating = true
+                                AppLog.d("PLAYER", "calibration started")
+                                // Auto-clear the banner after ~4.3s to mirror
+                                // the mockup's animation. Real sync work is
+                                // driven by the engine, not the UI.
+                                handler.postDelayed({
+                                    isCalibrating = false
+                                    AppLog.d("PLAYER", "calibration done")
+                                }, 4300L)
+                            },
+                            onNudgeSubtitle = { deltaMs ->
+                                manualNudgeMs += deltaMs
+                                val uri = currentUriStr
+                                if (uri != null) {
+                                    lifecycleScope.launch(Dispatchers.IO) {
+                                        app.stateStore.updateSubtitleDelay(uri, manualNudgeMs)
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
             }
         }
 
@@ -208,6 +261,8 @@ class PlayerActivity : ComponentActivity() {
                 val sortedCues = parsed.sortedBy { it.start }
                 val manual = state?.subtitleDelayMs ?: 0L
                 val auto = state?.autoSyncOffsetMs ?: 0L
+
+                withContext(Dispatchers.Main) { manualNudgeMs = manual }
 
                 // Speed persistence: apply this video's saved speed, then the
                 // global play_speed preference, then the session speed.
@@ -395,6 +450,9 @@ class PlayerActivity : ComponentActivity() {
                 val spd = engine.subtitleSpeedFactor.coerceAtLeast(0.5f)
                 val t = (tRaw - engine.subtitleOffsetMs / 1000.0) / spd
                 cueText = findCue(cues, t)?.lines?.joinToString("\n")
+                // Mirror the live offset (auto-lock from the sync engine +
+                // any manual nudge) into Compose state for the SYNCED chip.
+                liveOffsetMs = engine.subtitleOffsetMs
                 handler.postDelayed(this, 100)
             }
         }
