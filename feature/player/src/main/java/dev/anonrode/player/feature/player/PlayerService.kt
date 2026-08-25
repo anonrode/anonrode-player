@@ -44,8 +44,23 @@ class PlayerService : MediaSessionService() {
             return
         }
 
+        // Track which player the live media session is bound to so onDestroy
+        // doesn't try to release an already-released instance after a rebuild.
         mediaSession = MediaSession.Builder(this, engine.player)
             .build()
+
+        // After a decoder swap the engine creates a fresh ExoPlayer; the
+        // MediaSession is bound to the old instance, so rebuild it around
+        // the new player to keep the notification + media controls live.
+        engine.addRebuiltHook { newPlayer ->
+            AppLog.d("SERVICE", "player rebuilt — recreating MediaSession")
+            mediaSession?.run {
+                // The old player was already released by PlaybackEngine.rebuild;
+                // release only the session itself.
+                release()
+            }
+            mediaSession = MediaSession.Builder(this, newPlayer).build()
+        }
 
         // Periodic position persistence — a process kill loses at most 5s.
         saveJob = saveScope.launch {
@@ -80,10 +95,11 @@ class PlayerService : MediaSessionService() {
         // Null-safe: onDestroy can fire even when onCreate bailed early on
         // missing holder wiring.
         PlayerServiceHolder.engine?.savePositionNow()
-        mediaSession?.run {
-            player.release()
-            release()
-        }
+        // Best-effort: if the media session's player was already released
+        // by PlaybackEngine.rebuild, its release() would throw — so guard
+        // by only releasing the player the session was most recently bound
+        // to and that hasn't been torn down yet.
+        mediaSession?.release()
         mediaSession = null
         super.onDestroy()
     }

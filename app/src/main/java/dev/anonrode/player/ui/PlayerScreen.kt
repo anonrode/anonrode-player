@@ -76,6 +76,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -106,6 +107,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import dev.anonrode.player.PlayerPrefs
+import dev.anonrode.player.feature.player.PlaybackEngine
 import dev.anonrode.player.core.media.log.AppLog
 import kotlinx.coroutines.delay
 import kotlin.math.abs
@@ -531,7 +533,17 @@ private fun OutlinedSubtitleText(text: String, modifier: Modifier = Modifier) {
 @UnstableApi
 @Composable
 fun PlayerScreen(
+    /**
+     * Playback engine that owns the [Player]. We read [PlaybackEngine.player]
+     * off the engine every render so that decoder swaps (which tear down the
+     * ExoPlayer and create a fresh one) are picked up by the Compose tree
+     * without having to re-invoke the whole [PlayerScreen] composable. The
+     * [player] parameter is kept for backwards compatibility with the
+     * legacy call sites that pass a [Player] directly, but if [engine] is
+     * provided it takes precedence.
+     */
     player: Player,
+    engine: PlaybackEngine? = null,
     title: String,
     cueText: String?,
     positionSec: Float,
@@ -562,6 +574,32 @@ fun PlayerScreen(
     onStartCalibration: () -> Unit = {},
     /** Apply a manual ±0.1s nudge to the subtitle offset. */
     onNudgeSubtitle: (Long) -> Unit = { _ -> },
+    /**
+     * Request a real HW/SW decoder swap. The host rebuilds the ExoPlayer
+     * via [dev.anonrode.player.feature.player.PlaybackEngine.rebuild] and
+     * returns the new audio session id (0 if the swap is still in flight).
+     * The screen keeps the [hwDecoder] state in sync with the requested
+     * value and shows a transient "Rebuilding…" banner until the host
+     * confirms the new player is ready.
+     */
+    onRebuildDecoder: (Boolean) -> Int = { _ -> 0 },
+    /**
+     * Toggle the system equalizer. Called when the EQ quick-row chip is
+     * tapped. The host creates / enables / disables the
+     * [android.media.audiofx.Equalizer] bound to the current audio session
+     * and reports back the new on/off state. The screen mirrors the
+     * returned value into [equalizerOn] for the chip's visual.
+     */
+    onToggleEqualizer: (Boolean) -> Boolean = { it },
+    /**
+     * Open the Cast (MediaRouter) route picker. The host shows a bottom
+     * sheet of available routes and calls [mediaRouter] select on pick.
+     */
+    onOpenCastPicker: () -> Unit = {},
+    /** True if a decoder swap is currently in flight; hides the HW chip. */
+    isRebuildingDecoder: Boolean = false,
+    /** Name of the currently selected Cast route, for the chip tooltip. */
+    castRouteName: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -569,13 +607,19 @@ fun PlayerScreen(
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val activity = context as? Activity
 
+    // Re-derive the current Player off the engine every recomposition. The
+    // engine swaps the ExoPlayer instance on every rebuild; the AndroidView
+    // key below forces the surface to re-attach to the new player without
+    // the Compose tree having to be torn down wholesale.
+    val livePlayer: Player = engine?.player ?: player
+
     // Active accent follows the live skin so the dock chip, the SYNCED chip,
     // the speed pill, the HW chip, and the CC icon all pick up the
     // MX / SIGNAL / LIGHT / BLACK accent without per-call wiring.
     val accent = dev.anonrode.player.core.ui.theme.rememberSkinPalette().accent
 
     var controlsVisible by remember { mutableStateOf(true) }
-    var isPlaying by remember { mutableStateOf(player.isPlaying) }
+    var isPlaying by remember { mutableStateOf(livePlayer.isPlaying) }
     var locked by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var stateText by remember { mutableStateOf("IDLE") }
@@ -627,11 +671,13 @@ fun PlayerScreen(
     var zoomIdx by remember { mutableIntStateOf(0) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
 
-    // Speed persistence: mirror the restored per-video speed into the player
-    // whenever it changes (also applied explicitly by the host before each
-    // episode; unconditional so a saved 1x resets a faster prior episode).
-    LaunchedEffect(initialSpeed) {
-        player.setPlaybackSpeed(initialSpeed)
+    // Speed persistence: mirror the restored per-video speed into the
+    // player whenever it changes — also re-applied on every decoder swap
+    // (the key on livePlayer invalidates this effect when the engine
+    // rebuilds the ExoPlayer). Host also re-applies explicitly before each
+    // episode; unconditional so a saved 1x resets a faster prior episode.
+    LaunchedEffect(initialSpeed, livePlayer) {
+        livePlayer.setPlaybackSpeed(initialSpeed)
     }
 
     // Apply the active zoom mode to the surface frame even if the PlayerView
@@ -661,14 +707,14 @@ fun PlayerScreen(
             val remaining = endMs - System.currentTimeMillis()
             sleepRemainingMs = remaining.coerceAtLeast(0L)
             if (remaining <= 0L) {
-                player.pause()
+                livePlayer.pause()
                 sleepTimerEndMs = null
                 sleepSelection = SleepOptions.first()
             }
         }
     }
 
-    DisposableEffect(player) {
+    DisposableEffect(livePlayer) {
         val l = object : Player.Listener {
             override fun onIsPlayingChanged(p: Boolean) {
                 isPlaying = p
@@ -685,11 +731,11 @@ fun PlayerScreen(
                 }
                 // Re-assert the chosen speed when a new media item is ready.
                 if (playbackState == Player.STATE_READY) {
-                    player.setPlaybackSpeed(speeds[speedIdx])
+                    livePlayer.setPlaybackSpeed(speeds[speedIdx])
                 }
                 // "End of episode" sleep timer fires when playback finishes.
                 if (playbackState == Player.STATE_ENDED && sleepAtEpisodeEnd) {
-                    player.pause()
+                    livePlayer.pause()
                     sleepAtEpisodeEnd = false
                     sleepSelection = SleepOptions.first()
                     // Tell the activity to hold auto-advance for this finish.
@@ -701,8 +747,8 @@ fun PlayerScreen(
                 errorMsg = error.errorCodeName + ": " + (error.cause?.message ?: error.message ?: "unknown")
             }
         }
-        player.addListener(l)
-        onDispose { player.removeListener(l) }
+        livePlayer.addListener(l)
+        onDispose { livePlayer.removeListener(l) }
     }
 
     fun showHud(icon: ImageVector, text: String) {
@@ -730,12 +776,17 @@ fun PlayerScreen(
 
     // ── quick-row wiring (all buttons fire a real action now) ──────
     fun toggleEqualizer() {
-        equalizerOn = !equalizerOn
-        // EQs go through Android's audio session effects. We can't apply a
-        // real EQ here without a session-id pipe, but the toggle is live and
-        // logged + toasts the state.
-        AppLog.d("PLAYER", "equalizer=" + equalizerOn)
-        showTransientToast(if (equalizerOn) "Equalizer on" else "Equalizer off")
+        val requested = !equalizerOn
+        // The host owns the android.media.audiofx.Equalizer instance bound
+        // to the current audio session id; on each tap it enables/disables
+        // that effect and reports back the actual on/off state.
+        val actual = onToggleEqualizer(requested)
+        equalizerOn = actual
+        AppLog.d("PLAYER", "equalizer request=" + requested + " actual=" + actual)
+        showTransientToast(
+            if (actual) "Equalizer on"
+            else "Equalizer off"
+        )
     }
 
     fun toggleHeadphones() {
@@ -765,13 +816,20 @@ fun PlayerScreen(
     }
 
     fun toggleHwDecoder() {
-        hwDecoder = !hwDecoder
-        // Real decoder swap requires rebuilding the ExoPlayer with a fresh
-        // NextRenderersFactory — the activity owns that, so we just surface
-        // the intent via a toast and a log line. A future iteration will
-        // call back into PlaybackEngine.rebuild(hw = hwDecoder).
-        AppLog.d("PLAYER", "decoder hw=" + hwDecoder)
-        showTransientToast(if (hwDecoder) "Decoder: hardware" else "Decoder: software")
+        if (isRebuildingDecoder) {
+            showTransientToast("Decoder swap in progress…")
+            return
+        }
+        val newHw = !hwDecoder
+        hwDecoder = newHw
+        AppLog.d("PLAYER", "decoder request hw=" + newHw)
+        showTransientToast(if (newHw) "Switching to hardware decoder…" else "Switching to software decoder…")
+        // Fire the real rebuild via the host. The host tears down the
+        // ExoPlayer, builds a new one with the requested renderers factory,
+        // and re-anchors the sync processor at the saved position. The
+        // on-screen chip shows "…" while isRebuildingDecoder is true; the
+        // host clears it after the new player reports STATE_READY.
+        onRebuildDecoder(newHw)
     }
 
     fun toggleRotation() {
@@ -847,7 +905,7 @@ fun PlayerScreen(
     fun cycleSpeed() {
         speedIdx = (speedIdx + 1) % speeds.size
         val sp = speeds[speedIdx]
-        player.setPlaybackSpeed(sp)
+        livePlayer.setPlaybackSpeed(sp)
         onSpeedChanged(sp)
     }
 
@@ -857,8 +915,8 @@ fun PlayerScreen(
     }
 
     fun seekBy(sec: Int) {
-        val d = player.duration.takeIf { it > 0 } ?: return
-        player.seekTo((player.currentPosition + sec * 1000L).coerceIn(0L, d))
+        val d = livePlayer.duration.takeIf { it > 0 } ?: return
+        livePlayer.seekTo((livePlayer.currentPosition + sec * 1000L).coerceIn(0L, d))
         flashSide = if (sec < 0) -1 else 1
         view.postDelayed({ flashSide = 0 }, 420)
     }
@@ -941,7 +999,7 @@ fun PlayerScreen(
                         startX = off.x
                         startY = off.y
                         lastX = off.x
-                        startPosMs = player.currentPosition.toFloat()
+                        startPosMs = livePlayer.currentPosition.toFloat()
                         startVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                         startBri = activity?.window?.attributes?.screenBrightness
                             ?.takeIf { it >= 0 } ?: 0.5f
@@ -965,12 +1023,12 @@ fun PlayerScreen(
                         }
                         when (mode) {
                             "seek" -> {
-                                val d = player.duration.takeIf { it > 0 }
+                                val d = livePlayer.duration.takeIf { it > 0 }
                                     ?: return@detectDragGestures
                                 val deltaFrac = (x - lastX) / scrW
                                 val target =
                                     (startPosMs + deltaFrac * d).coerceIn(0f, d.toFloat())
-                                player.seekTo(target.toLong())
+                                livePlayer.seekTo(target.toLong())
                                 showHud(Icons.Filled.FastForward,
                                     fmtTime(target.toLong()) + " / " + fmtTime(d))
                             }
@@ -1003,20 +1061,26 @@ fun PlayerScreen(
             }
     ) {
         // ── video ────────────────────────────────────────────────────
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    this.player = player
-                    useController = false
-                    setShutterBackgroundColor(android.graphics.Color.BLACK)
-                    resizeMode = ZoomModes[zoomIdx].resizeMode
-                }.also { playerViewRef = it }
-            },
-            update = { pv ->
-                pv.resizeMode = ZoomModes[zoomIdx].resizeMode
-            }
-        )
+        // The key on the AndroidView identity re-binds the PlayerView to
+        // the rebuilt ExoPlayer after a HW/SW swap. Without this the
+        // surface keeps rendering the released (dead) player instance.
+        key(livePlayer) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        this.player = livePlayer
+                        useController = false
+                        setShutterBackgroundColor(android.graphics.Color.BLACK)
+                        resizeMode = ZoomModes[zoomIdx].resizeMode
+                    }.also { playerViewRef = it }
+                },
+                update = { pv ->
+                    if (pv.player !== livePlayer) pv.player = livePlayer
+                    pv.resizeMode = ZoomModes[zoomIdx].resizeMode
+                }
+            )
+        }
 
         // ── subtitle: MX outline, long-press draggable ───────────────
         if (showCC && !isPipMode) {
@@ -1115,9 +1179,9 @@ fun PlayerScreen(
             val diag = buildString {
                 errorMsg?.let { append("ERROR: ").append(it).append('\n') }
                 append("state=").append(stateText)
-                append(" pos=").append(player.currentPosition / 1000f).append("s")
-                append(" video=").append(player.videoSize.width)
-                    .append("x").append(player.videoSize.height)
+                append(" pos=").append(livePlayer.currentPosition / 1000f).append("s")
+                append(" video=").append(livePlayer.videoSize.width)
+                    .append("x").append(livePlayer.videoSize.height)
             }
             Text(
                 diag,
@@ -1169,25 +1233,40 @@ fun PlayerScreen(
                     }
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(width = 44.dp, height = 40.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .clickable { toggleHwDecoder() }
+                            .clickable(enabled = !isRebuildingDecoder) { toggleHwDecoder() }
                             .border(
                                 width = 1.dp,
-                                color = if (hwDecoder) accent else Color.White.copy(alpha = 0.4f),
+                                color = when {
+                                    isRebuildingDecoder -> Color.White.copy(alpha = 0.25f)
+                                    hwDecoder -> accent
+                                    else -> Color.White.copy(alpha = 0.4f)
+                                },
                                 shape = RoundedCornerShape(8.dp),
                             )
                             .background(
-                                if (hwDecoder) accent.copy(alpha = 0.18f)
-                                else Color.Transparent,
+                                when {
+                                    isRebuildingDecoder -> Color.White.copy(alpha = 0.05f)
+                                    hwDecoder -> accent.copy(alpha = 0.18f)
+                                    else -> Color.Transparent
+                                },
                                 RoundedCornerShape(8.dp),
                             )
                             .padding(horizontal = 6.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            if (hwDecoder) "HW" else "SW",
-                            color = if (hwDecoder) accent else Color.White,
+                            when {
+                                isRebuildingDecoder -> "…"
+                                hwDecoder -> "HW"
+                                else -> "SW"
+                            },
+                            color = when {
+                                isRebuildingDecoder -> Color.White.copy(alpha = 0.6f)
+                                hwDecoder -> accent
+                                else -> Color.White
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -1289,12 +1368,13 @@ fun PlayerScreen(
                     )
                     QuickRowChip(
                         icon = Icons.Filled.Cast,
-                        contentDescription = "Cast",
-                        active = false,
+                        contentDescription = if (castRouteName != null)
+                            "Cast: $castRouteName" else "Cast",
+                        active = castRouteName != null,
                         accent = accent,
                         onClick = {
-                            AppLog.d("PLAYER", "cast: not paired")
-                            showTransientToast("Cast: coming soon")
+                            AppLog.d("PLAYER", "cast: opening route picker")
+                            onOpenCastPicker()
                         },
                     )
                     QuickRowChip(
@@ -1345,7 +1425,7 @@ fun PlayerScreen(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    fmtTime(player.currentPosition),
+                    fmtTime(livePlayer.currentPosition),
                     color = Color.White.copy(alpha = 0.75f),
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.widthIn(min = 48.dp)
@@ -1355,7 +1435,7 @@ fun PlayerScreen(
                         .coerceIn(0f, durationSec.coerceAtLeast(1f)),
                     onValueChange = { localSeek = it },
                     onValueChangeFinished = {
-                        if (localSeek >= 0f) player.seekTo((localSeek * 1000).toLong())
+                        if (localSeek >= 0f) livePlayer.seekTo((localSeek * 1000).toLong())
                         localSeek = -1f
                     },
                     valueRange = 0f..durationSec.coerceAtLeast(1f),
@@ -1431,7 +1511,7 @@ fun PlayerScreen(
                     // ── BIG play / pause (unchanged) ──
                     IconButton(
                         onClick = {
-                            if (player.isPlaying) player.pause() else player.play()
+                            if (livePlayer.isPlaying) livePlayer.pause() else livePlayer.play()
                         },
                         modifier = Modifier
                             .size(60.dp)

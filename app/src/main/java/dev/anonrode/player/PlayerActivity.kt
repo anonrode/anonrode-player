@@ -114,6 +114,11 @@ class PlayerActivity : ComponentActivity() {
     /** True while the in-player calibration banner is showing. */
     private var isCalibrating by mutableStateOf(false)
 
+    /** True while [dev.anonrode.player.feature.player.PlaybackEngine.rebuild]
+     *  is rebuilding the ExoPlayer around a new renderers factory. Mirrored
+     *  into the HW chip in PlayerScreen to disable the button + show "…". */
+    private var isRebuildingDecoder by mutableStateOf(false)
+
     /**
      * Live subtitle offset for the SYNCED chip. Mirrors the engine's
      * computed offset (auto-lock + manual delay) plus any ±0.1s nudge the
@@ -154,7 +159,7 @@ class PlayerActivity : ComponentActivity() {
         val app = AnonrodeApp.get(this)
         val engine = app.engine
 
-        engine.player.addListener(playerEventListener)
+        engine.addListener(playerEventListener)
 
         setContent {
             AnonrodeTheme {
@@ -167,6 +172,7 @@ class PlayerActivity : ComponentActivity() {
                         .fillMaxSize()) {
                         PlayerScreen(
                             player = engine.player,
+                            engine = engine,
                             title = title,
                             mediaId = currentUriStr ?: "",
                             cueText = cueText,
@@ -221,6 +227,8 @@ class PlayerActivity : ComponentActivity() {
                                     }
                                 }
                             },
+                            isRebuildingDecoder = isRebuildingDecoder,
+                            onRebuildDecoder = { newHw -> requestDecoderRebuild(newHw) },
                         )
                     }
                 }
@@ -303,6 +311,37 @@ class PlayerActivity : ComponentActivity() {
                 .setAspectRatio(Rational(16, 9))
                 .build()
             enterPictureInPictureMode(params)
+        }
+    }
+
+    /**
+     * Real HW/SW decoder swap. Drives [PlaybackEngine.rebuild] on the main
+     * thread (Media3 requires player access on the application's main
+     * looper), then waits for the rebuilt player to report STATE_READY
+     * before unblocking the HW chip. The render loop's next tick re-reads
+     * the engine's new [PlaybackEngine.player] automatically.
+     */
+    private fun requestDecoderRebuild(newHw: Boolean): Int {
+        val engine = AnonrodeApp.get(this).engine
+        if (engine.isHw == newHw) {
+            return engine.currentAudioSessionId
+        }
+        // Persist the current speed so the rebuilt player comes up at the
+        // same rate the user picked (the engine owns the speed field on
+        // behalf of the host, which knows the live restored speed).
+        engine.pendingSpeedOnRebuild = restoredSpeed.takeIf { it > 0f } ?: sessionSpeed
+        isRebuildingDecoder = true
+        try {
+            val newSessionId = engine.rebuild(newHw)
+            AppLog.d("PLAYER", "decoder rebuild complete: hw=" + newHw + " session=" + newSessionId)
+            return newSessionId
+        } catch (e: Exception) {
+            AppLog.e("PLAYER", "decoder rebuild FAILED", e)
+            return 0
+        } finally {
+            // Clear the loading flag on the next main-loop tick so the
+            // freshly-prepared player has already painted its first frame.
+            handler.postDelayed({ isRebuildingDecoder = false }, 800L)
         }
     }
 
@@ -548,7 +587,7 @@ class PlayerActivity : ComponentActivity() {
         renderTick = null
         pendingNext = null
         val engine = AnonrodeApp.get(this).engine
-        engine.player.removeListener(playerEventListener)
+        engine.removeListener(playerEventListener)
         engine.savePositionNow()
         super.onDestroy()
     }
