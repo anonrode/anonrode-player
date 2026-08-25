@@ -11,10 +11,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -158,6 +161,100 @@ private val SubtitleOutlineOffsets = listOf(
     0f to -2f, 0f to 2f,
     2f to -2f, 2f to 0f, 2f to 2f,
 )
+
+/* ── dock button visual language ──────────────────────────────────────────
+ * Two distinct button families live in the bottom transport:
+ *
+ * 1. Time-seek ±10s — SQUARED 40×40 pill, brand-green tint, label baked
+ *    into the icon. The square silhouette + green-tint background is
+ *    intentionally loud; the eye is trained to read "this is a time
+ *    action, not an episode action".
+ *
+ * 2. Episode-jump ‹ep / ep› — ROUND 44dp ghost, full-white double-arrow.
+ *    Same silhouette as the play button, so they read as "transport
+ *    navigation" rather than "time navigation".
+ *
+ * Spacing (14dp) between the two families makes them read as separate
+ * groups even on a quick glance.
+ * ------------------------------------------------------------------------- */
+
+private enum class TimeSeekDirection { BACK, FORWARD }
+private enum class EpisodeJumpDirection { PREVIOUS, NEXT }
+
+@Composable
+private fun TimeSeekButton(
+    direction: TimeSeekDirection,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(width = 48.dp, height = 40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MxGreen.copy(alpha = 0.22f))
+            .border(1.dp, MxGreen.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = rememberRipple(bounded = true, color = MxGreen),
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            Text(
+                text = if (direction == TimeSeekDirection.BACK) "«" else "»",
+                color = MxGreen,
+                fontWeight = FontWeight.Black,
+                fontSize = 13.sp,
+            )
+            Text(
+                text = "10s",
+                color = MxGreen,
+                fontWeight = FontWeight.Black,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EpisodeJumpButton(
+    direction: EpisodeJumpDirection,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f)
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .clickable(
+                enabled = enabled,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = rememberRipple(bounded = true, color = Color.White),
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (direction == EpisodeJumpDirection.PREVIOUS) {
+            Icon(
+                imageVector = Icons.Filled.SkipPrevious,
+                contentDescription = "Previous episode",
+                tint = tint,
+                modifier = Modifier.size(30.dp),
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Filled.SkipNext,
+                contentDescription = "Next episode",
+                tint = tint,
+                modifier = Modifier.size(30.dp),
+            )
+        }
+    }
+}
 
 /**
  * MX subtitle look: bold white text with a black 8-way outline, no
@@ -818,115 +915,158 @@ fun PlayerScreen(
                 }
             }
 
-            // ── bottom: times + seekbar + transport over a scrim ──────
-            Column(
+        // ── bottom: times + seekbar + transport over a scrim ──────
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(
+                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
+                .padding(horizontal = 14.dp, vertical = 8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    fmtTime(player.currentPosition),
+                    color = Color.White.copy(alpha = 0.75f),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.widthIn(min = 48.dp)
+                )
+                Slider(
+                    value = (if (localSeek >= 0f) localSeek else positionSec)
+                        .coerceIn(0f, durationSec.coerceAtLeast(1f)),
+                    onValueChange = { localSeek = it },
+                    onValueChangeFinished = {
+                        if (localSeek >= 0f) player.seekTo((localSeek * 1000).toLong())
+                        localSeek = -1f
+                    },
+                    valueRange = 0f..durationSec.coerceAtLeast(1f),
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color.White,
+                        activeTrackColor = MxGreen,
+                        inactiveTrackColor = Color.White.copy(alpha = 0.25f)),
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                )
+                Text(
+                    fmtTime((durationSec - positionSec).coerceAtLeast(0f).toLong()),
+                    color = Color.White.copy(alpha = 0.75f),
+                    style = MaterialTheme.typography.labelMedium,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.widthIn(min = 48.dp)
+                )
+            }
+            // ── dock controls ──
+            //
+            // Visual language (intentional, do not change without UX review):
+            //   * TIME-SEEK ±10s   =  SQUARED pill, 36×36, green-tint background,
+            //                        label "10s" baked into the icon
+            //   * EPISODE-JUMP ‹‹ ›› =  ROUND ghost 44dp, pure-white arrows,
+            //                        disabled state = 35% alpha
+            //   * Spacing: 14dp gap separates the time-seek group from the
+            //     episode-jump group, with the BIG PLAY in the middle. The eye
+            //     locks onto the play button and the two pairs read as
+            //     "near: time / far: episode" with one extra row of breathing
+            //     room between them — a mis-tap now needs an aimed reach.
+            Box(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(
-                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                    .height(72.dp)
+                    .padding(horizontal = 4.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        fmtTime(player.currentPosition),
-                        color = Color.White.copy(alpha = 0.75f),
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.widthIn(min = 48.dp)
-                    )
-                    Slider(
-                        value = (if (localSeek >= 0f) localSeek else positionSec)
-                            .coerceIn(0f, durationSec.coerceAtLeast(1f)),
-                        onValueChange = { localSeek = it },
-                        onValueChangeFinished = {
-                            if (localSeek >= 0f) player.seekTo((localSeek * 1000).toLong())
-                            localSeek = -1f
-                        },
-                        valueRange = 0f..durationSec.coerceAtLeast(1f),
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = MxGreen,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.25f)),
-                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-                    )
-                    Text(
-                        fmtTime((durationSec - positionSec).coerceAtLeast(0f).toLong()),
-                        color = Color.White.copy(alpha = 0.75f),
-                        style = MaterialTheme.typography.labelMedium,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.widthIn(min = 48.dp)
+                // Left rail: lock
+                IconButton(
+                    onClick = { locked = true },
+                    modifier = Modifier.align(Alignment.CenterStart)
+                ) {
+                    Icon(
+                        Icons.Filled.Lock,
+                        contentDescription = "Lock controls",
+                        tint = if (locked) MxGreen else Color.White,
                     )
                 }
-                Box(modifier = Modifier.fillMaxWidth().height(64.dp)) {
-                    // lock stands alone on the left; PiP/aspect on the right
+
+                // Centre transport: time-seek 10s | ‹ep | ▶ | ep› | 10s
+                Row(
+                    modifier = Modifier.align(Alignment.Center),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // ── time-seek group (LEFT side) ──
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TimeSeekButton(
+                            direction = TimeSeekDirection.BACK,
+                            onClick = { seekBy(-10) },
+                        )
+                    }
+                    // 14dp divider gap between time-seek and episode-jump groups
+                    Spacer(Modifier.width(14.dp))
+                    // ── episode-jump group ──
+                    EpisodeJumpButton(
+                        direction = EpisodeJumpDirection.PREVIOUS,
+                        enabled = hasPreviousEpisode,
+                        onClick = onPlayPrevious,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    // ── BIG play / pause (unchanged) ──
                     IconButton(
-                        onClick = { locked = true },
-                        modifier = Modifier.align(Alignment.CenterStart)
+                        onClick = {
+                            if (player.isPlaying) player.pause() else player.play()
+                        },
+                        modifier = Modifier
+                            .size(60.dp)
+                            .border(2.dp, Color.White, CircleShape)
                     ) {
-                        Icon(Icons.Filled.Lock,
-                            contentDescription = "Lock controls", tint = Color.White)
+                        Icon(
+                            if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp),
+                        )
                     }
+                    Spacer(Modifier.width(6.dp))
+                    EpisodeJumpButton(
+                        direction = EpisodeJumpDirection.NEXT,
+                        enabled = hasNextEpisode,
+                        onClick = onPlayNext,
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    // ── time-seek group (RIGHT side) ──
                     Row(
-                        modifier = Modifier.align(Alignment.Center),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        IconButton(onClick = { seekBy(-10) }, modifier = Modifier.size(44.dp)) {
-                            Icon(Icons.Filled.Replay10, contentDescription = "Rewind 10 seconds",
-                                tint = Color.White, modifier = Modifier.size(30.dp))
-                        }
-                        IconButton(
-                            onClick = { if (hasPreviousEpisode) onPlayPrevious() },
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Icon(Icons.Filled.SkipPrevious,
-                                contentDescription = "Previous episode",
-                                tint = if (hasPreviousEpisode) Color.White
-                                else Color.White.copy(alpha = 0.35f))
-                        }
-                        IconButton(
-                            onClick = { if (player.isPlaying) player.pause() else player.play() },
-                            modifier = Modifier
-                                .size(64.dp)
-                                .border(2.dp, Color.White, CircleShape)
-                        ) {
-                            Icon(
-                                if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                                contentDescription = if (isPlaying) "Pause" else "Play",
-                                tint = Color.White, modifier = Modifier.size(30.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = { if (hasNextEpisode) onPlayNext() },
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Icon(Icons.Filled.SkipNext,
-                                contentDescription = "Next episode",
-                                tint = if (hasNextEpisode) Color.White
-                                else Color.White.copy(alpha = 0.35f))
-                        }
-                        IconButton(onClick = { seekBy(10) }, modifier = Modifier.size(44.dp)) {
-                            Icon(Icons.Filled.Forward10, contentDescription = "Forward 10 seconds",
-                                tint = Color.White, modifier = Modifier.size(30.dp))
-                        }
+                        TimeSeekButton(
+                            direction = TimeSeekDirection.FORWARD,
+                            onClick = { seekBy(10) },
+                        )
                     }
-                    Row(
-                        modifier = Modifier.align(Alignment.CenterEnd),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        IconButton(onClick = onEnterPip) {
-                            Icon(Icons.Filled.PictureInPictureAlt,
-                                contentDescription = "Picture-in-picture", tint = Color.White)
-                        }
-                        IconButton(onClick = { cycleZoom() }) {
-                            Icon(Icons.Filled.AspectRatio,
-                                contentDescription = "Aspect ratio", tint = Color.White)
-                        }
+                }
+
+                // Right rail: PiP + aspect
+                Row(
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    IconButton(onClick = onEnterPip) {
+                        Icon(
+                            Icons.Filled.PictureInPictureAlt,
+                            contentDescription = "Picture-in-picture",
+                            tint = Color.White,
+                        )
+                    }
+                    IconButton(onClick = { cycleZoom() }) {
+                        Icon(
+                            Icons.Filled.AspectRatio,
+                            contentDescription = "Aspect ratio",
+                            tint = Color.White,
+                        )
                     }
                 }
             }
         }
+    }
 
         // ── Up Next pill (final 30 s of an episode) ──────────────────
         if (!isPipMode && hasNextEpisode && durationSec > 0f &&
