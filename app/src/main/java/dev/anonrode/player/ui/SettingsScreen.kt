@@ -226,25 +226,26 @@ fun SettingsScreen(
 
             // ── Sleep timer ─────────────────────────────────────
             item("sleep") {
+                val cycle = intArrayOf(0, 5, 10, 15, 30, 60, -1)
+                val labels = mapOf(0 to "Off", 5 to "5m", 10 to "10m",
+                    15 to "15m", 30 to "30m", 60 to "60m", -1 to "End")
+                val current = settings.sleepTimerMinutes
                 SettingsRow(
                     palette = palette,
                     icon = Icons.Filled.Timer,
                     title = "Sleep timer",
                     subtitle = "Off by default",
                     trailing = {
-                        ValueText(palette = palette, text = "Off")
+                        ValueText(palette = palette,
+                            text = labels[current] ?: "Off")
                     },
                     onClick = {
-                        // Cycle through the same options the player uses.
-                        val opts = intArrayOf(0, 5, 10, 15, 30, 60)
-                        val cur = PlayerPrefs.globalSpeed(context)?.let { /* unused */ } ?: 0
-                        // No persistent state for sleep; show a transient
-                        // confirmation toast via the underlying context.
-                        android.widget.Toast.makeText(
-                            context,
-                            "Sleep: opens from the player menu",
-                            android.widget.Toast.LENGTH_SHORT,
-                        ).show()
+                        // Cycle to the next option and persist.
+                        val idx = cycle.indexOf(current).coerceAtLeast(0)
+                        val next = cycle[(idx + 1) % cycle.size]
+                        coroutineScope.launch {
+                            dataStore.updateData { it.copy(sleepTimerMinutes = next) }
+                        }
                     },
                 )
             }

@@ -29,6 +29,8 @@ data class PlayerSettings(
     val brightnessGesture: Boolean = true,
     val pinchZoom: Boolean = true,
     val autoHideControlsMs: Long = 3500L,
+    /** Sleep timer in minutes; 0=off, -1=end of episode. */
+    val sleepTimerMinutes: Int = 0,
     val theme: String = "dark",
     val dynamicColor: Boolean = true,
     val amoledBlack: Boolean = false,
