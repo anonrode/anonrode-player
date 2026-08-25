@@ -1439,16 +1439,24 @@ fun PlayerScreen(
                     listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
                 .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     fmtTime(livePlayer.currentPosition),
                     color = Color.White.copy(alpha = 0.75f),
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.widthIn(min = 48.dp)
                 )
+                // Smooth seekbar: positionSec updates at the host's tick
+                // (10Hz); animate the *visual* value to interpolate between
+                // ticks. While the user is dragging (localSeek >= 0), the
+                // raw value is used; otherwise the animated value follows.
+                val visualPos by animateFloatAsState(
+                    targetValue = if (localSeek >= 0f) localSeek else positionSec,
+                    animationSpec = tween(durationMillis = 100, easing = androidx.compose.animation.core.LinearEasing),
+                    label = "seekbar",
+                )
                 Slider(
-                    value = (if (localSeek >= 0f) localSeek else positionSec)
-                        .coerceIn(0f, durationSec.coerceAtLeast(1f)),
+                    value = visualPos.coerceIn(0f, durationSec.coerceAtLeast(1f)),
                     onValueChange = { localSeek = it },
                     onValueChangeFinished = {
                         if (localSeek >= 0f) livePlayer.seekTo((localSeek * 1000).toLong())
