@@ -7,9 +7,15 @@ import android.media.AudioManager
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1635,12 +1641,24 @@ fun PlayerScreen(
                             ),
                         contentAlignment = androidx.compose.ui.Alignment.Center,
                     ) {
-                        Icon(
-                            if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
-                            tint = Color.White,
-                            modifier = Modifier.size(28.dp),
-                        )
+                        // AnimatedContent slides the icon vertically when
+                        // play/pause state flips — feels like a real
+                        // mechanical press, not a state toggle.
+                        androidx.compose.animation.AnimatedContent(
+                            targetState = isPlaying,
+                            transitionSpec = {
+                                (slideInVertically { it } + fadeIn()) togetherWith
+                                    (slideOutVertically { -it } + fadeOut())
+                            },
+                            label = "playPause",
+                        ) { playing ->
+                            Icon(
+                                if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                contentDescription = if (playing) "Pause" else "Play",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp),
+                            )
+                        }
                     }
                     Spacer(Modifier.width(6.dp))
                     EpisodeJumpButton(
