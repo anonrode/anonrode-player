@@ -1619,15 +1619,21 @@ fun PlayerScreen(
                         },
                     )
                     Spacer(Modifier.width(6.dp))
-                    // ── BIG play / pause (unchanged) ──
-                    IconButton(
-                        onClick = {
-                            view.haptic(HapticFeedbackConstants.VIRTUAL_KEY)
-                            if (livePlayer.isPlaying) livePlayer.pause() else livePlayer.play()
-                        },
+                    // ── BIG play / pause — with skin-accent ripple ────────
+                    Box(
                         modifier = Modifier
                             .size(60.dp)
+                            .clip(CircleShape)
                             .border(2.dp, Color.White, CircleShape)
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = rememberRipple(bounded = true, radius = 36.dp, color = accent),
+                                onClick = {
+                                    view.haptic(HapticFeedbackConstants.VIRTUAL_KEY)
+                                    if (livePlayer.isPlaying) livePlayer.pause() else livePlayer.play()
+                                },
+                            ),
+                        contentAlignment = androidx.compose.ui.Alignment.Center,
                     ) {
                         Icon(
                             if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
