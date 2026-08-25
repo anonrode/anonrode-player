@@ -939,7 +939,7 @@ fun PlayerScreen(
 
     LaunchedEffect(controlsVisible, isPlaying, locked, menuOpen) {
         if (controlsVisible && isPlaying && !locked && !menuOpen) {
-            kotlinx.coroutines.delay(3500)
+            kotlinx.coroutines.delay(2500)
             controlsVisible = false
         }
     }
