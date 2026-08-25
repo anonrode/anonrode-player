@@ -3,7 +3,9 @@ package dev.anonrode.player.ui
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.graphics.Bitmap
 import android.media.AudioManager
+import android.media.MediaMetadataRetriever
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.widget.Toast
@@ -97,6 +99,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -751,6 +754,13 @@ fun PlayerScreen(
     /** Index into [ZoomModes]: FIT → CROP → STR. */
     var zoomIdx by remember { mutableIntStateOf(0) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+    /**
+     * First-frame poster. Drawn behind the player view so the gap between
+     * "video opens" and "first frame paints" doesn't show as a black
+     * flash. Set asynchronously by [LaunchedEffect] below; cleared when
+     * the player's [Player.Listener] reports STATE_READY (handled inline).
+     */
+    var posterBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
 
     // Speed persistence: mirror the restored per-video speed into the
     // player whenever it changes — also re-applied on every decoder swap
@@ -813,6 +823,8 @@ fun PlayerScreen(
                 // Re-assert the chosen speed when a new media item is ready.
                 if (playbackState == Player.STATE_READY) {
                     livePlayer.setPlaybackSpeed(speeds[speedIdx])
+                    // First frame has painted — drop the poster.
+                    posterBitmap = null
                 }
                 // "End of episode" sleep timer fires when playback finishes.
                 if (playbackState == Player.STATE_ENDED && sleepAtEpisodeEnd) {
@@ -1029,6 +1041,32 @@ fun PlayerScreen(
         subY = saved?.second ?: SUB_DEFAULT_Y
     }
 
+    // First-frame poster: decode the video URI off the main thread, grab
+    // frame 0, and stash it as an ImageBitmap. The poster is dropped
+    // automatically when the player's STATE_READY fires (see listener).
+    LaunchedEffect(mediaId) {
+        if (mediaId.isBlank()) {
+            posterBitmap = null
+            return@LaunchedEffect
+        }
+        posterBitmap = null
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(context, android.net.Uri.parse(mediaId))
+                val bmp: Bitmap? = retriever.getFrameAtTime(0L,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                if (bmp != null) {
+                    posterBitmap = bmp.asImageBitmap()
+                }
+            } catch (e: Throwable) {
+                AppLog.e("POSTER", "failed to grab first frame for $mediaId", e)
+            } finally {
+                try { retriever.release() } catch (_: Throwable) {}
+            }
+        }
+    }
+
     // Seekbar drag position in seconds; -1 = not dragging. Seeking is applied
     // once on release instead of firing player.seekTo() per pixel of drag.
     var localSeek by remember { mutableFloatStateOf(-1f) }
@@ -1164,6 +1202,19 @@ fun PlayerScreen(
                     if (pv.player !== livePlayer) pv.player = livePlayer
                     pv.resizeMode = ZoomModes[zoomIdx].resizeMode
                 }
+            )
+        }
+
+        // First-frame poster under the player view (drawn AFTER the
+        // AndroidView so it sits on top, but the player surface draws
+        // over it as soon as the first frame paints — listener clears
+        // the poster in onPlaybackStateChanged(STATE_READY)).
+        posterBitmap?.let { bmp ->
+            androidx.compose.foundation.Image(
+                bitmap = bmp,
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
             )
         }
 
