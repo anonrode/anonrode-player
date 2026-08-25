@@ -27,6 +27,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import dev.anonrode.player.audio.EqualizerManager
 import dev.anonrode.player.core.datastore.playerSettingsDataStore
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.subtitle.SubtitleParser
@@ -120,6 +121,14 @@ class PlayerActivity : ComponentActivity() {
     private var isRebuildingDecoder by mutableStateOf(false)
 
     /**
+     * Bound to the current audio session id; rebound on every decoder
+     * rebuild. Persists across the activity so the EQ toggle state
+     * survives a screen rotation.
+     */
+    private val equalizer = EqualizerManager()
+    private var equalizerOn by mutableStateOf(false)
+
+    /**
      * Live subtitle offset for the SYNCED chip. Mirrors the engine's
      * computed offset (auto-lock + manual delay) plus any ±0.1s nudge the
      * user fires from the sync popover. Re-read every render tick.
@@ -132,6 +141,12 @@ class PlayerActivity : ComponentActivity() {
     private val playerEventListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED && !switching) onEpisodeEnded()
+            // Re-bind the EQ every time the player transitions to a new
+            // session id (decoder rebuild, or first prepared playback).
+            if (playbackState == Player.STATE_READY) {
+                val sid = AnonrodeApp.get(this@PlayerActivity).engine.currentAudioSessionId
+                if (sid != 0) equalizer.setSessionId(sid)
+            }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -229,6 +244,7 @@ class PlayerActivity : ComponentActivity() {
                             },
                             isRebuildingDecoder = isRebuildingDecoder,
                             onRebuildDecoder = { newHw -> requestDecoderRebuild(newHw) },
+                            onToggleEqualizer = { request -> requestToggleEqualizer(request) },
                         )
                     }
                 }
@@ -334,6 +350,14 @@ class PlayerActivity : ComponentActivity() {
         try {
             val newSessionId = engine.rebuild(newHw)
             AppLog.d("PLAYER", "decoder rebuild complete: hw=" + newHw + " session=" + newSessionId)
+            // Re-bind the Equalizer to the rebuilt player's session id. We
+            // use the returned id (which may be 0 if the new player hasn't
+            // attached a session yet) and re-apply on the next state-ready
+            // tick via the same hook the PlayerService uses.
+            equalizer.setSessionId(newSessionId)
+            // Mirror the prior enabled state — the user expects "EQ on" to
+            // stay on after a decoder swap, not silently flip off.
+            if (equalizerOn) equalizer.setEnabled(true)
             return newSessionId
         } catch (e: Exception) {
             AppLog.e("PLAYER", "decoder rebuild FAILED", e)
@@ -343,6 +367,27 @@ class PlayerActivity : ComponentActivity() {
             // freshly-prepared player has already painted its first frame.
             handler.postDelayed({ isRebuildingDecoder = false }, 800L)
         }
+    }
+
+    /**
+     * Real EQ toggle. The host owns the [EqualizerManager] so the effect
+     * survives across Compose recompositions; the screen merely asks for
+     * a desired on/off and we report back the actual state (the
+     * `audiofx` stack silently refuses on devices that don't support
+     * effects, e.g. some emulator images).
+     */
+    private fun requestToggleEqualizer(requested: Boolean): Boolean {
+        // If the player is still warming up, attempt to bind the effect
+        // off the current session id. setSessionId(0) is a safe no-op.
+        equalizer.setSessionId(AnonrodeApp.get(this).engine.currentAudioSessionId)
+        if (!equalizer.isBound) {
+            AppLog.d("EQ", "toggle requested but effect not bound to a session id")
+            equalizerOn = false
+            return false
+        }
+        val ok = equalizer.setEnabled(requested)
+        equalizerOn = ok && equalizer.isEnabled
+        return equalizerOn
     }
 
     /**
@@ -587,8 +632,11 @@ class PlayerActivity : ComponentActivity() {
         renderTick = null
         pendingNext = null
         val engine = AnonrodeApp.get(this).engine
-        engine.removeListener(playerEventListener)
+        engine.player.removeListener(playerEventListener)
         engine.savePositionNow()
+        // Release the audio effect on activity destroy so the native
+        // equalizer instance doesn't outlive the screen.
+        equalizer.release()
         super.onDestroy()
     }
 }
