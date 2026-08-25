@@ -140,14 +140,17 @@ class PlayerActivity : ComponentActivity() {
                 PlayerScreen(
                     player = engine.player,
                     title = title,
+                    mediaId = currentUriStr ?: "",
                     cueText = cueText,
                     positionSec = positionSec,
                     durationSec = durationSec,
                     onBack = { finish() },
                     initialSpeed = restoredSpeed,
                     onSpeedChanged = { speed ->
-                        // Persist per-video playback speed (Room, media_state).
+                        // Persist per-video playback speed (Room, media_state)
+                        // plus the global play_speed preference.
                         sessionSpeed = speed
+                        PlayerPrefs.saveGlobalSpeed(this, speed)
                         val targetUri = currentUriStr
                         if (targetUri != null) {
                             lifecycleScope.launch(Dispatchers.IO) {
@@ -206,10 +209,11 @@ class PlayerActivity : ComponentActivity() {
                 val manual = state?.subtitleDelayMs ?: 0L
                 val auto = state?.autoSyncOffsetMs ?: 0L
 
-                // Speed persistence: apply this video's saved speed; fall back
-                // to the last speed used this session so binge sessions keep
-                // momentum when an episode was never individually set.
-                val speed = app.stateStore.savedPlaybackSpeed(uriStr) ?: sessionSpeed
+                // Speed persistence: apply this video's saved speed, then the
+                // global play_speed preference, then the session speed.
+                val speed = app.stateStore.savedPlaybackSpeed(uriStr)
+                    ?: PlayerPrefs.globalSpeed(this)
+                    ?: sessionSpeed
                 sessionSpeed = speed
 
                 // Episode queue: every MediaStore video sharing this folder,

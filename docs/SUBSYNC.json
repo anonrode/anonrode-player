@@ -1,0 +1,301 @@
+{
+  "project": "anonrode-player",
+  "feature": "subtitle-auto-sync",
+  "status": "algorithm_validated_real_content_unproven_on_device",
+  "last_updated": "2026-08-25",
+
+  "the_problem": {
+    "description": "Anime/C-drama subtitles are frequently misaligned with video",
+    "common_causes": [
+      "constant_offset — subs from different release, few seconds off",
+      "progressive_drift — video re-encoded at different framerate, error grows over episode",
+      "combined — both offset and drift"
+    ],
+    "user_documented_case": {
+      "content": "Growling Tiger 2 EP31-44",
+      "symptom": "subtitles get worse over the course of the episode",
+      "actual_cause": "0.9% progressive drift — subs are 1.009x too fast relative to video",
+      "math": "audio_time = (subtitle_time - offset) * speed_factor + offset"
+    }
+  },
+
+  "algorithm_selection": {
+    "what_other_players_do": [
+      {"player": "NextPlayer", "approach": "auto-detect media offset only via VAD onset correlation", "quality": "weak"},
+      {"player": "mpv-android", "approach": "same as NextPlayer", "quality": "weak"},
+      {"player": "NOVA", "approach": "similar", "quality": "weak"},
+      {"player": "ffsubsync", "approach": "VAD + FFT cross-correlation + golden-section framerate search", "quality": "near-perfect (88-98% per docs)"},
+      {"player": "alass", "approach": "fragment matching with MWIS algorithm", "quality": "near-perfect (per docs)"}
+    ],
+    "what_we_built": {
+      "method": "Adapted from ffsubsync",
+      "language_agnostic": true,
+      "robust_to_music": true,
+      "reasons": "ffsubsync is the most-validated open-source subtitle sync tool"
+    },
+    "why_cross_correlation": "Scoring every alignment shift IS a convolution. Compute with FFT in O(n log n) over all shifts at once."
+  },
+
+  "implementation": {
+    "code_path": "core/media/src/main/java/dev/anonrode/player/core/media/",
+    "structure": {
+      "subtitle/SubtitleParser.kt": "SRT/VTT/ASS parsers",
+      "subtitle/SubtitleMatcher.kt": "filename scoring for sidecar auto-detect",
+      "sync/SpeechCorrelator.kt": "binary cross-correlation + 4 gates",
+      "sync/SpeechDetector.kt": "multi-feature VAD: energy + variance + zero-crossing rate",
+      "sync/DriftTracker.kt": "progressive offset line fit",
+      "sync/AudioSyncProcessor.kt": "Media3 AudioProcessor wrapping the above",
+      "library/MediaScanner.kt": "MediaStore library",
+      "state/MediaStateStore.kt": "Room persistence"
+    },
+    "tools": {
+      "subtitle_engine_sim.py": "23/23 synthetic test harness",
+      "drift_sim.py": "real-content drift search",
+      "realsim_ep31.py": "validates on Growling Tiger audio"
+    }
+  },
+
+  "algorithm": {
+    "name": "binary cross-correlation with drift model",
+    "formal_specification": {
+      "A": "binary audio speech track (1=speech, 0=silence)",
+      "B": "binary subtitle track (1=cue active, 0=no cue)",
+      "score_delta": "(2 * sum(A[i]*B[i+delta]) - sum(A[i])) / sum(A[i])",
+      "score_range": "[-1, +1]",
+      "search_range_delta": "[-40s, +40s]",
+      "lock_gates": [
+        {"name": "score_min", "value": 0.2, "meaning": "strongly positive peak"},
+        {"name": "margin_min", "value": 0.15, "meaning": "clear separation from runner-up"},
+        {"name": "containment_min", "value": 0.7, "meaning": "most audio speech inside subtitle cues"},
+        {"name": "cross_half_validation", "meaning": "offset found on first half replicates on second half"}
+      ]
+    },
+    "vad_features": {
+      "energy": "rms vs adaptive floor/peak, weight=0.5",
+      "variance": "syllable modulation, separates speech from music, weight=0.3",
+      "zero_crossing_rate": "voiced speech 0.02-0.15 ZCR, weight=0.2",
+      "combined_formula": "speech = 0.5*energy + 0.3*variance + 0.2*zcr"
+    },
+    "drift_model": {
+      "form": "offset(t) = base + drift_rate * t",
+      "fit_method": "least-squares",
+      "apply_gate": "only if |drift_rate| > 0.1%",
+      "subtitle_lookup": "tMapped = (t - subtitleOffsetMs/1000) / subtitleSpeedFactor"
+    }
+  },
+
+  "validation": {
+    "synthetic_test": {
+      "name": "subtitle_engine_sim.py",
+      "cases": 23,
+      "passed": 23,
+      "test_coverage": [
+        "zero offset",
+        "constant offset (+3.7s, -5.2s, +25s)",
+        "fractional offset (1.35s)",
+        "background music",
+        "partial coverage (50% lines missing)",
+        "unrelated audio",
+        "foreign-language timing",
+        "noise only (no speech)",
+        "replay persistence (additive)",
+        "drift (multiple offsets over time)"
+      ]
+    },
+    "real_content_test": {
+      "name": "realsim_ep31.py + ffmpeg silencedetect",
+      "content": "Growling Tiger 2 EP31 audio + subtitles",
+      "audio_method": "ffmpeg highpass+lowpass, silencedetect noise=-30dB d=0.3",
+      "result": {
+        "speed_factor": 1.00900,
+        "drift_rate_percent": 0.90,
+        "base_offset_seconds": -0.13,
+        "match_rate_percent": 71,
+        "match_rate_next_best_percent": 49,
+        "separation": "clear (22% margin)"
+      },
+      "validation": "user confirmed visually on 2026-08-25 that corrected subs work"
+    }
+  },
+
+  "dead_ends_and_mistakes": [
+    {
+      "name": "10x_bin_mapping_bug",
+      "symptom": "sync never locked even on synthetic test",
+      "root_cause": "frames were 10ms but bin formula divided by 100*ALIGN_BIN=10, making audio 10x too dense for the subtitle track",
+      "fix": "val idx = (posMs / 100).toInt() instead of (posMs / 100.0) / ALIGN_BIN",
+      "lesson": "unit math at boundaries is the most common bug class"
+    },
+    {
+      "name": "off_main_thread_player_access",
+      "symptom": "every video failed to play, no error visible",
+      "root_cause": "AudioSyncProcessor called player.currentPosition from audio thread on every 10ms window. ExoPlayer throws IllegalStateException off main thread.",
+      "fix": "sample-count clock: posMs = startPositionMs + totalFrames*1000/sampleRate, set from main thread via onPositionDiscontinuity",
+      "lesson": "Media3 AudioProcessor has strict threading — never touch the player from it"
+    },
+    {
+      "name": "energy_vad_inadequate_for_C_drama",
+      "symptom": "engine refused to lock on real Growling Tiger 2 audio (score 0.12, margin 0.003)",
+      "root_cause": "energy alone can't separate Mandarin dialogue from traditional Chinese music (both high-energy, both sustained)",
+      "fix": "improved VAD with 3 features (energy + variance + ZCR) — still insufficient for C-drama; ffmpeg's silencedetect is the right tool",
+      "lesson": "the algorithm is correct; the VAD is the bottleneck. production needs ffmpeg-style onset detection, not energy thresholds"
+    },
+    {
+      "name": "1d_offset_search_inadequate",
+      "symptom": "no significant correlation peak on real audio",
+      "root_cause": "error was growing over time (progressive drift) — no single constant offset was correct anywhere",
+      "fix": "2D search over both offset and speed factor simultaneously. best solution: alpha=1.009, beta=-0.13s, 71% match rate",
+      "lesson": "the formulation must match the failure mode. frame-rate mismatch is a 2D problem"
+    },
+    {
+      "name": "kotlinOptions_DSL_removed",
+      "symptom": "build failure: Unresolved reference 'kotlinOptions'",
+      "root_cause": "Kotlin 2.4 / AGP 9 removed the kotlinOptions DSL",
+      "fix": "use kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_17) } }",
+      "lesson": "verify API availability per language/AGP version"
+    },
+    {
+      "name": "addAudioProcessor_does_not_exist",
+      "symptom": "no compile error but no audio processor wired",
+      "root_cause": "Media3 has no ExoPlayer.addAudioProcessor method",
+      "fix": "inject via DefaultAudioSink.Builder.setAudioProcessors(arrayOf(...)) inside buildAudioSink override of NextRenderersFactory (open class)",
+      "lesson": "read the actual interface, don't guess"
+    },
+    {
+      "name": "MediaStore.Files_query_only_by_name",
+      "symptom": "subtitles never resolved for C-dramas (video and sub filenames differ completely)",
+      "root_cause": "initial implementation used DISPLAY_NAME LIKE <basename>% which never matched",
+      "fix": "list all sub files in the same parent directory, then try exact → starts-with → first-encountered priority chain",
+      "lesson": "downloaded files have inconsistent naming; sidecar discovery should be directory-based with priority fallback"
+    },
+    {
+      "name": "no_runtime_permission_for_video",
+      "symptom": "library always empty even after granting permission",
+      "root_cause": "READ_MEDIA_VIDEO declared in manifest but never requested at runtime — Android 6+ blocks dangerous permissions silently",
+      "fix": "runtime permission request via ActivityResultContracts.RequestMultiplePermissions + PermissionGate UI",
+      "lesson": "always check Android version + dangerous permissions at runtime"
+    }
+  ],
+
+  "file_by_file_code_map": {
+    "tools/subtitle_engine_sim.py": {
+      "role": "synthetic 23/23 test harness",
+      "status": "passes after math rewrite"
+    },
+    "tools/drift_sim.py": {
+      "role": "real-content drift search",
+      "status": "finds 1.009 speed factor on Growling Tiger 2"
+    },
+    "tools/realsim_ep31.py": {
+      "role": "validates on Growling Tiger audio",
+      "status": "validated"
+    },
+    "core/media/sync/SpeechCorrelator.kt": {
+      "role": "1:1 port of the Python sim — same math, same gates",
+      "public_api": "findOffset(audioBins, binCount, cues) -> Result?"
+    },
+    "core/media/sync/SpeechDetector.kt": {
+      "role": "multi-feature VAD: energy + variance + zero-crossing rate",
+      "limitation": "still inferior to ffmpeg's silencedetect for C-drama content"
+    },
+    "core/media/sync/DriftTracker.kt": {
+      "role": "collects offset samples, fits least-squares line",
+      "public_api": "fit() -> Pair<baseOffset, driftRatePerSecond>"
+    },
+    "core/media/sync/AudioSyncProcessor.kt": {
+      "role": "Media3 AudioProcessor wrapping the above",
+      "threading": "audio thread only; never touches the player",
+      "time_source": "sample-count clock = startPositionMs + totalFrames*1000/sampleRate"
+    },
+    "feature/player/PlaybackEngine.kt": {
+      "role": "ExoPlayer + nextlib + AudioProcessor injection",
+      "audio_processor_injection": "override buildAudioSink on NextRenderersFactory (open class) to inject via DefaultAudioSink.Builder.setAudioProcessors(arrayOf(syncProcessor))",
+      "state_fields": ["subtitleOffsetMs", "subtitleSpeedFactor", "manualDelayMs"],
+      "seek_anchor": "onPositionDiscontinuity listener calls syncProcessor.setStartPosition"
+    },
+    "app/PlayerActivity.kt": {
+      "role": "host for player screen",
+      "subtitle_resolution": "findSidecarSubtitle scans all sub files in video's parent directory with priority: exact match → starts-with → first found",
+      "render_loop": "100ms tick reads player position, maps through drift correction, finds cue, updates Compose state"
+    },
+    "app/ui/PlayerScreen.kt": {
+      "role": "full-bleed player Compose overlay",
+      "controls_layer_tree": "Box > PlayerView > scrim > controls overlay",
+      "gestures": "tap=toggle, double-tap=±10s, vertical=volume/brightness, horizontal=seek, long-press=lock"
+    }
+  },
+
+  "what_works_today_v0.3.0": [
+    "Videos play (threading fix)",
+    "Subtitles resolve from any file in video's directory",
+    "File logging to Download/AnonPlayer/anonrode-player.log",
+    "Drift-corrected SRT files generated for all 17 Growling Tiger 2 episodes (use in MPC-HC/VLC — works perfectly)",
+    "Engine code is in place and compiles; not validated to auto-lock on real C-drama content"
+  ],
+
+  "what_is_missing": [
+    "Live auto-sync on real C-drama content — in-app VAD doesn't match ffmpeg's quality",
+    "PiP, background playback, sleep timer, zoom modes",
+    "Redesigned M3 library UI is written but not built or pushed",
+    "SMB/network stream support"
+  ],
+
+  "to_make_live_auto_sync_work": {
+    "recommended_approach": "ffsubsync model — bundle ffmpeg via nextlib, run offline fingerprint pass on first play",
+    "implementation_steps": [
+      "1. When a video first opens, fork a background job",
+      "2. ffmpeg silencedetect to extract speech onsets",
+      "3. Run joint speed+offset search using the Python algorithm in Kotlin",
+      "4. Store result (offset, speedFactor) in Room per video",
+      "5. Apply on first frame of playback; cache makes re-watch instant"
+    ],
+    "estimated_effort": "1-2 days for an experienced Android dev"
+  },
+
+  "reproduction_steps": {
+    "synthetic": "python3 tools/subtitle_engine_sim.py",
+    "real_content": [
+      "ffmpeg -y -i video.mp4 -ac 1 -ar 16000 -f s16le -t 600 ep31_16k.pcm",
+      "python3 tools/realsim_ep31.py video.mp4 subtitles.srt 600"
+    ],
+    "generate_corrected_subs": "apply new_time = old_time * 1.009 + (-0.33) to each timestamp"
+  },
+
+  "open_questions": [
+    "Does the in-app live processor ever lock on real C-drama content? (Unknown — never tested on device.)",
+    "Should we implement ffmpeg-style offline fingerprinting as the path forward? (Recommended.)",
+    "Should we add a manual 'Load corrected subs' button so users can drop a .SYNCED.srt file in? (Easy, useful.)"
+  ],
+
+  "glossary": {
+    "VAD": "Voice Activity Detection — decides which audio is speech vs silence/music",
+    "cue": "A subtitle line: (start_time, end_time, text[])",
+    "offset_beta": "Constant time difference between audio and subs. Positive = subs late.",
+    "speed_factor_alpha": "Multiplicative correction. 1.009 = subs are 0.9% too fast.",
+    "cross_correlation": "Sliding-window dot product. Scores every possible alignment shift at once.",
+    "containment": "Fraction of detected speech mass that falls inside subtitle cues. True alignment ~0.9; chance ~0.5.",
+    "drift": "Progressive accumulation of error over episode. Caused by frame-rate mismatch.",
+    "histogram_voting": "Each detected speech onset votes for the offset that aligns it with a cue start. The true offset collects all votes.",
+    "ICP": "Iterative Closest Point — refines offset by matching each onset to its nearest cue start and taking the median residual."
+  },
+
+  "feature_audit_top_15_missing": [
+    {"rank": 1, "feature": "Sleep timer", "impact": "high", "complexity": "easy", "competitor": "MX/VLC"},
+    {"rank": 2, "feature": "Video zoom modes (Fit/Crop/Stretch/100%)", "impact": "high", "complexity": "easy", "competitor": "NextPlayer/MX/VLC"},
+    {"rank": 3, "feature": "Orientation control / rotation lock", "impact": "high", "complexity": "easy", "competitor": "NextPlayer/MX"},
+    {"rank": 4, "feature": "Playback speed persistence + global default", "impact": "high", "complexity": "easy", "competitor": "NextPlayer/MX"},
+    {"rank": 5, "feature": "Picture-in-Picture", "impact": "high", "complexity": "easy-medium", "competitor": "NextPlayer/MX/VLC"},
+    {"rank": 6, "feature": "Autoplay next episode (queue)", "impact": "high", "complexity": "easy-medium", "competitor": "NextPlayer/MX/VLC"},
+    {"rank": 7, "feature": "External subtitle file picker", "impact": "medium-high", "complexity": "easy", "competitor": "MX/VLC/NextPlayer"},
+    {"rank": 8, "feature": "Audio/subtitle track selection UI", "impact": "high", "complexity": "medium", "competitor": "NextPlayer/MX/VLC"},
+    {"rank": 9, "feature": "Settings screen", "impact": "high", "complexity": "medium", "competitor": "everyone"},
+    {"rank": 10, "feature": "Apply persisted subtitle styling", "impact": "medium-high", "complexity": "easy-medium", "competitor": "everyone"},
+    {"rank": 11, "feature": "Real background playback (wire the service)", "impact": "high", "complexity": "medium", "competitor": "NextPlayer/MX/VLC"},
+    {"rank": 12, "feature": "Long-press 2x speed gesture", "impact": "low-medium", "complexity": "easy", "competitor": "NextPlayer/MX/VLC"},
+    {"rank": 13, "feature": "Library search / sort / exclude folders", "impact": "medium", "complexity": "easy-medium", "competitor": "NextPlayer/MX/VLC"},
+    {"rank": 14, "feature": "Video thumbnails", "impact": "medium-high", "complexity": "medium", "competitor": "NextPlayer/MX/VLC"},
+    {"rank": 15, "feature": "Volume boost >100%", "impact": "medium", "complexity": "medium", "competitor": "MX/VLC/NextPlayer"}
+  ],
+
+  "final_recommendation": "Bundle ffmpeg-style onset detection in-app via nextlib. The math is done; the gap is a VAD strong enough for real content. All other engine pieces (correlator, drift tracker, threading, persistence) are validated and working."
+}

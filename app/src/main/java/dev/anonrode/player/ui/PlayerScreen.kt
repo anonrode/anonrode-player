@@ -4,9 +4,12 @@ import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
+import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,26 +28,31 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AspectRatio
-import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.ScreenLockPortrait
-import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.WbSunny
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,8 +61,8 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -63,30 +72,45 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import dev.anonrode.player.core.media.log.AppLog
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import dev.anonrode.player.PlayerPrefs
+import dev.anonrode.player.core.media.log.AppLog
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-private val Accent = Color(0xFF6C63FF)
-private val Teal = Color(0xFF00D4AA)
+// ── MX Player palette ──────────────────────────────────────────────────
+private val MxGreen = Color(0xFF009103)
+private val MxPanel = Color(0xFF1C1C24)
+private val MxMenuDivider = Color(0xFF33333B)
+
+/** Subtitle drag safe margins, as fractions of the stage (box center). */
+private const val SUB_X_MIN = 0.06f
+private const val SUB_X_MAX = 0.94f
+private const val SUB_Y_MIN = 0.12f
+private const val SUB_Y_MAX = 0.90f
+private const val SUB_DEFAULT_X = 0.5f
+private const val SUB_DEFAULT_Y = 0.66f
 
 /** Show the Next-Episode shortcut pill within this many seconds of the end. */
 private const val NEXT_BUTTON_WINDOW_SEC = 30f
@@ -99,13 +123,11 @@ private fun fmtTime(ms: Long): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
 }
 
-/** Short m:ss formatting for the sleep-timer badge (remaining minutes:seconds). */
-private fun fmtCountdown(ms: Long): String {
-    val s = ms / 1000
-    return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
-}
+/** MX-style pill label: "1X", "1.25X", "1.5X", "2X". */
+private fun speedLabel(sp: Float): String =
+    if (sp % 1f == 0f) "${sp.toInt()}X" else "${sp}X"
 
-/** Options offered by the Bedtime (sleep timer) dropdown. [minutes] < 0 = end of episode. */
+/** Options offered by the Sleep-timer dropdown. [minutes] < 0 = end of episode. */
 private data class SleepOption(val label: String, val minutes: Int)
 
 private val SleepOptions = listOf(
@@ -130,15 +152,62 @@ private val ZoomModes = listOf(
     ZoomMode("STR", AspectRatioFrameLayout.RESIZE_MODE_FILL),
 )
 
+/** 8-way offsets for the black subtitle outline. */
+private val SubtitleOutlineOffsets = listOf(
+    -2f to -2f, -2f to 0f, -2f to 2f,
+    0f to -2f, 0f to 2f,
+    2f to -2f, 2f to 0f, 2f to 2f,
+)
+
 /**
- * Full-bleed player: gradient-scrim overlay controls, auto-hide while playing,
+ * MX subtitle look: bold white text with a black 8-way outline, no
+ * background box, centered, at most two lines.
+ */
+@Composable
+private fun OutlinedSubtitleText(text: String, modifier: Modifier = Modifier) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        SubtitleOutlineOffsets.forEach { (dx, dy) ->
+            Text(
+                text,
+                color = Color.Black,
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp,
+                lineHeight = 30.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                softWrap = true,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.offset(dx.dp, dy.dp),
+            )
+        }
+        Text(
+            text,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 20.sp,
+            lineHeight = 30.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            softWrap = true,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * Full-bleed MX-style player: top row (back, title, audio/CC/HW/overflow),
+ * quick-action row (equalizer, cast, headphones, speaker, speed pill,
+ * chevron), and a bottom block (lock · ⏪10 · prev · BIG play · next ·
+ * ⏩10 · PiP · aspect) over gradient scrims. Auto-hide while playing,
  * double-tap ±10s with flash, left/right vertical swipe = brightness/volume
- * with HUD pill, horizontal swipe = live seek. MX-style, per Section 3 spec.
+ * with HUD pill, horizontal swipe = live seek.
  *
- * Extras: Bedtime dropdown arms a wall-clock sleep timer (or "end of
- * episode" pause), the resize button cycles FIT → CROP → STR, and a PiP
- * button delegates to the activity; while in PiP ([isPipMode]) every overlay
- * (controls, subtitles, badges, diagnostics) hides.
+ * The subtitle cue is MX-outlined (bold + black outline, no box) and can be
+ * long-press dragged anywhere; its position persists per video with a
+ * global default fallback (see [PlayerPrefs]). The overflow menu hosts the
+ * sleep timer, aspect cycling, and rotation lock; the resize button cycles
+ * FIT → CROP → STR. While in PiP ([isPipMode]) every overlay (controls,
+ * subtitles, badges, diagnostics) hides.
  */
 @UnstableApi
 @Composable
@@ -162,6 +231,8 @@ fun PlayerScreen(
     onHoldAutoAdvance: () -> Unit = {},
     /** Clean display name of the next episode, for the Up Next surfaces. */
     upNextTitle: String? = null,
+    /** Stable per-video id (content uri) for per-video preferences. */
+    mediaId: String = "",
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -197,7 +268,7 @@ fun PlayerScreen(
     var sleepRemainingMs by remember { mutableLongStateOf(0L) }
     /** Chosen dropdown entry, for the checkmark (reset to Off on fire). */
     var sleepSelection by remember { mutableStateOf(SleepOptions.first()) }
-    var sleepMenuOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     val sleepTimerActive = sleepTimerEndMs != null || sleepAtEpisodeEnd
 
     var rotationLocked by remember { mutableStateOf(false) }
@@ -261,6 +332,10 @@ fun PlayerScreen(
                     Player.STATE_ENDED -> "ENDED"
                     else -> "?"
                 }
+                // Re-assert the chosen speed when a new media item is ready.
+                if (playbackState == Player.STATE_READY) {
+                    player.setPlaybackSpeed(speeds[speedIdx])
+                }
                 // "End of episode" sleep timer fires when playback finishes.
                 if (playbackState == Player.STATE_ENDED && sleepAtEpisodeEnd) {
                     player.pause()
@@ -286,8 +361,11 @@ fun PlayerScreen(
         view.postDelayed({ hudVisible = false }, 900)
     }
 
+    fun toast(msg: String) {
+        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    }
+
     fun selectSleep(opt: SleepOption) {
-        sleepMenuOpen = false
         when {
             opt.minutes > 0 -> {
                 sleepAtEpisodeEnd = false
@@ -316,6 +394,18 @@ fun PlayerScreen(
         }
     }
 
+    fun cycleSpeed() {
+        speedIdx = (speedIdx + 1) % speeds.size
+        val sp = speeds[speedIdx]
+        player.setPlaybackSpeed(sp)
+        onSpeedChanged(sp)
+    }
+
+    fun cycleZoom() {
+        zoomIdx = (zoomIdx + 1) % ZoomModes.size
+        showHud(Icons.Filled.AspectRatio, ZoomModes[zoomIdx].abbreviation)
+    }
+
     fun seekBy(sec: Int) {
         val d = player.duration.takeIf { it > 0 } ?: return
         player.seekTo((player.currentPosition + sec * 1000L).coerceIn(0L, d))
@@ -323,8 +413,8 @@ fun PlayerScreen(
         view.postDelayed({ flashSide = 0 }, 420)
     }
 
-    LaunchedEffect(controlsVisible, isPlaying, locked, sleepMenuOpen) {
-        if (controlsVisible && isPlaying && !locked && !sleepMenuOpen) {
+    LaunchedEffect(controlsVisible, isPlaying, locked, menuOpen) {
+        if (controlsVisible && isPlaying && !locked && !menuOpen) {
             kotlinx.coroutines.delay(3500)
             controlsVisible = false
         }
@@ -332,6 +422,19 @@ fun PlayerScreen(
 
     var scrW by remember { mutableFloatStateOf(1000f) }
     var scrH by remember { mutableFloatStateOf(1000f) }
+
+    // Subtitle placement (box center as stage fractions) + drag state.
+    var subX by remember { mutableFloatStateOf(SUB_DEFAULT_X) }
+    var subY by remember { mutableFloatStateOf(SUB_DEFAULT_Y) }
+    var subDragging by remember { mutableStateOf(false) }
+
+    // Restore the saved position for this video (global default fallback)
+    // whenever the media item changes.
+    LaunchedEffect(mediaId) {
+        val saved = PlayerPrefs.subtitlePosition(context, mediaId)
+        subX = saved?.first ?: SUB_DEFAULT_X
+        subY = saved?.second ?: SUB_DEFAULT_Y
+    }
 
     // Seekbar drag position in seconds; -1 = not dragging. Seeking is applied
     // once on release instead of firing player.seekTo() per pixel of drag.
@@ -449,21 +552,44 @@ fun PlayerScreen(
             }
         )
 
-        // ── subtitle ─────────────────────────────────────────────────
+        // ── subtitle: MX outline, long-press draggable ───────────────
         if (showCC && !isPipMode) {
             cueText?.let { txt ->
-                Text(
-                    txt,
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.titleMedium,
+                Box(
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = if (controlsVisible) 150.dp else 48.dp)
-                        .padding(horizontal = 32.dp)
-                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 14.dp, vertical = 6.dp)
-                )
+                        .align(Alignment.Center)
+                        .offset {
+                            IntOffset(
+                                ((subX * scrW) - scrW / 2f).roundToInt(),
+                                ((subY * scrH) - scrH / 2f).roundToInt(),
+                            )
+                        }
+                        .graphicsLayer {
+                            val s = if (subDragging) 1.08f else 1f
+                            scaleX = s
+                            scaleY = s
+                            alpha = if (subDragging) 0.9f else 1f
+                        }
+                        .pointerInput(showCC) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { subDragging = true },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    subX = (subX + amount.x / scrW).coerceIn(SUB_X_MIN, SUB_X_MAX)
+                                    subY = (subY + amount.y / scrH).coerceIn(SUB_Y_MIN, SUB_Y_MAX)
+                                },
+                                onDragEnd = {
+                                    subDragging = false
+                                    PlayerPrefs.saveSubtitlePosition(context, mediaId, subX, subY)
+                                },
+                                onDragCancel = { subDragging = false },
+                            )
+                        }
+                        .padding(horizontal = 32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    OutlinedSubtitleText(txt)
+                }
             }
         }
 
@@ -514,7 +640,7 @@ fun PlayerScreen(
                     .padding(14.dp)
                     .background(Color.Black.copy(alpha = 0.5f), CircleShape)
             ) {
-                Icon(Icons.Filled.Lock, null, tint = Teal)
+                Icon(Icons.Filled.Lock, null, tint = MxGreen)
             }
         }
 
@@ -539,115 +665,175 @@ fun PlayerScreen(
 
         // ── controls overlay (hidden entirely while in PiP) ──────────
         if (controlsVisible && !locked && !isPipMode) {
-            Box(
+            // ── top row + quick row over a gradient scrim ────────────
+            Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .height(130.dp)
                     .background(Brush.verticalGradient(
                         listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)))
-            )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(220.dp)
-                    .background(Brush.verticalGradient(
-                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f))))
-            )
-
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(bottom = 18.dp)
             ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White)
-                }
-                Text(
-                    title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    speeds[speedIdx].toString() + "×",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
+                Row(
                     modifier = Modifier
-                        .padding(horizontal = 6.dp)
-                        .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                )
-                IconButton(onClick = { rotationLocked = !rotationLocked }) {
-                    Icon(
-                        if (rotationLocked) Icons.Filled.ScreenLockPortrait
-                        else Icons.Filled.ScreenRotation,
-                        contentDescription = if (rotationLocked) "Rotation locked"
-                        else "Rotation unlocked",
-                        tint = if (rotationLocked) Teal else Color.White
-                    )
-                }
-                IconButton(onClick = { locked = true }) {
-                    Icon(Icons.Filled.Lock, null, tint = Color.White)
-                }
-            }
-
-            // ── center transport: previous · play/pause · next ────────
-            Row(
-                modifier = Modifier.align(Alignment.Center),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(26.dp)
-            ) {
-                if (hasPreviousEpisode) {
-                    IconButton(
-                        onClick = onPlayPrevious,
-                        modifier = Modifier.size(52.dp)
-                    ) {
-                        Icon(
-                            Icons.Filled.SkipPrevious,
-                            contentDescription = "Previous episode",
-                            tint = Color.White,
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = { if (player.isPlaying) player.pause() else player.play() },
-                    modifier = Modifier
-                        .size(72.dp)
-                        .background(Color.White.copy(alpha = 0.14f), CircleShape)
+                        .fillMaxWidth()
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        null, tint = Color.White, modifier = Modifier.size(40.dp)
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back", tint = Color.White)
+                    }
+                    Text(
+                        title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
                     )
-                }
-                if (hasNextEpisode) {
-                    IconButton(
-                        onClick = onPlayNext,
-                        modifier = Modifier.size(52.dp)
-                    ) {
+                    IconButton(onClick = { toast("Audio track") }) {
+                        Icon(Icons.Filled.MusicNote,
+                            contentDescription = "Audio track", tint = Color.White)
+                    }
+                    IconButton(onClick = { showCC = !showCC }) {
                         Icon(
-                            Icons.Filled.SkipNext,
-                            contentDescription = "Next episode",
-                            tint = Color.White,
-                            modifier = Modifier.size(36.dp)
+                            Icons.Filled.ClosedCaption,
+                            contentDescription = if (showCC) "Subtitles on" else "Subtitles off",
+                            tint = if (showCC) MxGreen else Color.White.copy(alpha = 0.6f)
                         )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clickable { toast("Decoder: HW") },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "HW", color = Color.White,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Box {
+                        IconButton(onClick = { menuOpen = !menuOpen }) {
+                            Icon(Icons.Filled.MoreVert,
+                                contentDescription = "More options", tint = Color.White)
+                        }
+                        // ── overflow menu: subtitles / sleep / aspect / lock ──
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false },
+                            containerColor = MxPanel,
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(if (showCC) "Subtitles: On" else "Subtitles: Off",
+                                        color = Color.White)
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.ClosedCaption, null,
+                                        tint = if (showCC) MxGreen
+                                        else Color.White.copy(alpha = 0.7f))
+                                },
+                                onClick = { showCC = !showCC; menuOpen = false }
+                            )
+                            HorizontalDivider(color = MxMenuDivider)
+                            DropdownMenuItem(
+                                text = {
+                                    Text("Sleep timer",
+                                        color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                                },
+                                onClick = {},
+                                enabled = false
+                            )
+                            SleepOptions.forEach { opt ->
+                                DropdownMenuItem(
+                                    text = { Text(opt.label, color = Color.White) },
+                                    leadingIcon = {
+                                        if (isSleepSelected(opt)) {
+                                            Icon(Icons.Filled.Check, null,
+                                                tint = MxGreen, modifier = Modifier.size(18.dp))
+                                        }
+                                    },
+                                    onClick = { selectSleep(opt); menuOpen = false }
+                                )
+                            }
+                            HorizontalDivider(color = MxMenuDivider)
+                            DropdownMenuItem(
+                                text = {
+                                    Text("Aspect ratio: " + ZoomModes[zoomIdx].abbreviation,
+                                        color = Color.White)
+                                },
+                                onClick = { cycleZoom() }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text("Rotation lock: " +
+                                        if (rotationLocked) "On" else "Off", color = Color.White)
+                                },
+                                onClick = { rotationLocked = !rotationLocked }
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { toast("Equalizer") }) {
+                        Icon(Icons.Filled.Equalizer, contentDescription = "Equalizer",
+                            tint = Color.White, modifier = Modifier.size(22.dp))
+                    }
+                    IconButton(onClick = { toast("Cast") }) {
+                        Icon(Icons.Filled.Cast, contentDescription = "Cast",
+                            tint = Color.White, modifier = Modifier.size(22.dp))
+                    }
+                    IconButton(onClick = { toast("Headphone mode") }) {
+                        Icon(Icons.Filled.Headphones, contentDescription = "Headphones",
+                            tint = Color.White, modifier = Modifier.size(22.dp))
+                    }
+                    IconButton(onClick = { toast("Speaker") }) {
+                        Icon(Icons.Filled.Speaker, contentDescription = "Audio device",
+                            tint = Color.White, modifier = Modifier.size(22.dp))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 8.dp)
+                            .height(38.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(MxGreen)
+                            .clickable { cycleSpeed() }
+                            .padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(speedLabel(speeds[speedIdx]), color = Color.White,
+                            fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                    IconButton(onClick = { menuOpen = !menuOpen }) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "More",
+                            tint = Color.White.copy(alpha = 0.8f),
+                            modifier = Modifier.size(24.dp))
                     }
                 }
             }
 
+            // ── bottom: times + seekbar + transport over a scrim ──────
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .background(Brush.verticalGradient(
+                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(fmtTime(player.currentPosition), color = Color.White,
-                        style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        fmtTime(player.currentPosition),
+                        color = Color.White.copy(alpha = 0.75f),
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.widthIn(min = 48.dp)
+                    )
                     Slider(
                         value = (if (localSeek >= 0f) localSeek else positionSec)
                             .coerceIn(0f, durationSec.coerceAtLeast(1f)),
@@ -659,107 +845,83 @@ fun PlayerScreen(
                         valueRange = 0f..durationSec.coerceAtLeast(1f),
                         colors = SliderDefaults.colors(
                             thumbColor = Color.White,
-                            activeTrackColor = Accent,
+                            activeTrackColor = MxGreen,
                             inactiveTrackColor = Color.White.copy(alpha = 0.25f)),
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                     )
-                    Text(fmtTime(durationSec.toLong()), color = Color.White,
-                        style = MaterialTheme.typography.labelSmall)
-                }
-
-                Row(modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.ClosedCaption, null,
-                        tint = if (showCC) Teal else Color.White.copy(alpha = 0.35f),
-                        modifier = Modifier.size(18.dp))
                     Text(
-                        title.substringAfterLast('/').substringBeforeLast('.'),
-                        color = Color.White.copy(alpha = 0.55f),
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(start = 6.dp)
+                        fmtTime((durationSec - positionSec).coerceAtLeast(0f).toLong()),
+                        color = Color.White.copy(alpha = 0.75f),
+                        style = MaterialTheme.typography.labelMedium,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.widthIn(min = 48.dp)
                     )
-                    IconButton(onClick = { showCC = !showCC }, modifier = Modifier.size(34.dp)) {
-                        Icon(Icons.Filled.ClosedCaption, null,
-                            tint = if (showCC) Color.White else Color.White.copy(alpha = 0.35f))
-                    }
-                    // ── zoom mode cycle: FIT → CROP → STR ─────────────
+                }
+                Box(modifier = Modifier.fillMaxWidth().height(64.dp)) {
+                    // lock stands alone on the left; PiP/aspect on the right
                     IconButton(
-                        onClick = {
-                            zoomIdx = (zoomIdx + 1) % ZoomModes.size
-                            showHud(Icons.Filled.AspectRatio, ZoomModes[zoomIdx].abbreviation)
-                        },
-                        modifier = Modifier.size(34.dp)
+                        onClick = { locked = true },
+                        modifier = Modifier.align(Alignment.CenterStart)
                     ) {
-                        Text(
-                            ZoomModes[zoomIdx].abbreviation,
-                            color = if (zoomIdx != 0) Color.White
-                            else Color.White.copy(alpha = 0.7f),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
+                        Icon(Icons.Filled.Lock,
+                            contentDescription = "Lock controls", tint = Color.White)
                     }
-                    // ── picture-in-picture ────────────────────────────
-                    IconButton(onClick = onEnterPip, modifier = Modifier.size(34.dp)) {
-                        Icon(
-                            Icons.Filled.PictureInPictureAlt,
-                            contentDescription = "Picture-in-picture",
-                            tint = Color.White
-                        )
-                    }
-                    IconButton(onClick = {
-                        speedIdx = (speedIdx + 1) % speeds.size
-                        val sp = speeds[speedIdx]
-                        player.setPlaybackSpeed(sp)
-                        onSpeedChanged(sp)
-                    }, modifier = Modifier.size(34.dp)) {
-                        Text(speeds[speedIdx].toString() + "×", color = Color.White,
-                            style = MaterialTheme.typography.labelSmall)
-                    }
-                    // ── sleep timer ───────────────────────────────────
-                    Box {
-                        IconButton(
-                            onClick = { sleepMenuOpen = true },
-                            modifier = Modifier.size(34.dp)
-                        ) {
-                            BadgedBox(
-                                badge = {
-                                    if (sleepTimerActive) {
-                                        Badge(containerColor = Accent) {
-                                            Text(
-                                                if (sleepAtEpisodeEnd) "END"
-                                                else fmtCountdown(sleepRemainingMs),
-                                                color = Color.White,
-                                                fontSize = 9.sp,
-                                            )
-                                        }
-                                    }
-                                }
-                            ) {
-                                Icon(
-                                    Icons.Filled.Bedtime,
-                                    contentDescription = "Sleep timer",
-                                    tint = if (sleepTimerActive) Teal else Color.White
-                                )
-                            }
+                    Row(
+                        modifier = Modifier.align(Alignment.Center),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        IconButton(onClick = { seekBy(-10) }, modifier = Modifier.size(44.dp)) {
+                            Icon(Icons.Filled.Replay10, contentDescription = "Rewind 10 seconds",
+                                tint = Color.White, modifier = Modifier.size(30.dp))
                         }
-                        DropdownMenu(
-                            expanded = sleepMenuOpen,
-                            onDismissRequest = { sleepMenuOpen = false },
-                            containerColor = Color(0xFF1C1C24),
+                        IconButton(
+                            onClick = { if (hasPreviousEpisode) onPlayPrevious() },
+                            modifier = Modifier.size(44.dp)
                         ) {
-                            SleepOptions.forEach { opt ->
-                                DropdownMenuItem(
-                                    text = { Text(opt.label, color = Color.White) },
-                                    trailingIcon = {
-                                        if (isSleepSelected(opt)) {
-                                            Icon(Icons.Filled.Check, null,
-                                                tint = Teal, modifier = Modifier.size(18.dp))
-                                        }
-                                    },
-                                    onClick = { selectSleep(opt) }
-                                )
-                            }
+                            Icon(Icons.Filled.SkipPrevious,
+                                contentDescription = "Previous episode",
+                                tint = if (hasPreviousEpisode) Color.White
+                                else Color.White.copy(alpha = 0.35f))
+                        }
+                        IconButton(
+                            onClick = { if (player.isPlaying) player.pause() else player.play() },
+                            modifier = Modifier
+                                .size(64.dp)
+                                .border(2.dp, Color.White, CircleShape)
+                        ) {
+                            Icon(
+                                if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = Color.White, modifier = Modifier.size(30.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { if (hasNextEpisode) onPlayNext() },
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(Icons.Filled.SkipNext,
+                                contentDescription = "Next episode",
+                                tint = if (hasNextEpisode) Color.White
+                                else Color.White.copy(alpha = 0.35f))
+                        }
+                        IconButton(onClick = { seekBy(10) }, modifier = Modifier.size(44.dp)) {
+                            Icon(Icons.Filled.Forward10, contentDescription = "Forward 10 seconds",
+                                tint = Color.White, modifier = Modifier.size(30.dp))
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        IconButton(onClick = onEnterPip) {
+                            Icon(Icons.Filled.PictureInPictureAlt,
+                                contentDescription = "Picture-in-picture", tint = Color.White)
+                        }
+                        IconButton(onClick = { cycleZoom() }) {
+                            Icon(Icons.Filled.AspectRatio,
+                                contentDescription = "Aspect ratio", tint = Color.White)
                         }
                     }
                 }
@@ -774,7 +936,7 @@ fun PlayerScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 110.dp)
-                    .background(Accent.copy(alpha = 0.92f), RoundedCornerShape(20.dp))
+                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(20.dp))
                     .clickable { onPlayNext() }
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -783,7 +945,7 @@ fun PlayerScreen(
                 Icon(
                     Icons.Filled.SkipNext,
                     contentDescription = "Next episode",
-                    tint = Color.White,
+                    tint = MxGreen,
                     modifier = Modifier.size(18.dp)
                 )
                 Text(

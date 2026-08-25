@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ANONRODE PLAYER — MX-style UI preview</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --green:#00E676;
+  --bg:#000;
+}
+html,body{height:100%;background:#0d0d12}
+body{
+  font-family:'Segoe UI',system-ui,sans-serif;color:#fff;
+  display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px 8px 30px;
+}
+h1{font-size:17px;font-weight:600;letter-spacing:.4px;opacity:.9}
+h1 span{color:var(--green)}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.tabs button{
+  background:#1c1c22;border:1px solid #2e2e36;color:#bbb;border-radius:999px;
+  padding:7px 16px;font-size:13px;cursor:pointer;font-family:inherit;
+}
+.tabs button.on{background:var(--green);border-color:var(--green);color:#000;font-weight:600}
+.tabs button:hover{border-color:#4a4a55;color:#fff}
+.hint{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.hint code{background:#15151b;border:1px solid #2a2a32;border-radius:6px;padding:2px 8px;font-size:11.5px;color:#8fd8ff}
+
+/* ── device frame ─────────────────────────────── */
+.screen{
+  width:100%;max-width:420px;background:#1a1a1a;border-radius:22px;overflow:hidden;
+  box-shadow:0 30px 80px rgba(0,0,0,.55),0 2px 12px rgba(0,0,0,.6);
+  border:1px solid #2c2c33;position:relative;
+}
+.screen.landscape{max-width:960px}
+/* fake video inside player */
+.video{
+  position:relative;aspect-ratio:16/9;background:
+    radial-gradient(120% 90% at 30% 20%,#3c4a5c 0%,#232b36 45%,#0b0e14 100%);
+}
+.video::after{
+  content:"";position:absolute;inset:0;opacity:.35;
+  background:radial-gradient(60% 60% at 70% 60%,rgba(140,170,200,.25),transparent 70%);
+  animation:drift 9s ease-in-out infinite alternate;
+}
+@keyframes drift{from{transform:translate(-6%,-4%)}to{transform:translate(7%,5%)}}
+.subtitle{
+  position:absolute;left:50%;bottom:34%;transform:translateX(-50%);
+  color:#fff;
+  font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  font-weight:700;font-size:clamp(16px,3.2vw,22px);line-height:1.55;
+  text-align:center;max-width:80%;
+  text-shadow:0 2px 0 #000,0 -2px 0 #000,2px 0 0 #000,-2px 0 0 #000,2px 2px 0 #000,-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,0 3px 6px rgba(0,0,0,.55);
+  transition:opacity .2s;pointer-events:none;white-space:pre-line;
+}
+.subtitle.off{opacity:0}
+
+/* ── overlays / gesture HUD ───────────────────── */
+.hud{
+  position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);
+  background:rgba(0,0,0,.78);border-radius:12px;padding:8px 14px;
+  display:flex;align-items:center;gap:8px;font-size:13px;opacity:0;
+  transition:opacity .15s;pointer-events:none;z-index:60;
+}
+.hud.show{opacity:1}
+.flash{position:absolute;top:0;bottom:0;width:26%;background:rgba(255,255,255,.11);opacity:0;pointer-events:none}
+.flash.on{opacity:1;transition:opacity .4s}
+
+/* ── player controls ──────────────────────────── */
+.controls{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:space-between;z-index:20;transition:opacity .25s}
+.controls.hidden{opacity:0;pointer-events:none}
+.top-bar{
+  background:var(--scrim-top,linear-gradient(180deg,rgba(0,0,0,.75),transparent));padding:10px 12px 22px;
+  display:flex;align-items:center;gap:8px;
+}
+.top-bar .title{font-size:14px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.icon-btn{
+  background:none;border:none;color:#fff;width:38px;height:38px;border-radius:50%;
+  display:grid;place-items:center;cursor:pointer;flex:none;
+}
+.icon-btn:hover{background:rgba(255,255,255,.12)}
+.icon-btn svg{width:21px;height:21px}
+.qrow{
+  display:flex;align-items:center;gap:10px;padding:0 14px;
+}
+.qrow .icon-btn{width:44px;height:44px}
+.speed-pill{
+  background:var(--green);color:#000;font-weight:800;font-size:13px;
+  border-radius:999px;padding:9px 16px;border:none;cursor:pointer;font-family:inherit;
+}
+.speed-pill:active{transform:scale(.94)}
+.qrow .more{color:#ddd}
+.bottom-block{background:var(--scrim-bot,linear-gradient(0deg,rgba(0,0,0,.85),transparent));padding:0 14px 12px;display:flex;flex-direction:column;gap:2px}
+.seek-row{display:flex;align-items:center;gap:10px}
+.seek-row time{font-size:12px;color:#fff;min-width:44px;font-variant-numeric:tabular-nums}
+.seek-row time.remaining{text-align:right}
+.seekbar{flex:1;height:28px;display:flex;align-items:center;cursor:pointer;position:relative}
+.seekbar .track{height:3px;width:100%;background:rgba(255,255,255,.28);border-radius:2px;position:relative;overflow:visible}
+.seekbar .fill{position:absolute;left:0;top:0;bottom:0;background:var(--green);border-radius:2px}
+.seekbar .knob{
+  position:absolute;top:50%;width:13px;height:13px;border-radius:50%;background:#fff;
+  transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.5);
+  left:50%;
+}
+.seekbar:hover .knob{width:15px;height:15px}
+.ctrl-row{display:flex;align-items:center;justify-content:space-between;padding:4px 2px 2px}
+.ctrl-group{display:flex;align-items:center;gap:2px}
+.ctrl-row .icon-btn{width:44px;height:44px}
+.ctrl-row .icon-btn svg{width:24px;height:24px}
+.ctrl-row .icon-btn.big svg{width:52px;height:52px;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))}
+.ctrl-row .side-label{font-size:12px;color:#ddd;padding:0 6px;cursor:pointer}
+.locked-note{
+  position:absolute;left:14px;top:16px;z-index:30;background:rgba(0,0,0,.55);
+  border-radius:50%;width:42px;height:42px;display:grid;place-items:center;opacity:0;pointer-events:none;
+}
+.locked-note svg{width:20px;height:20px}
+.menu{
+  position:absolute;right:10px;top:52px;z-index:70;background:#232329;border:1px solid #35353d;
+  border-radius:12px;min-width:190px;padding:6px;display:none;box-shadow:0 12px 30px rgba(0,0,0,.5);
+}
+.menu.open{display:block}
+.menu button{
+  display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8e8;
+  font-size:13.5px;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:inherit;text-align:left;
+}
+.menu button:hover{background:#2e2e36}
+.menu button svg{width:17px;height:17px;color:#9f9fae;flex:none}
+.menu .sep{height:1px;background:#33333b;margin:5px 8px}
+.menu .sub{display:none;margin-left:16px;border-left:1px solid #3a3a44;padding-left:4px}
+.menu .sub.open{display:block}
+.menu .sub button{padding:8px 12px;font-size:12.5px}
+.menu .sub button .tick{color:var(--green);margin-left:auto;font-weight:700}
+
+.resume-pill{
+  position:absolute;bottom:64px;left:16px;z-index:40;background:rgba(0,0,0,.66);
+  border-radius:6px;padding:9px 12px;font-size:12.5px;display:none;align-items:center;gap:10px;
+  animation:pop .25s;
+}
+@keyframes pop{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+.resume-pill .x{color:#aaa;font-size:15px;line-height:1;cursor:pointer}
+.resume-pill .x:hover{color:#fff}
+.resume-pill .a{color:var(--green);font-weight:600;cursor:pointer}
+.resume-pill .a:hover{text-decoration:underline}
+.upnext{
+  position:absolute;bottom:70px;right:14px;z-index:40;display:none;align-items:center;gap:8px;
+  background:rgba(0,0,0,.7);border:1px solid rgba(255,255,255,.15);border-radius:999px;
+  padding:8px 14px;font-size:12.5px;cursor:pointer;
+}
+.upnext.show{display:flex}
+.upnext svg{width:16px;height:16px}
+.upnext b{color:var(--green)}
+.countdown{
+  position:absolute;inset:0;z-index:90;display:none;background:rgba(0,0,0,.72);
+  flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;
+}
+.countdown.show{display:flex}
+.countdown .big{font-size:34px;font-weight:800}
+.countdown .txt{font-size:15px;color:#ccc}
+.countdown .row{display:flex;gap:10px}
+.countdown button{
+  border:none;border-radius:999px;padding:11px 26px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;
+}
+.countdown .cancel{background:#2f2f37;color:#fff}
+.countdown .play{background:var(--green);color:#000}
+
+/* ── library screens ──────────────────────────── */
+.lib{
+  position:relative;min-height:640px;background:#0f0f13;padding:16px 14px 120px;
+}
+.lib .brand{font-size:19px;font-weight:700;letter-spacing:.4px;white-space:nowrap;overflow:hidden}
+.lib .brand em{font-style:normal;color:var(--green)}
+.lib .search{
+  margin:10px 0 0;background:#1c1c22;border:1px solid #2a2a32;color:#888;border-radius:10px;
+  padding:9px 12px;font-size:13px;
+}
+.continue-t{font-size:13px;color:#aaa;margin:18px 0 8px}
+.cards{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}
+.cards::-webkit-scrollbar{display:none}
+.card{
+  flex:none;width:150px;border-radius:12px;overflow:hidden;background:#18181e;border:1px solid #26262e;cursor:pointer;position:relative;
+}
+.card:hover{transform:translateY(-2px);transition:transform .15s}
+.card .thumb{aspect-ratio:16/9;background:linear-gradient(135deg,#2c3e50,#1a2530 60%,#101820)}
+.card .meta{padding:8px 9px 9px}
+.card .meta .t{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .meta .s{font-size:10.5px;color:#777;margin-top:2px}
+.card .bar{height:3px;background:#2c2c34;margin:0 9px 9px;border-radius:2px;overflow:hidden}
+.card .bar i{display:block;height:100%;background:var(--green)}
+.card .dur{
+  position:absolute;top:6px;left:6px;background:rgba(0,0,0,.7);border-radius:4px;
+  font-size:10px;padding:2px 6px;font-variant-numeric:tabular-nums;
+}
+.sect{display:flex;justify-content:space-between;align-items:center;margin:20px 0 8px}
+.sect .l{font-size:13px;color:#aaa;letter-spacing:.6px}
+.sect .l b{color:#fff;font-size:14px;margin-right:6px;font-weight:700}
+.sect .c{color:var(--green);font-size:12px}
+.coll{
+  padding:10px 0;display:flex;align-items:center;gap:12px;cursor:pointer;
+}
+.coll .ic{
+  width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,#24242c,#1a1a20);
+  border:1px solid #2c2c34;display:grid;place-items:center;color:#8b8b96;flex:none;
+}
+.coll .ic svg{width:20px;height:20px}
+.coll .nm{flex:1;min-width:0}
+.coll .nm .t{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.coll .nm .s{font-size:11px;color:#777;margin-top:1px}
+.coll .nm .s b{color:var(--green);font-weight:600}
+.coll .dots{color:#666;font-size:18px;padding:4px 6px;cursor:pointer}
+.nav{
+  position:absolute;left:0;right:0;bottom:0;background:#141419;border-top:1px solid #23232b;
+  display:flex;z-index:80;padding:6px 0 10px;
+}
+.nav button{
+  flex:1;background:none;border:none;color:#6d6d78;display:flex;flex-direction:column;
+  align-items:center;gap:3px;font-size:10.5px;cursor:pointer;font-family:inherit;padding:4px 0;
+}
+.nav button svg{width:21px;height:21px}
+.nav button.on{color:var(--green)}
+.eps-row{display:flex;align-items:center;gap:12px;padding:10px 0;cursor:pointer}
+.eps-row .th{
+  width:96px;aspect-ratio:16/9;border-radius:8px;flex:none;position:relative;overflow:hidden;
+  background:linear-gradient(135deg,#26313d,#141b23 70%);
+}
+.eps-row .th .dur{
+  position:absolute;bottom:4px;right:5px;background:rgba(0,0,0,.75);border-radius:3px;
+  font-size:9.5px;padding:1px 5px;font-variant-numeric:tabular-nums;
+}
+.eps-row .th .watched{position:absolute;left:0;right:0;bottom:0;height:3px;background:#2c2c34}
+.eps-row .th .watched i{display:block;height:100%;background:var(--green)}
+.eps-row .inf{flex:1;min-width:0}
+.eps-row .inf .t{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.eps-row .inf .s{font-size:11px;color:#888;margin-top:3px;display:flex;gap:7px;align-items:center}
+.eps-row .inf .s .ssa{
+  background:var(--green);color:#00320d;font-size:9px;font-weight:700;border-radius:3px;padding:1px 5px;letter-spacing:.5px;
+}
+.eps-row .inf .s .date{font-variant-numeric:tabular-nums}
+.eps-row .dots{color:#666;font-size:18px;cursor:pointer;padding:4px}
+.backbar{display:flex;align-items:center;gap:6px;padding-bottom:8px;margin-bottom:4px;border-bottom:1px solid #1e1e26}
+.backbar .icon-btn{width:34px;height:34px;color:#cfcfd8}
+.backbar .icon-btn svg{width:20px;height:20px}
+.backbar .t{font-size:16px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spacer{height:40px}
+.set{margin-top:14px}
+.set .row{
+  display:flex;align-items:center;gap:14px;padding:13px 14px;background:#17171d;border:1px solid #23232b;
+  border-radius:12px;margin-bottom:9px;cursor:pointer;
+}
+.set .row:hover{border-color:#33333e}
+.set .row .ic{color:var(--green);display:grid;place-items:center;width:24px}
+.set .row .ic svg{width:19px;height:19px}
+.set .row .l{flex:1;font-size:13.5px}
+.set .row .l small{display:block;color:#777;font-size:11px;margin-top:2px}
+.set .row .val{color:#9a9aa5;font-size:12px}
+.tgl{width:40px;height:22px;border-radius:999px;background:#3a3a44;position:relative;transition:.2s;flex:none;cursor:pointer}
+.tgl::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}
+.tgl.on{background:var(--green)}
+.tgl.on::after{left:20px}
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#17171d;border:1px solid #2e2e38;
+  color:#e5e5ee;font-size:12.5px;border-radius:999px;padding:9px 18px;z-index:999;opacity:0;
+  transition:opacity .2s,transform .2s;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.4);white-space:nowrap;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
+.toast b{color:var(--green)}
+</style>
+</head>
+<body>
+
+<h1>ANONRODE <span>PLAYER</span> · MX-style UI draft</h1>
+
+<div class="tabs" id="tabs"></div>
+<div class="hint">
+  <code>▶ player: tap = show/hide</code>
+  <code>dbl-tap sides = ±10s</code>
+  <code>drag = seek</code>
+  <code>l/r vertical = brightness/volume</code>
+  <code>2X pill = speed</code>
+</div>
+
+<!-- ============ LANDSCAPE PLAYER ============ -->
+<div class="screen landscape" id="scr-player" style="display:none">
+  <div class="video" id="vbox">
+    <div class="subtitle" id="subtitle">嫂子，你听我解释……</div>
+    <div class="hud" id="hud"><span id="hud-ic">◀</span><span id="hud-tx">10s</span></div>
+    <div class="flash" id="flashL"></div>
+    <div class="flash" id="flashR"></div>
+    <div class="locked-note" id="lockedNote">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    </div>
+    <div class="controls" id="controls">
+      <div>
+        <div class="top-bar">
+          <button class="icon-btn" title="Back" onclick="nav('scr-lib')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          </button>
+          <span class="title" id="p-title">The Sopranos S1E01 · SYNCED.srt</span>
+          <button class="icon-btn" title="Audio" onclick="toast('Audio track: English 1')">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 3h6v3H9zM10 6h4v6l5-1v9h-1v-4l-4 .6v5h-1v-5H9v5H8v-5l-1 .2V6h3v-3zm1 3v3h2V9h-2z"/></svg>
+          </button>
+          <button class="icon-btn" id="ccBtn" title="Subtitles" onclick="toggleCC()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 11.2a2 2 0 1 0 0 1.6M17 11.2a2 2 0 1 0 0 1.6"/></svg>
+          </button>
+          <button class="icon-btn" title="HW decode" onclick="toast('Decoder: HW (1)')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 13V9l2 2 2-2v4M14 13V9l3 4V9" stroke-linecap="round"/></svg>
+          </button>
+          <button class="icon-btn" title="Menu" onclick="toggleMenu()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h16"/></svg>
+          </button>
+        </div>
+        <div class="qrow">
+          <button class="icon-btn" title="Audio equalizer" onclick="toast('Equalizer')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 4v16M12 4v16M19 4v16"/><circle cx="5" cy="12" r="2.5" fill="#1a1a1a"/><circle cx="12" cy="8" r="2.5" fill="#1a1a1a"/><circle cx="19" cy="15" r="2.5" fill="#1a1a1a"/></svg>
+          </button>
+          <button class="icon-btn" title="Cast" onclick="toast('No cast devices')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 14a7 7 0 0 1 7 7M3 17.5a3.5 3.5 0 0 1 3.5 3.5"/></svg>
+          </button>
+          <button class="icon-btn" id="headBtn" title="Headphones" onclick="toast('Headphone mode')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 13a8 8 0 0 1 16 0"/><rect x="3" y="13" width="4" height="6" rx="2"/><rect x="17" y="13" width="4" height="6" rx="2"/></svg>
+          </button>
+          <button class="icon-btn" title="Audio device" onclick="toast('Speaker: default')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="8" width="16" height="8" rx="2"/><path d="M7 6l2-2h6l2 2"/></svg>
+          </button>
+          <button class="speed-pill" id="speedPill" onclick="cycleSpeed()">1X</button>
+          <button class="icon-btn more" title="More" onclick="toggleMenu()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="bottom-block">
+        <div class="seek-row">
+          <time id="t-now">25:47</time>
+          <div class="seekbar" id="seekbar">
+            <div class="track"><div class="fill" id="fill" style="width:0%"></div></div>
+            <div class="knob" id="knob" style="left:0%"></div>
+          </div>
+          <time class="remaining" id="t-total">34:14</time>
+        </div>
+        <div class="ctrl-row">
+          <div class="ctrl-group">
+            <button class="icon-btn" title="Lock" onclick="toggleLock()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+            </button>
+          </div>
+          <div class="ctrl-group">
+            <button class="icon-btn" title="-10s" onclick="seekBy(-10)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 3v4h4"/><text x="12.2" y="15.5" font-size="7" font-weight="700" fill="currentColor" stroke="none" text-anchor="middle">10</text></svg>
+            </button>
+            <button class="icon-btn" title="Previous" onclick="prevEp()">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14L9.5 12z"/></svg>
+            </button>
+            <button class="icon-btn big" title="Play/Pause" onclick="playPause()">
+              <svg id="pp-ic" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
+            </button>
+            <button class="icon-btn" title="Next" onclick="nextEp()">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14L14.5 12z"/></svg>
+            </button>
+            <button class="icon-btn" title="+10s" onclick="seekBy(10)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 3v4h-4"/><text x="11.8" y="15.5" font-size="7" font-weight="700" fill="currentColor" stroke="none" text-anchor="middle">10</text></svg>
+            </button>
+          </div>
+          <div class="ctrl-group">
+            <button class="icon-btn" title="Picture-in-picture" onclick="toast('PiP (demo)')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="13" rx="2"/><rect x="12" y="10" width="6" height="4" rx="1" fill="currentColor" stroke="none"/></svg>
+            </button>
+            <button class="icon-btn" title="Aspect" onclick="cycleAspect()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16v12H4z"/><path d="M4 9h16" stroke-dasharray="2 3"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <button class="resume-pill" id="resume">
+      <span class="x" onclick="event.stopPropagation();document.getElementById('resume').style.display='none'">✕</span>
+      Continue from where you stopped.
+      <span class="a" onclick="event.stopPropagation();resumeStart()">START OVER</span>
+    </button>
+    <div class="upnext" id="upnext" onclick="nextEp()">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14L14.5 12z"/></svg>
+      Up Next · <b id="upnext-title">E32</b>
+    </div>
+    <div class="countdown" id="countdown">
+      <div class="big" id="cd-num">5</div>
+      <div class="txt">Next episode in <span id="cd-title">E32</span>…</div>
+      <div class="row">
+        <button class="cancel" onclick="cancelNext()">Cancel</button>
+        <button class="play" onclick="nextEp()">Play now</button>
+      </div>
+    </div>
+    <div class="menu" id="menu">
+      <button onclick="toggleCC();closeMenu()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 11.2a2 2 0 1 0 0 1.6M17 11.2a2 2 0 1 0 0 1.6"/></svg>
+        <span id="m-cc">Subtitles: On</span>
+      </button>
+      <button onclick="toggleSubStyle()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M6 9h6M6 13h10M6 17h8" stroke-width="1.6"/></svg>
+        <span>Subtitle style</span>
+        <span id="m-st-sub" style="margin-left:auto;font-size:11px;color:var(--green)">Outlined</span>
+      </button>
+      <div class="sub" id="styleSub">
+        <button onclick="setSub('size','small')">Size · <b id="st-size-lab">Small</b></button>
+        <button onclick="setSub('style','outlined')">Style · <b id="st-style-lab">Outline</b></button>
+        <button onclick="setSub('pos','low')">Position · <b id="st-pos-lab">Low</b></button>
+        <button onclick="setSub('color','white')">Color · <b id="st-color-lab">White</b></button>
+      </div>
+      <button onclick="toggleSleepSub()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <span>Sleep timer</span>
+        <span id="m-sleep-val" style="margin-left:auto;font-size:11px;color:var(--green)"></span>
+      </button>
+      <div class="sub" id="sleepSub">
+        <button onclick="setSleep(0)">Off <span class="tick" id="tick-0" style="visibility:hidden">✓</span></button>
+        <button onclick="setSleep(5)">5 min <span class="tick" id="tick-5" style="visibility:hidden">✓</span></button>
+        <button onclick="setSleep(10)">10 min <span class="tick" id="tick-10" style="visibility:hidden">✓</span></button>
+        <button onclick="setSleep(15)">15 min <span class="tick" id="tick-15" style="visibility:hidden">✓</span></button>
+        <button onclick="setSleep(30)">30 min <span class="tick" id="tick-30" style="visibility:hidden">✓</span></button>
+        <button onclick="setSleep(-1)">End of episode <span class="tick" id="tick-end" style="visibility:hidden">✓</span></button>
+      </div>
+      <button onclick="toggleRR()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 3h6v4H9zM9 18h6"/></svg>
+        <span id="m-rr">Rotation lock: Off</span>
+      </button>
+      <button onclick="cycleAspect();closeMenu()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/></svg>
+        <span id="m-aspect">Aspect: Fit</span>
+      </button>
+      <div class="sep"></div>
+      <button onclick="document.getElementById('resume').style.display='flex';closeMenu()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12a8 8 0 0 1 14-5.7M20 12a8 8 0 0 1-14 5.7"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>
+        <span>Resume prompt (demo)</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ LIBRARY (portrait) ============ -->
+<div class="screen" id="scr-lib" style="display:none">
+  <div class="lib">
+    <div class="brand">ANONRODE <em>PLAYER</em></div>
+    <div class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2" style="vertical-align:-2px;margin-right:6px"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Search episodes / series… (demo)</div>
+    <div class="continue-t">CONTINUE WATCHING</div>
+    <div class="cards" id="cards"></div>
+    <div class="sect">
+      <div class="l"><b>FOLDERS</b>8</div>
+      <div class="c">sort ▾</div>
+    </div>
+    <div id="folders"></div>
+    <div class="spacer"></div>
+  </div>
+  <div class="nav" id="nav-lib"></div>
+</div>
+
+<!-- ============ EPISODES (portrait) ============ -->
+<div class="screen" id="scr-eps" style="display:none">
+  <div class="lib">
+    <div class="backbar">
+      <button class="icon-btn" onclick="nav('scr-lib')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+      </button>
+      <span class="t" id="eps-title">Growling Tiger</span>
+      <button class="icon-btn" style="width:36px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+      </button>
+      <button class="icon-btn" style="width:36px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h16"/></svg>
+      </button>
+    </div>
+    <div id="episodes"></div>
+    <div class="spacer"></div>
+  </div>
+  <div class="nav" id="nav-eps"></div>
+</div>
+
+<!-- ============ SETTINGS (portrait) ============ -->
+<div class="screen" id="scr-set" style="display:none">
+  <div class="lib">
+    <div class="brand">Settings</div>
+    <div class="set">
+      <div class="row" onclick="toast('Player: default resume ON')">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 9l6 3-6 3z"/></svg></div>
+        <div class="l">Resume position<small>Remember where you stopped · Room</small></div>
+        <div class="tgl on" onclick="event.stopPropagation();this.classList.toggle('on')"></div>
+      </div>
+      <div class="row">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 8l4 5h-4z"/></svg></div>
+        <div class="l">Subtitle auto-sync<small>Speech-match · ffsubsync gates v2 · offset −0.13s · 0.7% drift</small></div>
+        <div class="val">ON</div>
+      </div>
+      <div class="row">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 11.2a2 2 0 1 0 0 1.6M17 11.2a2 2 0 1 0 0 1.6"/></svg></div>
+        <div class="l">Subtitle offset<small>Manual nudge +0.1s / −0.1s</small></div>
+        <div class="val">0.0s</div>
+      </div>
+      <div class="row">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 3-6 3z"/></svg></div>
+        <div class="l">Autoplay next episode<small>Auto-advance with countdown</small></div>
+        <div class="tgl on" onclick="event.stopPropagation();this.classList.toggle('on')"></div>
+      </div>
+      <div class="row">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+        <div class="l">Sleep timer<small>Off by default</small></div>
+        <div class="val">Off</div>
+      </div>
+      <div class="row">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M4 9h16" stroke-dasharray="2 3"/></svg></div>
+        <div class="l">Zoom mode<small>FIT / CROP / STRETCH</small></div>
+        <div class="val">FIT</div>
+      </div>
+      <div class="row">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div>
+        <div class="l">Player lock<small>Disable gestures &amp; controls</small></div>
+        <div class="tgl" onclick="event.stopPropagation();this.classList.toggle('on')"></div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+  </div>
+  <div class="nav" id="nav-set"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+/* ───────────────────── lib mock data ───────────────────── */
+const FOLDERS=[
+  {name:'Growling Tiger', n:31},
+  {name:'Nirvana In Fire 2', n:4},
+  {name:'Rick And Morty Season 9', n:8},
+  {name:'Suits Season 1 Complete', n:12},
+  {name:'Arrow Season 1-3 Complete', n:26},
+  {name:'BLOODY FLOWER', n:8},
+  {name:'Silo', n:1},
+  {name:'Tutorialscope', n:4},
+];
+let cur=1;
+
+function $(id){return document.getElementById(id)}
+function toast(msg){const t=$('toast');t.innerHTML=msg;t.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('show'),1500)}
+function svg(p){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>'}
+const IC={
+  home:svg('<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>'),
+  tv:svg('<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/>'),
+  gear:svg('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>'),
+  folder:svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+};
+function navBar(active){
+  return '<button class="'+(active==='lib'?'on':'')+'" onclick="nav(\'scr-lib\')">'+IC.home+'Home</button>'+
+         '<button class="'+(active==='eps'?'on':'')+'" onclick="nav(\'scr-eps\')">'+IC.tv+'Series</button>'+
+         '<button class="'+(active==='set'?'on':'')+'" onclick="nav(\'scr-set\')">'+IC.gear+'Settings</button>';
+}
+function renderCards(){
+  const data=[
+    {t:'E31 — 嫂子，你听我解释',s:'Growling Tiger · 43:26',p:58,dur:'43:26'},
+    {t:'E01 — 密室',s:'Silo · 47:12',p:2,dur:'47:12'},
+    {t:'E18 — 再见',s:'BLOODY FLOWER · 44:05',p:18,dur:'44:05'},
+  ];
+  $('cards').innerHTML=data.map(c=>`
+    <div class="card" onclick="openEp(31)">
+      <div class="thumb" style="background:linear-gradient(135deg,#4a3f2a,#1c1710 70%)"></div>
+      <div class="dur">${c.dur}</div>
+      <div class="meta"><div class="t">${c.t}</div><div class="s">${c.s}</div></div>
+      <div class="bar"><i style="width:${c.p}%"></i></div>
+    </div>`).join('')+
+    '<div class="card" onclick="nav(\'scr-eps\')" style="width:120px"><div class="thumb" style="display:grid;place-items:center;color:#5b5b66;font-size:26px">＋</div><div class="meta"><div class="t">All series</div><div class="s">tap to browse</div></div></div>';
+}
+function renderFolders(){
+  $('folders').innerHTML=FOLDERS.map(f=>`
+    <div class="coll" onclick="nav('scr-eps');$('eps-title').textContent='${f.name.replace(/'/g,"\\'")}'">
+      <div class="ic">${IC.folder}</div>
+      <div class="nm"><div class="t">${f.name}</div><div class="s"><b>${f.n}</b> videos</div></div>
+      <div class="dots" onclick="event.stopPropagation();toast('Folder options')">⋮</div>
+    </div>`).join('');
+}
+function renderEps(){
+  const arr=Array.from({length:12},(_,i)=>i+1);
+  $('episodes').innerHTML=arr.map(i=>{
+    const seen=i<cur, partial=i===cur;
+    return `<div class="eps-row" onclick="openEp(${i})">
+      <div class="th">
+        <span class="dur">1:00:${String(1+(i*7)%58).padStart(2,'0')}</span>
+        <div class="watched"><i style="width:${seen?100:partial?58:0}%"></i></div>
+      </div>
+      <div class="inf">
+        <div class="t">The Sopranos S01E0${i}</div>
+        <div class="s"><span class="ssa">SYNC</span><span class="date">Aug 20</span></div>
+      </div>
+      <div class="dots" onclick="event.stopPropagation();toast('Episode options')">⋮</div>
+    </div>`;
+  }).join('');
+}
+
+/* ───────────────────── player simulation ───────────────────── */
+const P={dur:60*60+1,pos:25*60+47,playing:true,cc:true,locked:false,muted:false,aspect:0,rr:false,speed:1,sleep:0,sleepEnd:false,sleepClock:0,sleepPaused:false};
+const SPEEDS=[0.5,0.75,1,1.25,1.5,2];
+let speedIdx=5,hidTimer=null,counter=0;
+
+function fmt(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;return h>0?h+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'):m+':'+String(s).padStart(2,'0')}
+function renderTime(){
+  $('t-now').textContent=fmt(P.pos);
+  $('t-total').textContent=fmt(P.dur-P.pos);
+  const pct=Math.min(100,P.pos/P.dur*100);
+  $('fill').style.width=pct+'%';$('knob').style.left=pct+'%';
+  $('upnext').classList.toggle('show',P.playing&&(P.dur-P.pos)<=30);
+}
+setInterval(()=>{
+  if(P.playing&&!P.sleepPaused){
+    P.pos+=0.25*P.speed;
+    if(P.pos>=P.dur){P.pos=P.dur;P.playing=false;P.sleepPaused=true;$('pp-ic').setAttribute('d','<path d="M8 5l11 7-11 7z"/>');showCountdown()}
+    renderTime();
+    counter++;
+      if(P.cc){
+      const subs=[
+        "I noticed the glass rattles every time\nI walk to the laundry room.",
+        "Grounded for this?\nOh, no, you're not grounded.",
+        "You're not going to Aspen\nwith Hunter Scangarelo!",
+        "Patrick's swim meet is tomorrow,\nand he needed me!",
+        "I'm not the one who lost track\nof his own son.",
+        "Oh no, this is killing me tonight.\nI don't know what to say."
+      ];
+      const el=$('subtitle');
+      if(counter%14<4)el.textContent=subs[counter%subs.length];
+      el.classList.remove('off');
+    }
+  }
+  if(P.sleep>0&&!P.sleepPaused&&--P.sleepClock<=0){P.sleep=0;P.sleepPaused=true;P.playing=false;renderTime();toast('<b>Sleep timer:</b> paused')}
+},250);
+
+function playPause(){
+  P.playing=!P.playing;P.sleepPaused=false;
+  $('pp-ic').setAttribute('d',P.playing?'<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>':'<path d="M8 5l11 7-11 7z"/>');
+  if(P.playing)scheduleHide();
+}
+function showControls(show){
+  $('controls').classList.toggle('hidden',!show);
+  if(show&&P.playing)scheduleHide();
+}
+function scheduleHide(){
+  clearTimeout(hidTimer);
+  hidTimer=setTimeout(()=>{if(P.playing&&!P.locked)$('controls').classList.add('hidden')},3500);
+}
+function hud(ic,tx){
+  $('hud-ic').textContent=ic;$('hud-tx').textContent=tx;
+  $('hud').classList.add('show');clearTimeout(hud._t);hud._t=setTimeout(()=>$('hud').classList.remove('show'),900);
+}
+function flash(side){
+  const el=side<0?$('flashL'):$('flashR');
+  el.classList.add('on');setTimeout(()=>el.classList.remove('on'),350);
+}
+function seekBy(sec){
+  P.pos=Math.max(0,Math.min(P.dur,P.pos+sec));
+  flash(sec<0?-1:1);hud(sec<0?'◀':'▶',Math.abs(sec)+'s');renderTime();P.sleepPaused=false;
+}
+function seekToPct(p){P.pos=p*P.dur;P.sleepPaused=false;renderTime()}
+
+/* gestures on the video box */
+(function(){
+  const box=$('vbox');let sx=0,sy=0,lastTap=0,swiping=null;
+  box.addEventListener('click',e=>{
+    if(e.target.closest('button,.menu,.resume-pill,.upnext,.countdown,.seekbar'))return;
+    const now=Date.now();
+    if(now-lastTap<300){lastTap=0;seekBy(e.clientX<box.getBoundingClientRect().left+box.clientWidth/2?-10:10);return}
+    lastTap=now;
+    if(P.locked){toast('Tap again to unlock');return}
+    const c=$('controls');
+    if(c.classList.contains('hidden'))showControls(true);
+    else if(P.playing)c.classList.add('hidden');
+    else showControls(true);
+  });
+  box.addEventListener('pointerdown',e=>{sx=e.clientX;sy=e.clientY;swiping='?'});
+  box.addEventListener('pointermove',e=>{
+    if(!swiping||P.locked)return;
+    const dx=Math.abs(e.clientX-sx),dy=Math.abs(e.clientY-sy);
+    if(swiping==='?'&&(dx>18||dy>18))swiping=dx>dy?'h':'v';
+    if(swiping==='h'){
+      const bar=$('seekbar').getBoundingClientRect();
+      seekToPct((Math.max(bar.left,Math.min(bar.right,e.clientX))-bar.left)/(bar.right-bar.left));
+    }else{
+      const v=(sy-e.clientY)/(box.clientHeight*0.7);
+      hud('◆','Volume '+Math.round(100*Math.max(0,Math.min(1,v)))+'%');
+    }
+  });
+  box.addEventListener('pointerup',()=>swiping=null);
+})();
+$('seekbar').addEventListener('pointerdown',e=>{
+  const bar=$('seekbar').getBoundingClientRect();
+  seekToPct((e.clientX-bar.left)/(bar.right-bar.left));
+  e.stopPropagation();
+});
+
+function toggleCC(){
+  P.cc=!P.cc;$('subtitle').classList.toggle('off',!P.cc);$('m-cc').textContent='Subtitles: '+(P.cc?'On':'Off');
+  toast(P.cc?'<b>Subtitles:</b> on (synced −0.13s)':'<b>Subtitles:</b> off');
+}
+function toggleMute(){P.muted=!P.muted;$('muteBtn').style.color=P.muted?'var(--green)':'#fff';toast(P.muted?'Muted':'Unmuted')}
+function toggleLock(){
+  P.locked=!P.locked;
+  $('lockBtn').style.color=P.locked?'var(--green)':'#fff';
+  if(P.locked){$('controls').classList.add('hidden');$('lockedNote').style.opacity=1;toast('Screen locked — tap to unlock')}
+  else{$('lockedNote').style.opacity=0;showControls(true)}
+}
+function cycleSpeed(){
+  speedIdx=(speedIdx+1)%SPEEDS.length;P.speed=SPEEDS[speedIdx];
+  const label=P.speed%1===0?String(P.speed):String(P.speed).replace(/0$/,'');
+  $('speedPill').textContent=label+'X';
+  toast('Speed <b>'+$('speedPill').textContent+'</b>');
+}
+function toggleRR(){P.rr=!P.rr;$('m-rr').textContent='Rotation lock: '+(P.rr?'On':'Off');toast('Rotation '+(P.rr?'locked':'free'))}
+function cycleAspect(){
+  P.aspect=(P.aspect+1)%3;const a=['Fit','Crop','Stretch'][P.aspect];
+  $('m-aspect').textContent='Aspect: '+a;hud('▣',a);toast('Aspect <b>'+a+'</b>');
+}
+function setSleep(min){
+  if(min>0){P.sleepClock=min*60;P.sleep=min;P.sleepEnd=false}
+  else if(min<0){P.sleepEnd=true;P.sleep=0;P.sleepClock=0}
+  else{P.sleep=0;P.sleepEnd=false;P.sleepClock=0}
+  ['0','5','10','15','30','end'].forEach(k=>{const el=$('tick-'+k);if(el)el.style.visibility=(k==='0'?min===0:k==='end'?min<0:P.sleep===+k)?'visible':'hidden'});
+  $('m-sleep-val').textContent=min<0?'till end':min===0?'':min+'m';
+  toast(min<0?'Sleep: <b>end of episode</b>':min===0?'Sleep: <b>off</b>':'Sleep: <b>'+min+' min</b>');
+  closeMenu();
+}
+function toggleSleepSub(){$('sleepSub').classList.toggle('open')}
+function toggleSubStyle(){
+  $('styleSub').classList.toggle('open');
+  if($('styleSub').classList.contains('open'))$('sleepSub').classList.remove('open');
+}
+let ST={size:'small',style:'outlined',pos:'low',color:'white'};
+function setSub(k,v){
+  ST[k]=v;
+  const lab={size:'st-size-lab',style:'st-style-lab',pos:'st-pos-lab',color:'st-color-lab'}[k];
+  $('m-st-sub').textContent=v[0].toUpperCase()+v.slice(1);
+  $('st-'+k+'-lab').textContent=v[0].toUpperCase()+v.slice(1);
+  const el=$('subtitle');
+  if(k==='size')el.style.fontSize=v==='small'?'clamp(16px,3.2vw,22px)':v==='medium'?'clamp(19px,3.8vw,26px)':'clamp(24px,4.6vw,34px)';
+  if(k==='pos')el.style.bottom=v==='low'?'34%':v==='mid'?'45%':'52%';
+  if(k==='color')el.style.color=v==='white'?'#fff':v==='yellow'?'#ffdd55':'#55ff99';
+  toast('Subtitle <b>'+v+'</b>');
+}
+function toggleMenu(){$('menu').classList.toggle('open')}
+function closeMenu(){$('menu').classList.remove('open');$('sleepSub').classList.remove('open')}
+function showCountdown(){
+  let n=5;$('cd-num').textContent=n;$('cd-title').textContent='E'+(cur+1);
+  $('countdown').classList.add('show');
+  clearInterval(showCountdown._i);
+  showCountdown._i=setInterval(()=>{if(--n<=0){clearInterval(showCountdown._i);nextEp()}else $('cd-num').textContent=n},1000);
+}
+function cancelNext(){$('countdown').classList.remove('show');clearInterval(showCountdown._i)}
+function nextEp(){cur=Math.min(31,cur+1);P.pos=0;P.sleepPaused=false;cancelNext();renderTime();toast('<b>E'+cur+'</b> — playing')}
+function prevEp(){cur=Math.max(1,cur-1);P.pos=0;P.sleepPaused=false;cancelNext();renderTime();toast('<b>E'+cur+'</b>')}
+function resumeStart(){
+  P.pos=0;P.sleepPaused=false;$('resume').style.display='none';
+  renderTime();hud('▶','0:00');if(!P.playing)P.playing=true;playPause();
+}
+function openEp(i){cur=i;P.pos=(i===3?P.dur*0.58:0);renderTime();$('resume').style.display='none';$('countdown').classList.remove('show');nav('scr-player')}
+
+/* ───────────────────── navigation ───────────────────── */
+const TABS=[['scr-lib','Library / Home'],['scr-player','Player (live)'],['scr-eps','Episodes'],['scr-set','Settings']];
+function nav(id){
+  ['scr-lib','scr-eps','scr-set','scr-player'].forEach(s=>$(s).style.display='none');
+  $(id).style.display='block';
+  document.querySelectorAll('#tabs button').forEach((b,i)=>b.classList.toggle('on',TABS[i][0]===id));
+  if(id==='scr-player'){
+    $('controls').classList.remove('hidden');
+    if(!P.playing){P.playing=true;playPause()}
+  }
+  window.scrollTo({top:0});
+  history.replaceState(null,'','#'+id);
+}
+function buildTabs(){
+  $('tabs').innerHTML=TABS.map(([id,label])=>`<button onclick="nav('${id}')">${label}</button>`).join('');
+  document.querySelectorAll('#tabs button')[0].classList.add('on');
+}
+
+$('nav-lib').innerHTML=navBar('lib');
+$('nav-eps').innerHTML=navBar('eps');
+$('nav-set').innerHTML=navBar('set');
+renderCards();renderFolders();renderEps();renderTime();buildTabs();
+const start=location.hash.replace('#','');
+nav(['scr-lib','scr-player','scr-eps','scr-set'].includes(start)?start:'scr-lib');
+</script>
+</body>
+</html>

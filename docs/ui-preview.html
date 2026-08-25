@@ -5,28 +5,26 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0a0c12;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;padding:40px 20px;display:flex;flex-wrap:wrap;gap:32px;justify-content:center}
+
 .phone{width:340px;border-radius:40px;overflow:hidden;border:3px solid #333;background:#000;box-shadow:0 20px 60px rgba(0,0,0,.7);flex-shrink:0}
 .label{text-align:center;color:#6c63ff;font-size:12px;font-weight:bold;letter-spacing:2px;margin-top:10px;text-transform:uppercase}
-.sub{display:block;color:#444;font-size:10px;margin-top:2px;letter-spacing:0}
-
-/* STATUS BAR */
+.sub{display:block;color:#444;font-size:10px;margin-top:2px}
 .status{display:flex;justify-content:space-between;align-items:center;padding:8px 20px 4px;color:#fff;font-size:13px;font-weight:600}
-.sig{display:flex;gap:2px;align-items:flex-end}.sig i{width:3px;border-radius:1px;background:#fff}.batt{width:22px;height:11px;border:1.5px solid rgba(255,255,255,.5);border-radius:3px;position:relative}.batt::after{content:'';position:absolute;right:-4px;top:2.5px;width:2px;height:4px;background:rgba(255,255,255,.5);border-radius:1px}.batt i{position:absolute;inset:1.5px;right:4px;border-radius:1px;background:#00d4aa}
+.sig{display:flex;gap:2px;align-items:flex-end}.sig i{width:3px;border-radius:1px;background:#fff;display:inline-block}.batt{width:22px;height:11px;border:1.5px solid rgba(255,255,255,.5);border-radius:3px;position:relative;display:inline-block}.batt::after{content:'';position:absolute;right:-4px;top:2.5px;width:2px;height:4px;background:rgba(255,255,255,.5);border-radius:1px}.batt i{position:absolute;inset:1.5px;right:4px;border-radius:1px;background:#00d4aa}
 
-/* ── LIBRARY ── */
 .lib{background:#0d0f14;min-height:720px;display:flex;flex-direction:column}
 .appbar{padding:14px 18px 10px;display:flex;align-items:center}
-.appbar .t{font-size:24px;font-weight:800;color:#f0f2f8;letter-spacing:-.5px}
+.t{font-size:24px;font-weight:800;color:#f0f2f8;letter-spacing:-.5px}
+.sp{flex:1}
 .iconbtn{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#9aa3b8;font-size:16px}
 .sec-h{font-size:11px;font-weight:700;color:rgba(240,242,248,.45);letter-spacing:1.5px;text-transform:uppercase;padding:18px 18px 8px}
 .cw-row{display:flex;gap:12px;padding:4px 18px 8px;overflow:hidden}
 .cwc{width:148px;flex-shrink:0;border-radius:16px;overflow:hidden;background:#161922}
 .cwc .art{height:86px;position:relative;display:flex;align-items:center;justify-content:center}
-.cwc .playbtn{position:absolute;width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center}
-.playbtn::after{content:'▶';color:#fff;font-size:12px}
+.playbtn{position:absolute;width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px}
 .cwc .info{padding:9px 10px 8px}
-.cwc .nm{font-size:13px;font-weight:700;color:#f0f2f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cwc .ep{font-size:11px;color:rgba(240,242,248,.42);margin-top:2px}
+.nm{font-size:13px;font-weight:700;color:#f0f2f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ep{font-size:11px;color:rgba(240,242,248,.42);margin-top:2px}
 .pbar{height:3px;background:rgba(255,255,255,.08);margin-top:8px;border-radius:2px;overflow:hidden}
 .pbar i{display:block;height:100%;background:linear-gradient(90deg,#6c63ff,#00d4aa)}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:8px 18px 16px}
@@ -34,132 +32,76 @@ body{background:#0a0c12;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;p
 .scard .poster{height:108px;position:relative;display:flex;align-items:center;justify-content:center}
 .scard .poster span{font-size:28px;font-weight:900;color:rgba(255,255,255,.85)}
 .scard .body{padding:10px 12px 12px}
-.scard .nm{font-size:14px;font-weight:700;color:#f0f2f8}
+.scard .nm2{font-size:14px;font-weight:700;color:#f0f2f8}
 .scard .meta{font-size:11px;color:rgba(240,242,248,.42);margin-top:3px}
 .scard .prog{display:flex;align-items:center;gap:8px;margin-top:9px}
 .scard .prog .pbar{flex:1;margin:0}
-.scard .cnt{font-size:11px;color:#00d4aa;font-weight:700}
-.vrow{display:flex;align-items:center;gap:12px;padding:8px 18px}
-.vrow .thumb{width:64px;height:38px;border-radius:8px;flex-shrink:0}
-.vrow .inf{flex:1;min-width:0}
-.vrow .tn{font-size:14px;color:#f0f2f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.vrow .tm{font-size:11px;color:rgba(240,242,248,.4);margin-top:2px}
+.scnt{font-size:11px;color:#00d4aa;font-weight:700}
+.gA{background:linear-gradient(160deg,#ff8a65,#ff5e7e,#5c2a5e)}
+.gB{background:linear-gradient(160deg,#1e3a8a,#2563eb,#0ea5e9)}
+.gC{background:linear-gradient(160deg,#b45309,#f59e0b,#fbbf24)}
 .nav{margin-top:auto;display:flex;background:#161922;border-top:1px solid #2a2f45;padding:6px 8px 14px}
 .nav .it{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 0;color:rgba(240,242,248,.35);font-size:10px}
 .nav .it .ic{width:44px;height:26px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:16px}
-.nav .it.on{color:#6c63ff}.nav .it.on .ic{background:rgba(108,99,255,.15)}
+.nav .it.on{color:#6c63ff}
+.nav .it.on .ic{background:rgba(108,99,255,.15)}
 
-/* poster gradients */
-.gA{background:linear-gradient(160deg,#ff8a65,#ff5e7e,#5c2a5e)}.gA::before{content:'';position:absolute;right:-30px;bottom:-30px;width:140px;height:140px;border-radius:50%;background:radial-gradient(circle,#ffd3a5,#ff6b6b)}
-.gB{background:linear-gradient(160deg,#1e3a8a,#2563eb,#0ea5e9)}.gB::before{content:'';position:absolute;left:-24px;bottom:-34px;width:130px;height:130px;border-radius:50%;background:radial-gradient(circle,#93c5fd,#1d4ed8)}
-.gC{background:linear-gradient(160deg,#b45309,#f59e0b,#fbbf24)}.gC::before{content:'';position:absolute;left:14px;top:12px;width:46px;height:30px;border-radius:50% 50% 40% 40%;background:#7c2d12;transform:rotate(-12deg)}
-.gD{background:linear-gradient(160deg,#1e2130,#14161f)}.gD::before{content:'';position:absolute;left:18px;top:22px;width:34px;height:26px;border-radius:5px 5px 0 0;background:#6c63ff;opacity:.55}
-
-/* ── PLAYER ── */
 .player{min-height:720px;position:relative;background:#000;display:flex;flex-direction:column;justify-content:space-between}
-.vid-area{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 60%,#1a1c3a 0%,#0a0c20 50%,#000 100%);display:flex;align-items:center;justify-content:center}
-.bigpp{width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:24px;color:#fff}
-.subtxt{position:absolute;bottom:180px;left:24px;right:24px;text-align:center;z-index:10}
-.subline{display:inline-block;background:rgba(0,0,0,.72);color:#fff;padding:5px 14px 7px;border-radius:8px;font-size:15px;font-weight:600;line-height:1.45;box-shadow:0 1px 6px rgba(0,0,0,.5)}
-.topscrim{position:absolute;top:0;left:0;right:0;height:120px;background:linear-gradient(to bottom,rgba(0,0,0,.8),transparent);z-index:2}
-.botsrcim{position:absolute;bottom:0;left:0;right:0;height:220px;background:linear-gradient(to top,rgba(0,0,0,.92) 0%,rgba(0,0,0,.55) 45%,transparent 100%);z-index:2}
-.ptop{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;padding:52px 14px 0;z-index:10;color:#fff}
-.ptop .back{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px}
-.ptop .ttl{flex:1;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.badge{font-size:11px;padding:3px 10px;border-radius:20px;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.18);color:rgba(255,255,255,.85)}
+.vid{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 60%,#1a1c3a,#0a0c20,#000);display:flex;align-items:center;justify-content:center}
+.bigpp{width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:24px;color:#fff;z-index:3}
+.tscrim{position:absolute;top:0;left:0;right:0;height:130px;background:linear-gradient(to bottom,rgba(0,0,0,.85),transparent);z-index:2}
+.bscrim{position:absolute;bottom:0;left:0;right:0;height:230px;background:linear-gradient(to top,rgba(0,0,0,.92),rgba(0,0,0,.55) 45%,transparent);z-index:2}
+.ptop{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:6px;padding:52px 14px 0;z-index:10;color:#fff}
+.back{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px}
+.pttl{flex:1;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{font-size:10px;padding:3px 10px;border-radius:20px;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.18);color:rgba(255,255,255,.85)}
 .badge.on{border-color:rgba(108,99,255,.5);color:#c9c4ff;background:rgba(108,99,255,.15)}
-.center-play{position:absolute;top:46%;left:50%;transform:translate(-50%,-50%);width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:26px;color:#fff;z-index:10}
+.cp{position:absolute;top:46%;left:50%;transform:translate(-50%,-50%);width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:26px;color:#fff;z-index:10}
+.stxt{position:absolute;left:24px;right:24px;bottom:180px;text-align:center;z-index:10}
+.sl{display:inline-block;background:rgba(0,0,0,.72);color:#fff;padding:5px 14px 7px;border-radius:8px;font-size:14px;font-weight:600;line-height:1.45;max-width:92%}
+.sync-pill{display:inline-block;margin-top:6px;background:rgba(0,212,170,.1);color:#00d4aa;border:1px solid rgba(0,212,170,.3);padding:3px 12px;border-radius:20px;font-size:10px;font-family:'Courier New'}
 .pbot{position:absolute;bottom:0;left:0;right:0;padding:0 14px 22px;z-index:10;display:flex;flex-direction:column;gap:8px}
-.seekrow{display:flex;align-items:center;gap:8px;color:#fff}
+.skrow{display:flex;align-items:center;gap:8px;color:#fff}
 .tm{font-size:11px;font-family:'Courier New';color:rgba(255,255,255,.85);min-width:36px}
 .tm.r{text-align:right}
-.sbar{flex:1;height:24px;position:relative;display:flex;align-items:center}
+.sb{flex:1;height:26px;position:relative;display:flex;align-items:center}
 .strk{position:absolute;left:0;right:0;height:4px;border-radius:3px;background:rgba(255,255,255,.2)}
-.sbuf{position:absolute;left:0;top:0;bottom:0;width:78%;background:rgba(255,255,255,.16);border-radius:3px}
-.spro{position:absolute;left:0;top:0;bottom:0;width:55%;background:linear-gradient(90deg,#6c63ff,#00d4aa);border-radius:3px}
+.sbuf{position:absolute;left:0;top:0;bottom:0;width:78%;background:rgba(255,255,255,.15);border-radius:3px}
+.sprg{position:absolute;left:0;top:0;bottom:0;width:55%;background:linear-gradient(90deg,#6c63ff,#00d4aa);border-radius:3px}
 .sthumb{position:absolute;left:55%;top:50%;width:14px;height:14px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);box-shadow:0 0 10px rgba(108,99,255,.8)}
-.arow{display:flex;align-items:center;gap:4px}
-.cc-lab{flex:1;font-size:11px;color:rgba(255,255,255,.65);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:5px}
-.cc-lab svg{width:14px;height:14px}
-.ibtn{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;background:rgba(255,255,255,.08);border:none;cursor:pointer}
-.transport{display:flex;align-items:center;justify-content:center;gap:36px}
-.tpbtn{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;color:rgba(255,255,255,.95);background:transparent;border:none;cursor:pointer}
-.tpbtn.main{width:58px;height:58px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);font-size:24px}
+.arow{display:flex;align-items:center;gap:4px;color:#fff}
+.cclab{flex:1;font-size:11px;color:rgba(255,255,255,.65);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:5px}
+.ibtn{min-width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;background:rgba(255,255,255,.08);cursor:pointer}
+.tprow{display:flex;align-items:center;justify-content:center;gap:36px;color:#fff}
+.tp{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;color:rgba(255,255,255,.95)}
+.tp.main{width:58px;height:58px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);font-size:24px}
 
-/* ── SLEEP DROPDOWN ── */
-.dropdown-overlay{position:absolute;top:0;left:0;right:0;bottom:0;z-index:20}
-.dd{position:absolute;top:100px;right:50px;background:#1a1d29;border-radius:12px;border:1px solid #2a2f45;padding:6px 0;z-index:25;box-shadow:0 12px 40px rgba(0,0,0,.6);min-width:160px}
-.dd-item{padding:10px 16px;font-size:13px;color:#e8eaf0;cursor:pointer}
-.dd-item:hover{background:#22263a}
-.dd-item.sel{color:#00d4aa}
-
-/* ── RESUME DIALOG ── */
-.resume-ov{position:absolute;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:30}
-.resume-card{background:#14161f;border:1px solid #2a2f45;border-radius:20px;padding:24px 22px 18px;width:280px;box-shadow:0 20px 60px rgba(0,0,0,.7)}
-.resume-card .rt{text-align:center;font-size:17px;font-weight:700;color:#fff}
-.resume-card .rs{text-align:center;font-size:12px;color:rgba(240,242,248,.5);margin:8px 0 18px;font-family:'Courier New'}
-.resume-card .rs b{color:#f0f2f8}
-.rdbtns{display:flex;gap:10px}
-.rdb{flex:1;padding:13px 0;border-radius:14px;text-align:center;font-size:13px;font-weight:700;cursor:pointer}
-.rdb.primary{background:linear-gradient(135deg,#6c63ff,#00d4aa);color:#fff}
-.rdb.secondary{background:#22263a;color:#e8eaf0;border:1px solid #2a2f45}
+.diag{position:absolute;top:48px;left:14px;right:14px;z-index:15;background:rgba(0,0,0,.7);color:#ffd166;font-size:10px;font-family:'Courier New';padding:4px 10px;border-radius:4px}
 </style>
 </head>
 <body>
 
-<!-- ═══════ LIBRARY ═══════ -->
+<!-- ══════════ LIBRARY ══════════ -->
 <div>
 <div class="phone">
-<div class="notch" style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
-<div class="status"><span>9:41</span><span style="display:flex;gap:2px;align-items:flex-end"><i style="width:3px;height:4px;border-radius:1px;background:#fff;display:inline-block"></i><i style="width:3px;height:7px;border-radius:1px;background:#fff;display:inline-block"></i><i style="width:3px;height:10px;border-radius:1px;background:#fff;display:inline-block"></i><span style="width:22px;height:11px;border:1.5px solid rgba(255,255,255,.5);border-radius:3px;position:relative;display:inline-block"><span style="position:absolute;inset:1.5px;right:4px;border-radius:1px;background:#00d4aa"></span></span></span></div>
+<div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div class="status"><span>9:41</span><span style="display:flex;gap:2px;align-items:flex-end"><i class="sig" style="width:3px;height:4px"></i><i class="sig" style="width:3px;height:7px"></i><i class="sig" style="width:3px;height:10px"></i><i class="sig" style="width:3px;height:13px"></i><span class="batt"><i></i></span></span></div>
 <div class="lib">
-<div class="appbar">
-<span class="t">Anonrode</span>
-<span style="flex:1"></span>
-<div class="iconbtn">⌕</div>
-</div>
+<div class="appbar"><span class="t">Anonrode</span><span class="sp"></span><div class="iconbtn">⌕</div></div>
 
-<div style="padding:8px 18px 4px;font-size:11px;font-weight:700;color:rgba(240,242,248,.4);letter-spacing:1.5px;text-transform:uppercase">CONTINUE WATCHING</div>
+<div class="sec-h">▶ Continue Watching</div>
 <div class="cw-row">
-<div class="cwc">
-<div class="art gA"><div class="playbtn"></div></div>
-<div class="info"><div class="nm">Horimiya (2021)</div><div class="ep">S01 E04 · 12:44 / 23:10</div><div class="pbar"><i style="width:55%"></i></div></div>
-</div>
-<div class="cwc">
-<div class="art gB"><div class="playbtn"></div></div>
-<div class="info"><div class="nm">Blue Box</div><div class="ep">S01 E05 · watched</div><div class="pbar"><i style="width:100%"></i></div></div>
-</div>
-<div class="cwc">
-<div class="art gC"><div class="playbtn"></div></div>
-<div class="info"><div class="nm">One Piece</div><div class="ep">S01 E12 · 3:02 / 24:00</div><div class="pbar"><i style="width:13%"></i></div></div>
-</div>
+<div class="cwc"><div class="art gA"><div class="playbtn">▶</div></div><div class="info"><div class="nm">Horimiya (2021)</div><div class="ep">S01 E04 · 12:44 / 23:10</div><div class="pbar"><i style="width:55%"></i></div></div></div>
+<div class="cwc"><div class="art gB"><div class="playbtn">▶</div></div><div class="info"><div class="nm">Blue Box</div><div class="ep">S01 E05 · watched</div><div class="pbar"><i style="width:100%"></i></div></div></div>
+<div class="cwc"><div class="art gC"><div class="playbtn">▶</div></div><div class="info"><div class="nm">One Piece</div><div class="ep">S01 E12 · 3:02 / 24:00</div><div class="pbar"><i style="width:13%"></i></div></div></div>
 </div>
 
-<div class="sec-h">SERIES</div>
+<div class="sec-h">Series</div>
 <div class="grid">
-<div class="scard">
-<div class="poster gA"><span>H</span></div>
-<div class="body"><div class="nm">Horimiya (2021)</div><div class="meta">24 episodes · 3 watched</div><div class="prog"><div class="pbar"><i style="width:12%"></i></div><span class="cnt">3/24</span></div></div>
-</div>
-<div class="scard">
-<div class="poster gB"><span>B</span></div>
-<div class="body"><div class="nm">Blue Box</div><div class="meta">25 episodes · 25 watched</div><div class="prog"><div class="pbar"><i style="width:100%"></i></div><span class="cnt">25/25</span></div></div>
-</div>
-<div class="scard">
-<div class="poster gC"><span>O</span></div>
-<div class="body"><div class="nm">One Piece</div><div class="meta">S01–S04 · 40 eps</div><div class="prog"><div class="pbar"><i style="width:30%"></i></div><span class="cnt">12/40</span></div></div>
-</div>
-<div class="scard">
-<div class="poster gD"><span>📁</span></div>
-<div class="body"><div class="nm">Movies</div><div class="meta">38 videos</div><div class="prog"><div class="pbar" style="opacity:.3"></div><span class="cnt" style="color:rgba(240,242,248,.3)">folder</span></div></div>
-</div>
-</div>
-
-<div class="sec-h">ALL VIDEOS (127)</div>
-<div style="padding:0 18px">
-<div class="vrow"><div class="thumb gA"></div><div class="inf"><div class="tn">Horimiya S01E04.mp4</div><div class="tm">23 min · 820 MB · 1080p</div></div></div>
-<div class="vrow"><div class="thumb gB"></div><div class="inf"><div class="tn">Blue Box S01E01.mp4</div><div class="tm">24 min · 780 MB · 1080p</div></div></div>
-<div class="vrow"><div class="thumb gC"></div><div class="inf"><div class="tn">One Piece S01E12.mkv</div><div class="tm">24 min · 1.2 GB · 1080p</div></div></div>
+<div class="scard"><div class="poster gA"><span>H</span></div><div class="body"><div class="nm2">Horimiya (2021)</div><div class="meta">24 episodes · 3 watched</div><div class="prog"><div class="pbar"><i style="width:12%"></i></div><span class="cnt">3/24</span></div></div></div>
+<div class="scard"><div class="poster gB"><span>B</span></div><div class="body"><div class="nm2">Blue Box</div><div class="meta">25 eps · done</div><div class="prog"><div class="pbar"><i style="width:100%"></i></div><span class="cnt">25/25</span></div></div></div>
+<div class="scard"><div class="poster gC"><span>O</span></div><div class="body"><div class="nm2">One Piece</div><div class="meta">S01–S04 · 40 eps</div><div class="prog"><div class="pbar"><i style="width:30%"></i></div><span class="cnt">12/40</span></div></div></div>
+<div class="scard"><div class="poster gD"><span>📁</span></div><div class="body"><div class="nm2">Movies</div><div class="meta">38 videos</div><div class="prog"><div class="pbar" style="opacity:.2"></div><span class="cnt" style="color:rgba(240,242,248,.25)">folder</span></div></div></div>
 </div>
 
 <div class="nav">
@@ -169,86 +111,125 @@ body{background:#0a0c12;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;p
 </div>
 </div>
 </div>
-<div class="label">LIBRARY<br><span class="sub" style="text-align:center;display:block;color:#444;font-size:9px">continue watching · series grid · bottom nav</span></div>
+<div class="label">LIBRARY<br><span class="sub" style="text-align:center;display:block;color:#444;font-size:9px">continue watching · series grid · bottom nav M3</span></div>
 </div>
 
-<!-- ═══════ PLAYER ═══════ -->
+<!-- ══════════ PLAYER CONTROLS VISIBLE ══════════ -->
 <div>
 <div class="phone">
-<div class="notch" style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div class="status"><span>9:41</span><span style="display:flex;gap:2px;align-items:flex-end"><i class="sig" style="width:3px;height:4px"></i><i class="sig" style="width:3px;height:7px"></i><i class="sig" style="width:3px;height:10px"></i><i class="sig" style="width:3px;height:13px"></i><span class="batt"><i></i></span></span></div>
 <div class="player">
 <div class="vid-area"><div class="bigpp">▶</div></div>
-<div class="topscrim"></div>
-<div class="botsrcim"></div>
+<div class="topscrim"></div><div class="botsrcim"></div>
 
 <div class="ptop">
-<span style="width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px">←</span>
-<span class="ttl">Horimiya (2021) S01E04</span>
-<span class="badge">1×</span>
-<span class="badge">FIT</span>
-<span class="badge on">⛶</span>
+<span class="back">←</span><span class="pttl">Horimiya (2021) S01E04</span>
+<span class="badge">1×</span><span class="badge">FIT</span><span class="badge on">⛶</span>
 </div>
 
-<div class="subtxt"><span class="subline">But I've been watching you since we were kids.</span></div>
+<div class="subtxt"><span class="sl">But I've been watching you since we were kids.</span>
+<div class="sync-pill">◉ AUTO SYNC +0.3s</div>
+</div>
 
 <div class="pbot">
-<div class="seekrow">
-<span class="tm">12:44</span>
-<div class="sbar"><div class="strk"><div class="sbuf"></div><div class="spro"></div></div><div class="sthumb"></div></div>
-<span class="tm r">23:10</span>
-</div>
+<div class="skrow"><span class="tm">12:44</span>
+<div class="sb"><div class="strk"><div class="sbuf"></div><div class="sprg"></div></div><div class="sthumb"></div></div>
+<span class="tm r">23:10</span></div>
 <div class="arow">
-<span class="cc-lab">◉ CC · English</span>
-<button class="ibtn">−.25</button>
-<button class="ibtn">+.25</button>
-<button class="ibtn">💬</button>
-<button class="ibtn">1×</button>
+<span class="cclab">◉ CC English</span>
+<button class="ibtn">−.25</button><button class="ibtn">+.25</button>
+<button class="ibtn">💬</button><button class="ibtn">1×</button>
 </div>
-<div class="transport">
-<span class="tpbtn">⏮</span>
-<span class="tpbtn main">⏸</span>
-<span class="tpbtn">⏭</span>
-</div>
-<div style="display:flex;justify-content:center;gap:20px;padding:2px 0">
-<span style="width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;color:rgba(255,255,255,.85)">🔒</span>
-<span style="width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;color:rgba(255,255,255,.85)">⧉</span>
-<span style="width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;color:rgba(255,255,255,.85)">⏱</span>
+<div class="tprow"><span class="tp">🔒</span><span class="tp main">⏸</span><span class="tp">⏭</span></div>
 </div>
 </div>
 </div>
-</div>
-<div class="label">PLAYER — CONTROLS VISIBLE<br><span class="sub" style="text-align:center;display:block;color:#444;font-size:9px">full-bleed video · gradient scrims · auto-hide while playing · subs overlay</span></div>
+<div class="label">PLAYER — CONTROLS ON<br><span class="sub" style="text-align:center;display:block;color:#444;font-size:9px">full-bleed video · gradient scrims · auto-hide 3.5s while playing</span></div>
 </div>
 
-<!-- ═══════ RESUME DIALOG ═══════ -->
+<!-- ══════════ PLAYER GESTURES HIDDEN ══════════ -->
 <div>
 <div class="phone">
-<div class="notch" style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div class="status"><span>9:41</span><span style="display:flex;gap:2px;align-items:flex-end"><i class="sig" style="width:3px;height:4px"></i><i class="sig" style="width:3px;height:7px"></i><i class="sig" style="width:3px;height:10px"></i><i class="sig" style="width:3px;height:13px"></i><span class="batt"><i></i></span></span></div>
+<div class="player" style="filter:brightness(.85)">
+<div class="vid-area"><div class="bigpp" style="opacity:.3">▶</div></div>
+<div style="position:absolute;bottom:60px;left:24px;right:24px;text-align:center;z-index:10"><span class="sl">They said they'd be here by now.</span></div>
+<div style="position:absolute;top:46%;left:18%;text-align:center;color:rgba(255,255,255,.3);font-size:10px;font-family:'Courier New'">☀<br>BRIGHTNESS<br>←swipe</div>
+<div style="position:absolute;right:18%;top:46%;text-align:center;color:rgba(255,255,255,.3);font-size:10px;font-family:'Courier New'">🔊<br>VOLUME<br>swipe→</div>
+<div style="position:absolute;top:46%;left:50%;transform:translate(-50%,-50%);width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;font-size:22px;color:rgba(255,255,255,.15)">⏸</div>
+</div>
+</div>
+<div class="label">PLAYER — GESTURE ZONES<br><span class="sub" style="text-align:center;display:block;color:#444;font-size:9px">tap = show controls · double-tap = ±10s · swipe L=☀ R=🔊 · sync runs silently</span></div>
+</div>
+
+<!-- ══════════ RESUME DIALOG ══════════ -->
+<div>
+<div class="phone">
+<div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div class="status"><span>9:41</span><span style="display:flex;gap:2px;align-items:flex-end"><i class="sig" style="width:3px;height:4px"></i><i class="sig" style="width:3px;height:7px"></i><i class="sig" style="width:3px;height:10px"></i><i class="sig" style="width:3px;height:13px"></i><span class="batt"><i></i></span></span></div>
+<div class="player" style="filter:brightness(.35)">
+<div class="vid-area" style="position:absolute;inset:0"></div>
+</div>
+<div style="position:absolute;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:30">
+<div style="width:280px;background:#14161f;border:1px solid #2a2f45;border-radius:20px;padding:24px 20px 16px;box-shadow:0 20px 60px rgba(0,0,0,.7)">
+<div style="text-align:center;font-size:17px;font-weight:700;color:#fff;margin-bottom:6px">Resume playback?</div>
+<div style="text-align:center;font-size:12px;color:rgba(240,242,248,.5);font-family:'Courier New';margin-bottom:18px;line-height:1.6">Horimiya (2021) · S01 E04<br>left off at <b style="color:#f0f2f8">12:44</b> of 23:10</div>
+<div style="display:flex;gap:10px">
+<div style="flex:1;background:linear-gradient(135deg,#6c63ff,#00d4aa);color:#fff;text-align:center;padding:13px 0;border-radius:14px;font-size:13px;font-weight:700;cursor:pointer">▶ Resume</div>
+<div style="flex:1;background:#22263a;color:#e8eaf0;text-align:center;padding:13px 0;border-radius:14px;font-size:13px;font-weight:700;cursor:pointer;border:1px solid #2a2f45">↺ Start over</div>
+</div>
+<div style="text-align:center;font-size:9px;color:#5c6478;margin-top:12px;font-family:'Courier New'">ALWAYS ASK · ALWAYS RESUME · START OVER</div>
+</div>
+</div>
+</div>
+<div class="label">RESUME DIALOG<span class="s" style="display:block;text-align:center;color:#444;font-size:9px;margin-top:2px">MX Player pattern · position saved every 5 seconds</span></div>
+</div>
+
+<!-- ══════════ AUTOPLAY COUNTDOWN ══════════ -->
+<div>
+<div class="phone">
+<div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div class="status"><span>9:41</span><span style="display:flex;gap:2px;align-items:flex-end"><i class="sig" style="width:3px;height:4px"></i><i class="sig" style="width:3px;height:7px"></i><i class="sig" style="width:3px;height:10px"></i><i class="sig" style="width:3px;height:13px"></i><span class="batt"><i></i></span></span></div>
 <div class="player" style="filter:brightness(.4)">
 <div class="vid-area" style="position:absolute;inset:0"></div>
 </div>
-<div class="resume-ov">
-<div class="resume-card">
-<div class="rt">Resume playback?</div>
-<div class="rs">Horimiya (2021) · S01 E04<br>left off at <b>12:44</b> of 23:10</div>
-<div class="rdbtns">
-<div class="rdb primary">▶ Resume</div>
-<div class="rdb secondary">↺ Start over</div>
-</div>
-<div style="text-align:center;font-size:10px;color:#5c6478;margin-top:12px;font-family:'Courier New'">ALWAYS ASK · ALWAYS RESUME · START OVER</div>
+<div style="position:absolute;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:30">
+<div style="width:280px;background:#14161f;border:1px solid #2a2f45;border-radius:20px;padding:24px 20px 16px;box-shadow:0 20px 60px rgba(0,0,0,.7);text-align:center">
+<div style="font-size:17px;font-weight:700;color:#fff;margin-bottom:6px">Next episode in 3...</div>
+<div style="font-size:12px;color:rgba(240,242,248,.5);margin-bottom:18px">Up Next: Horimiya S01 E05</div>
+<div style="display:flex;gap:10px">
+<div style="flex:1;background:linear-gradient(135deg,#6c63ff,#00d4aa);color:#fff;padding:13px 0;border-radius:14px;font-size:13px;font-weight:700;cursor:pointer">▶ Play now</div>
+<div style="flex:1;background:#22263a;color:#e8eaf0;padding:13px 0;border-radius:14px;font-size:13px;font-weight:700;cursor:pointer;border:1px solid #2a2f45">Cancel</div>
 </div>
 </div>
 </div>
-<div class="label">RESUME DIALOG<span class="sub" style="text-align:center;display:block;color:#444;font-size:9px">MX Player pattern · position saved every 5s</span></div>
+</div>
+<div class="label">AUTOPLAY COUNTDOWN<span class="s" style="display:block;text-align:center;color:#444;font-size:9px;margin-top:2px">auto-advance to next episode in queue</span></div>
 </div>
 
-<!-- ═══════ SLEEP TIMER ═══════ -->
+<!-- ══════════ PiP MODE ══════════ -->
 <div>
 <div class="phone">
-<div class="notch" style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div class="status"><span>9:41</span><span style="display:flex;gap:2px;align-items:flex-end"><i class="sig" style="width:3px;height:4px"></i><i class="sig" style="width:3px;height:7px"></i><i class="sig" style="width:3px;height:10px"></i><i class="sig" style="width:3px;height:13px"></i><span class="batt"><i></i></span></span></div>
+<div class="player" style="filter:brightness(.75)">
+<div class="vid-area" style="position:absolute;inset:0"></div>
+<div style="position:absolute;top:70px;left:20px;color:rgba(255,255,255,.6);font-size:12px">Horimiya S01E04</div>
+<div style="position:absolute;top:90px;left:20px;color:rgba(255,255,255,.4);font-size:10px">12:44 / 23:10</div>
+</div>
+</div>
+<div class="label">PiP MODE<span class="s" style="display:block;text-align:center;color:#444;font-size:9px;margin-top:2px">auto-enter on home press · all controls hidden</span></div>
+</div>
+
+<!-- ══════════ SLEEP TIMER ══════════ -->
+<div>
+<div class="phone">
+<div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div class="status"><span>9:41</span><span style="display:flex;gap:2px;align-items:flex-end"><i class="sig" style="width:3px;height:4px"></i><i class="sig" style="width:3px;height:7px"></i><i class="sig" style="width:3px;height:10px"></i><i class="sig" style="width:3px;height:13px"></i><span class="batt"><i></i></span></span></div>
 <div class="player" style="filter:brightness(.5)">
 <div class="vid-area" style="position:absolute;inset:0"></div>
-<div class="ptop" style="z-index:5"><span class="ttl">Horimiya (2021) S01E04</span></div>
 </div>
 <div style="position:absolute;top:80px;right:40px;background:#1a1d29;border-radius:12px;border:1px solid #2a2f45;padding:4px 0;z-index:30;box-shadow:0 12px 40px rgba(0,0,0,.6);min-width:170px">
 <div style="padding:10px 16px;font-size:13px;color:#00d4aa">✓ Off</div>
@@ -259,22 +240,22 @@ body{background:#0a0c12;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;p
 <div style="padding:10px 16px;font-size:13px;color:#e8eaf0">60 minutes</div>
 <div style="padding:10px 16px;font-size:13px;color:#e8eaf0">End of episode</div>
 </div>
-<div style="position:absolute;top:130px;right:48px;z-index:31;background:rgba(0,212,170,.15);color:#00d4aa;padding:3px 10px;border-radius:14px;font-size:11px;font-family:'Courier New'">14:32</div>
+<div style="position:absolute;top:120px;right:48px;background:rgba(0,212,170,.15);color:#00d4aa;padding:3px 10px;border-radius:14px;font-size:11px;font-family:'Courier New'">14:32</div>
 </div>
-<div class="label">SLEEP TIMER<span class="sub" style="text-align:center;display:block;color:#444;font-size:9px">dropdown presets · countdown badge on button</span></div>
+<div class="label">SLEEP TIMER<span class="s" style="display:block;text-align:center;color:#444;font-size:9px;margin-top:2px">dropdown presets · countdown badge on button · pauses not kills</span></div>
 </div>
 
-<!-- ═══════ PiP MODE ═══════ -->
+<!-- ══════════ LOCKED ══════════ -->
 <div>
 <div class="phone">
-<div class="notch" style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
-<div class="player" style="filter:brightness(.7)">
+<div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:24px;border-radius:14px;background:#000;z-index:5"></div>
+<div class="status"><span>9:41</span><span style="display:flex;gap:2px;align-items:flex-end"><i class="sig" style="width:3px;height:4px"></i><i class="sig" style="width:3px;height:7px"></i><i class="sig" style="width:3px;height:10px"></i><i class="sig" style="width:3px;height:13px"></i><span class="batt"><i></i></span></span></div>
+<div class="player" style="filter:brightness(.8)">
 <div class="vid-area" style="position:absolute;inset:0"></div>
-<div style="position:absolute;top:60px;left:20px;color:rgba(255,255,255,.7);font-size:12px">Horimiya S01E04</div>
-<div style="position:absolute;top:90px;left:20px;color:rgba(255,255,255,.5);font-size:10px">12:44 / 23:10</div>
+<div style="position:absolute;top:52px;left:14px;width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-size:14px;color:#00d4aa;z-index:10">🔓</div>
 </div>
 </div>
-<div class="label">PiP MODE<span class="s" style="display:block;text-align:center;color:#444;font-size:9px;margin-top:2px">auto-enter on home press · controls hidden · tap to restore</span></div>
+<div class="label">SCREEN LOCKED<span class="s" style="text-align:center;display:block;color:#444;font-size:9px;margin-top:2px">all gestures disabled · tap unlock icon only</span></div>
 </div>
 
 </div>
