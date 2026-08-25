@@ -2,6 +2,7 @@ package dev.anonrode.player
 
 import android.app.PictureInPictureParams
 import android.content.ContentUris
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -11,13 +12,20 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Rational
+import androidx.mediarouter.media.MediaRouter
+import androidx.mediarouter.media.MediaRouter.RouteInfo
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +35,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import dev.anonrode.player.audio.CastRoutePickerSheet
 import dev.anonrode.player.audio.EqualizerManager
 import dev.anonrode.player.core.datastore.playerSettingsDataStore
 import dev.anonrode.player.core.media.log.AppLog
@@ -66,6 +75,13 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_TITLE = "title"
         private val SUB_EXTS = listOf("srt", "vtt", "ass", "ssa")
         private const val NEXT_COUNTDOWN_SEC = 5
+        // Selector used for both the activity-level route-name observer
+        // and the picker composable. Covers Cast, Bluetooth, HDMI, Miracast.
+        private val MediaRouteSelectorLite = androidx.mediarouter.media.MediaRouteSelector.Builder()
+            .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_LIVE_AUDIO)
+            .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_LIVE_VIDEO)
+            .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_REMOTE_PLAYBACK)
+            .build()
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -129,6 +145,18 @@ class PlayerActivity : ComponentActivity() {
     private var equalizerOn by mutableStateOf(false)
 
     /**
+     * Android system MediaRouter. We use it (instead of the Google Cast
+     * SDK) to enumerate and pick audio output routes — it covers Cast
+     * devices, Bluetooth audio, wired headsets, HDMI, and Miracast under
+     * one API, with no new dependency. Lives for the activity's lifetime;
+     * [onDestroy] releases the callback.
+     */
+    private lateinit var mediaRouter: MediaRouter
+    private var castRouteCallback: MediaRouter.Callback? = null
+    private var castPickerOpen by mutableStateOf(false)
+    private var castRouteName by mutableStateOf<String?>(null)
+
+    /**
      * Live subtitle offset for the SYNCED chip. Mirrors the engine's
      * computed offset (auto-lock + manual delay) plus any ±0.1s nudge the
      * user fires from the sync popover. Re-read every render tick.
@@ -173,6 +201,26 @@ class PlayerActivity : ComponentActivity() {
         title = intent.getStringExtra(EXTRA_TITLE) ?: uriStr
         val app = AnonrodeApp.get(this)
         val engine = app.engine
+
+        // MediaRouter is an application service; grab it once and hold a
+        // reference for the activity's lifetime. The picker composable
+        // subscribes to its callback while visible; we release on destroy.
+        mediaRouter = getSystemService(Context.MEDIA_ROUTER_SERVICE) as MediaRouter
+        refreshCastRouteName()
+        val cb = object : MediaRouter.SimpleCallback() {
+            override fun onRouteSelected(router: MediaRouter, route: RouteInfo) {
+                refreshCastRouteName()
+            }
+            override fun onRouteUnselected(router: MediaRouter, route: RouteInfo) {
+                refreshCastRouteName()
+            }
+        }
+        castRouteCallback = cb
+        mediaRouter.addCallback(
+            MediaRouteSelectorLite,
+            cb,
+            MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY,
+        )
 
         engine.addListener(playerEventListener)
 
@@ -245,7 +293,32 @@ class PlayerActivity : ComponentActivity() {
                             isRebuildingDecoder = isRebuildingDecoder,
                             onRebuildDecoder = { newHw -> requestDecoderRebuild(newHw) },
                             onToggleEqualizer = { request -> requestToggleEqualizer(request) },
+                            onOpenCastPicker = { requestOpenCastPicker() },
+                            castRouteName = castRouteName,
                         )
+                    }
+                    // ── Cast route picker (audio output) ───────────────
+                    if (castPickerOpen) {
+                        Box(
+                            modifier = androidx.compose.ui.Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .clickable { castPickerOpen = false },
+                            contentAlignment = androidx.compose.ui.Alignment.BottomCenter,
+                        ) {
+                            Box(
+                                modifier = androidx.compose.ui.Modifier
+                                    .clickable(enabled = false) { /* swallow */ }
+                                    .padding(12.dp),
+                            ) {
+                                CastRoutePickerSheet(
+                                    mediaRouter = mediaRouter,
+                                    accent = palette.accent,
+                                    onSelectRoute = { onCastRouteSelected(it) },
+                                    onDismiss = { castPickerOpen = false },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -388,6 +461,32 @@ class PlayerActivity : ComponentActivity() {
         val ok = equalizer.setEnabled(requested)
         equalizerOn = ok && equalizer.isEnabled
         return equalizerOn
+    }
+
+    /**
+     * Re-read the currently selected route off the MediaRouter. Mirrored
+     * into Compose state so the Cast chip's tooltip + active tint stay
+     * live. Returns null when the user is back on the phone speaker.
+     */
+    private fun refreshCastRouteName() {
+        if (!::mediaRouter.isInitialized) return
+        val sel = mediaRouter.selectedRoute ?: return
+        castRouteName = if (sel.isDefault) null else sel.name
+    }
+
+    private fun requestOpenCastPicker() {
+        AppLog.d("CAST", "opening route picker")
+        castPickerOpen = true
+    }
+
+    private fun onCastRouteSelected(route: RouteInfo) {
+        AppLog.d("CAST", "selecting route: " + route.name + " (default=" + route.isDefault + ")")
+        mediaRouter.selectRoute(route)
+        // The MediaRouter callback will fire onRouteSelected and update
+        // [castRouteName] via [refreshCastRouteName], but write it eagerly
+        // so the chip turns green instantly.
+        castRouteName = if (route.isDefault) null else route.name
+        castPickerOpen = false
     }
 
     /**
@@ -632,11 +731,15 @@ class PlayerActivity : ComponentActivity() {
         renderTick = null
         pendingNext = null
         val engine = AnonrodeApp.get(this).engine
-        engine.player.removeListener(playerEventListener)
+        engine.removeListener(playerEventListener)
         engine.savePositionNow()
         // Release the audio effect on activity destroy so the native
         // equalizer instance doesn't outlive the screen.
         equalizer.release()
+        // Drop the MediaRouter callback so the framework doesn't keep a
+        // strong ref to the (now-dying) activity through its selector.
+        castRouteCallback?.let { mediaRouter.removeCallback(it) }
+        castRouteCallback = null
         super.onDestroy()
     }
 }

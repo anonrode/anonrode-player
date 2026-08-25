@@ -10,6 +10,7 @@ androidxCore = "1.19.0"
 androidxDataStore = "1.2.1"
 androidxLifecycle = "2.11.0"
 androidxMedia3 = "1.11.0"
+androidxMediaRouter = "1.8.1"
 coil = "3.5.0"
 junit4 = "4.13.2"
 kotlin = "2.4.10"
@@ -41,6 +42,7 @@ androidx-media3-exoplayer-rtsp = { group = "androidx.media3", name = "media3-exo
 androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "androidxMedia3" }
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "androidxMedia3" }
 androidx-media3-ui-compose = { group = "androidx.media3", name = "media3-ui-compose", version.ref = "androidxMedia3" }
+androidx-mediarouter = { group = "androidx.mediarouter", name = "mediarouter", version.ref = "androidxMediaRouter" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
