@@ -719,6 +719,12 @@ fun PlayerScreen(
      * chip toggles on/off; long-press opens the panel.
      */
     onOpenEqPanel: () -> Unit = {},
+    /**
+     * Open the audio track picker. The host reads [Player.getCurrentTracks]
+     * and shows a bottom sheet of available audio tracks for the current
+     * media.
+     */
+    onOpenAudioTrackPicker: () -> Unit = {},
     /** True if a decoder swap is currently in flight; hides the HW chip. */
     isRebuildingDecoder: Boolean = false,
     /** Name of the currently selected Cast route, for the chip tooltip. */
@@ -1000,11 +1006,11 @@ fun PlayerScreen(
     }
 
     fun pickAudioTrack() {
-        // Media3's TrackSelector exposes audio tracks via Player.getCurrentTracks();
-        // without pulling that into the engine API, surface a single-track
-        // confirmation so the button visibly does something.
-        audioTrackToast = "Audio: track 1 (English 5.1)"
-        showTransientToast(audioTrackToast!!)
+        // Opens the audio track picker in the host (PlayerActivity). The
+        // host reads Player.getCurrentTracks() and shows a bottom sheet
+        // listing every available audio track.
+        view.haptic()
+        onOpenAudioTrackPicker()
     }
 
     fun selectSleep(opt: SleepOption) {

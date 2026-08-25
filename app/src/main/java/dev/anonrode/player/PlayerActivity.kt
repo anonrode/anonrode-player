@@ -38,6 +38,7 @@ import androidx.media3.common.util.UnstableApi
 import dev.anonrode.player.audio.CastRoutePickerSheet
 import dev.anonrode.player.audio.EqualizerManager
 import dev.anonrode.player.audio.EqualizerPanelSheet
+import dev.anonrode.player.audio.AudioTrackPickerSheet
 import dev.anonrode.player.core.datastore.playerSettingsDataStore
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.subtitle.SubtitleParser
@@ -145,6 +146,7 @@ class PlayerActivity : ComponentActivity() {
     private val equalizer = EqualizerManager()
     private var equalizerOn by mutableStateOf(false)
     private var eqPanelOpen by mutableStateOf(false)
+    private var audioTrackPickerOpen by mutableStateOf(false)
 
     /**
      * Android system MediaRouter. We use it (instead of the Google Cast
@@ -297,6 +299,7 @@ class PlayerActivity : ComponentActivity() {
                             onToggleEqualizer = { request -> requestToggleEqualizer(request) },
                             onOpenCastPicker = { requestOpenCastPicker() },
                             onOpenEqPanel = { eqPanelOpen = true },
+                            onOpenAudioTrackPicker = { requestOpenAudioTrackPicker() },
                             castRouteName = castRouteName,
                         )
                     }
@@ -341,6 +344,29 @@ class PlayerActivity : ComponentActivity() {
                                     equalizer = equalizer,
                                     accent = palette.accent,
                                     onDismiss = { eqPanelOpen = false },
+                                )
+                            }
+                        }
+                    }
+                    // ── Audio track picker ──────────────────────────────
+                    if (audioTrackPickerOpen) {
+                        Box(
+                            modifier = androidx.compose.ui.Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .clickable { audioTrackPickerOpen = false },
+                            contentAlignment = androidx.compose.ui.Alignment.BottomCenter,
+                        ) {
+                            Box(
+                                modifier = androidx.compose.ui.Modifier
+                                    .clickable(enabled = false) { /* swallow */ }
+                                    .padding(12.dp),
+                            ) {
+                                AudioTrackPickerSheet(
+                                    player = AnonrodeApp.get(this@PlayerActivity).engine.player,
+                                    accent = palette.accent,
+                                    onSelectTrack = { onAudioTrackSelected(it) },
+                                    onDismiss = { audioTrackPickerOpen = false },
                                 )
                             }
                         }
@@ -512,6 +538,46 @@ class PlayerActivity : ComponentActivity() {
         // so the chip turns green instantly.
         castRouteName = if (route.isDefault) null else route.name
         castPickerOpen = false
+    }
+
+    private fun requestOpenAudioTrackPicker() {
+        AppLog.d("TRACKS", "opening audio track picker")
+        audioTrackPickerOpen = true
+    }
+
+    private fun onAudioTrackSelected(trackId: String) {
+        // trackId is "trackInfoId:trackIndexInGroup" — split and apply via Media3's
+        // TrackSelectionParameters. We use the Player.setTrackSelectionParameters
+        // API which is the supported public way to switch tracks at runtime.
+        val parts = trackId.split(":")
+        if (parts.size != 2) {
+            AppLog.e("TRACKS", "bad trackId format: " + trackId)
+            return
+        }
+        val player = AnonrodeApp.get(this).engine.player
+        val targetInfoId = parts[0]
+        val targetIndex = parts[1].toIntOrNull()
+        if (targetIndex == null) {
+            AppLog.e("TRACKS", "non-int trackIndex in: " + trackId)
+            return
+        }
+        for (trackInfo in player.currentTracks) {
+            if (trackInfo.type != androidx.media3.common.C.TRACK_TYPE_AUDIO) continue
+            if (trackInfo.id != targetInfoId) continue
+            val builder = player.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
+            // Build a new selection matching only the chosen index.
+            val selection = androidx.media3.common.TrackSelectionParameters.TrackSelectionOverride(
+                trackInfo.mediaTrackGroup,
+                listOf(targetIndex),
+            )
+            builder.clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
+            builder.addOverride(selection)
+            player.trackSelectionParameters = builder.build()
+            AppLog.d("TRACKS", "selected track: $trackId")
+            break
+        }
+        audioTrackPickerOpen = false
     }
 
     /**
