@@ -23,26 +23,30 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Coffee
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Swipe
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,23 +67,15 @@ import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 import kotlinx.coroutines.launch
 
 /* ── Settings screen ─────────────────────────────────────────────────────
- * Mirrors docs/ui-app-final.html scr-set: top brand header, then 8 rows
- * (Resume / Subtitle auto-sync / Subtitle offset / Autoplay / Sleep /
- *  Zoom / Lock / Theme). Each row is functional + persistent:
+ * Every row reads/writes the PlayerSettings DataStore, so each choice is
+ * persistent and applied live to the player (the activity collects the
+ * same flow). Rows: Resume / Auto-sync / Seek step / Autoplay / Sleep /
+ * gestures (double-tap, swipe, volume, brightness) / Auto-hide /
+ * Background playback / Volume boost / Decoder priority / Subtitle
+ * language / Fast-seek threshold / Theme.
  *
- *  - Resume          : DataStore.resumeBehavior (ALWAYS_ASK / ALWAYS_RESUME
- *                       / ALWAYS_START_OVER)
- *  - Subtitle auto-sync : DataStore.autoSyncEnabled toggle
- *  - Subtitle offset : DataStore.seekIncrementSec (5/10/15/30/60)
- *  - Autoplay        : DataStore.autoAdvance toggle
- *  - Sleep           : same SleepOptions as the player overlay
- *  - Zoom            : cycle FIT/CROP/STR (mirrors the player button)
- *  - Lock            : same boolean as the player overlay
- *  - Theme           : cycle MX / SIGNAL / LIGHT / BLACK
- *
- * The Theme row in particular is the user-visible "skin" surface; the
- * entire screen re-paints on cycle because rememberSkinPalette() reacts
- * to the StateFlow.
+ * Per-video state (zoom, audio/subtitle track, position) intentionally
+ * lives in Room, not here — the player HUD owns those controls.
  * ------------------------------------------------------------------------- */
 
 @Composable
@@ -183,13 +179,13 @@ fun SettingsScreen(
                 )
             }
 
-            // ── Subtitle offset (manual nudge) ──────────────────
+            // ── Seek step (± buttons + double-tap distance) ───────
             item("suboffset") {
                 SettingsRow(
                     palette = palette,
                     icon = Icons.Filled.ClosedCaption,
-                    title = "Subtitle offset",
-                    subtitle = "Manual nudge step",
+                    title = "Seek step",
+                    subtitle = "Buttons & double-tap distance",
                     trailing = {
                         ValueText(palette = palette, text = "${settings.seekIncrementSec}s")
                     },
@@ -250,38 +246,245 @@ fun SettingsScreen(
                 )
             }
 
-            // ── Zoom mode (FIT / CROP / STRETCH) ────────────────
-            item("zoom") {
-                var zoom by rememberSaveable { mutableStateOf(0) }
-                val labels = arrayOf("FIT", "CROP", "STR")
+            // ── Gestures: each row mirrors a PlayerSettings toggle that
+            //    gates the matching player gesture live. ──────────────
+            item("doubleTapSeek") {
                 SettingsRow(
                     palette = palette,
-                    icon = Icons.Filled.AspectRatio,
-                    title = "Zoom mode",
-                    subtitle = labels.joinToString(" / "),
+                    icon = Icons.Filled.TouchApp,
+                    title = "Double-tap to seek",
+                    subtitle = "Tap left / right side to jump",
                     trailing = {
-                        ValueText(palette = palette, text = labels[zoom])
-                    },
-                    onClick = {
-                        zoom = (zoom + 1) % labels.size
+                        ToggleSwitch(
+                            palette = palette,
+                            on = settings.doubleTapSeek,
+                            onToggle = {
+                                coroutineScope.launch {
+                                    dataStore.updateData { it.copy(doubleTapSeek = !settings.doubleTapSeek) }
+                                }
+                            },
+                        )
                     },
                 )
             }
 
-            // ── Player lock (mirrors the player overlay toggle) ──
-            item("lock") {
-                var locked by rememberSaveable { mutableStateOf(false) }
+            item("swipeToSeek") {
                 SettingsRow(
                     palette = palette,
-                    icon = Icons.Filled.Lock,
-                    title = "Player lock",
-                    subtitle = "Disable gestures & controls",
+                    icon = Icons.Filled.Swipe,
+                    title = "Swipe to seek",
+                    subtitle = "Horizontal drag scrubs the timeline",
                     trailing = {
                         ToggleSwitch(
                             palette = palette,
-                            on = locked,
-                            onToggle = { locked = !locked },
+                            on = settings.swipeToSeek,
+                            onToggle = {
+                                coroutineScope.launch {
+                                    dataStore.updateData { it.copy(swipeToSeek = !settings.swipeToSeek) }
+                                }
+                            },
                         )
+                    },
+                )
+            }
+
+            item("volumeGesture") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.VolumeUp,
+                    title = "Volume gesture",
+                    subtitle = "Vertical drag on the right side",
+                    trailing = {
+                        ToggleSwitch(
+                            palette = palette,
+                            on = settings.volumeGesture,
+                            onToggle = {
+                                coroutineScope.launch {
+                                    dataStore.updateData { it.copy(volumeGesture = !settings.volumeGesture) }
+                                }
+                            },
+                        )
+                    },
+                )
+            }
+
+            item("brightnessGesture") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.WbSunny,
+                    title = "Brightness gesture",
+                    subtitle = "Vertical drag on the left side",
+                    trailing = {
+                        ToggleSwitch(
+                            palette = palette,
+                            on = settings.brightnessGesture,
+                            onToggle = {
+                                coroutineScope.launch {
+                                    dataStore.updateData { it.copy(brightnessGesture = !settings.brightnessGesture) }
+                                }
+                            },
+                        )
+                    },
+                )
+            }
+
+            item("autoHide") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.Timer,
+                    title = "Auto-hide controls",
+                    subtitle = "Delay before the HUD disappears",
+                    trailing = {
+                        ValueText(
+                            palette = palette,
+                            text = when (settings.autoHideControlsMs) {
+                                2500L -> "2.5s"
+                                5000L -> "5s"
+                                8000L -> "8s"
+                                else -> "3.5s"
+                            },
+                        )
+                    },
+                    onClick = {
+                        coroutineScope.launch {
+                            val steps = longArrayOf(2500L, 3500L, 5000L, 8000L)
+                            val idx = steps.indexOf(settings.autoHideControlsMs).coerceAtLeast(0)
+                            dataStore.updateData { it.copy(autoHideControlsMs = steps[(idx + 1) % steps.size]) }
+                        }
+                    },
+                )
+            }
+
+            item("backgroundPlayback") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.Headphones,
+                    title = "Background playback",
+                    subtitle = "Keep playing when the app is hidden",
+                    trailing = {
+                        ToggleSwitch(
+                            palette = palette,
+                            on = settings.backgroundPlayback,
+                            onToggle = {
+                                coroutineScope.launch {
+                                    dataStore.updateData { it.copy(backgroundPlayback = !settings.backgroundPlayback) }
+                                }
+                            },
+                        )
+                    },
+                )
+            }
+
+            // ── Volume boost (DSP gain above system max) ─────────
+            item("volumeBoost") {
+                val cycle = intArrayOf(0, 50, 100, 200)
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.GraphicEq,
+                    title = "Volume boost",
+                    subtitle = "Extra loudness above system max",
+                    trailing = {
+                        ValueText(
+                            palette = palette,
+                            text = if (settings.volumeBoostPct == 0) "Off"
+                            else "+${settings.volumeBoostPct}%",
+                        )
+                    },
+                    onClick = {
+                        val idx = cycle.indexOf(settings.volumeBoostPct).coerceAtLeast(0)
+                        val next = cycle[(idx + 1) % cycle.size]
+                        coroutineScope.launch {
+                            dataStore.updateData { it.copy(volumeBoostPct = next) }
+                        }
+                    },
+                )
+            }
+
+            // ── Decoder priority ────────────────────────────────
+            item("decoder") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.Memory,
+                    title = "Decoder priority",
+                    subtitle = "Which video decoder to prefer",
+                    trailing = {
+                        ValueText(
+                            palette = palette,
+                            text = when (settings.decoderPriority) {
+                                dev.anonrode.player.core.datastore.DecoderPriority.PREFER_APP -> "APP SW"
+                                dev.anonrode.player.core.datastore.DecoderPriority.DEVICE_ONLY -> "HW ONLY"
+                                else -> "HW + SW"
+                            },
+                        )
+                    },
+                    onClick = {
+                        coroutineScope.launch {
+                            val next = when (settings.decoderPriority) {
+                                dev.anonrode.player.core.datastore.DecoderPriority.PREFER_DEVICE ->
+                                    dev.anonrode.player.core.datastore.DecoderPriority.PREFER_APP
+                                dev.anonrode.player.core.datastore.DecoderPriority.PREFER_APP ->
+                                    dev.anonrode.player.core.datastore.DecoderPriority.DEVICE_ONLY
+                                else -> dev.anonrode.player.core.datastore.DecoderPriority.PREFER_DEVICE
+                            }
+                            dataStore.updateData { it.copy(decoderPriority = next) }
+                        }
+                    },
+                )
+            }
+
+            // ── Preferred subtitle language ─────────────────────
+            item("sublang") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.Translate,
+                    title = "Subtitle language",
+                    subtitle = "Preferred language for online search",
+                    trailing = {
+                        ValueText(
+                            palette = palette,
+                            text = when (settings.defaultSubtitleLanguage) {
+                                "chi" -> "中文"
+                                "eng" -> "English"
+                                else -> "中 + EN"
+                            },
+                        )
+                    },
+                    onClick = {
+                        coroutineScope.launch {
+                            val next = when (settings.defaultSubtitleLanguage) {
+                                null -> "chi"
+                                "chi" -> "eng"
+                                else -> null
+                            }
+                            dataStore.updateData { it.copy(defaultSubtitleLanguage = next) }
+                        }
+                    },
+                )
+            }
+
+            // ── Fast seek threshold ─────────────────────────────
+            item("fastseek") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.FastForward,
+                    title = "Fast seek threshold",
+                    subtitle = "Long jumps snap to keyframes",
+                    trailing = {
+                        ValueText(
+                            palette = palette,
+                            text = when (settings.fastSeekThresholdSec) {
+                                60L -> "1m"
+                                300L -> "5m"
+                                else -> "2m"
+                            },
+                        )
+                    },
+                    onClick = {
+                        coroutineScope.launch {
+                            val steps = longArrayOf(60L, 120L, 300L)
+                            val idx = steps.indexOf(settings.fastSeekThresholdSec).coerceAtLeast(0)
+                            dataStore.updateData { it.copy(fastSeekThresholdSec = steps[(idx + 1) % steps.size]) }
+                        }
                     },
                 )
             }

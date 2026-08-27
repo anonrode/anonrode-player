@@ -28,4 +28,6 @@ dependencies {
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.onnxruntime.android)
+    implementation(libs.androidx.work.runtime.ktx)
 }

@@ -20,7 +20,10 @@ data class PlayerSettings(
     val backgroundPlayback: Boolean = true,
     val subtitleSize: Int = 1,          // 0=S 1=M 2=L 3=XL
     val subtitlePosition: Int = 1,      // 0=LOW 1=MID 2=HIGH 3=TOP
-    val subtitleBold: Boolean = false,
+    // Default matches the MX-style bold outlined look the renderer ships.
+    val subtitleBold: Boolean = true,
+    // SubtitleColor ordinal: 0=WHITE 1=YELLOW 2=GREEN 3=CYAN.
+    val subtitleColor: Int = 0,
     val defaultSubtitleLanguage: String? = null,
     val seekIncrementSec: Int = 10,
     val doubleTapSeek: Boolean = true,
@@ -31,6 +34,8 @@ data class PlayerSettings(
     val autoHideControlsMs: Long = 3500L,
     /** Sleep timer in minutes; 0=off, -1=end of episode. */
     val sleepTimerMinutes: Int = 0,
+    /** Volume boost percent over system max: 0/50/100/200 → gain 1–3×. */
+    val volumeBoostPct: Int = 0,
     val theme: String = "dark",
     val dynamicColor: Boolean = true,
     val amoledBlack: Boolean = false,

@@ -1,6 +1,8 @@
 package dev.anonrode.player.feature.player
 
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -11,7 +13,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import dev.anonrode.player.core.datastore.PlayerSettings
+import dev.anonrode.player.core.media.audio.VolumeBoostProcessor
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.sync.AudioSyncProcessor
 import dev.anonrode.player.core.media.sync.SyncListener
@@ -35,23 +37,35 @@ import kotlinx.coroutines.withContext
  * manual delay (additive). The live engine re-listens on every playback and
  * refines the persisted auto offset.
  *
- * Decoder selection ([useHw]): when true, the player is built with the
- * standard [DefaultRenderersFactory] (hardware MediaCodec decoders win).
- * When false, it is built with [NextRenderersFactory] configured to PREFER
- * the FFmpeg extension renderers, which forces software decoding. The
- * setting survives across the player's lifetime and is reapplied on every
- * [rebuild].
+ * Decoder selection ([decoderMode]): MODE_DEVICE_ONLY builds the player with
+ * the standard [DefaultRenderersFactory] and extension renderers OFF (pure
+ * MediaCodec). MODE_PREFER_DEVICE uses [NextRenderersFactory] with extensions
+ * ON — device decoders win, FFmpeg is the fallback. MODE_PREFER_APP uses
+ * [NextRenderersFactory] with extensions PREFERRED, forcing FFmpeg software
+ * decoding. The mode survives across the player's lifetime and is reapplied
+ * on every [rebuildMode].
  */
 @UnstableApi
 class PlaybackEngine(
     context: Context,
-    private val settingsProvider: () -> PlayerSettings,
     private val positionRestore: suspend (String) -> Long?,
     private val onPositionSave: suspend (uri: String, positionMs: Long, durationMs: Long?, finished: Boolean) -> Unit,
     private val onAutoSyncSave: suspend (uri: String, offsetMs: Long, speedFactor: Float) -> Unit = { _, _, _ -> },
 ) : SyncListener {
 
+    companion object {
+        /** Stock Media3 only; FFmpeg extension renderers disabled. */
+        const val MODE_DEVICE_ONLY = 0
+
+        /** Device decoders preferred; FFmpeg available as fallback. */
+        const val MODE_PREFER_DEVICE = 1
+
+        /** FFmpeg software decoders preferred. */
+        const val MODE_PREFER_APP = 2
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val appContext: Context = context.applicationContext
     private var currentUri: String? = null
     private var manualDelayMs: Long = 0L
 
@@ -65,8 +79,8 @@ class PlaybackEngine(
     @Volatile private var startPositionMs: Long = 0L
     @Volatile private var wasPlaying: Boolean = false
 
-    /** True = hardware decoders (default), false = FFmpeg software. */
-    @Volatile var useHw: Boolean = true
+    /** Active decoder profile; one of the MODE_ constants. */
+    @Volatile var decoderMode: Int = MODE_PREFER_DEVICE
         private set
 
     /** Applied subtitle offset in ms: persisted auto lock + manual delay.
@@ -82,6 +96,18 @@ class PlaybackEngine(
 
     private val syncProcessor = AudioSyncProcessor(this)
 
+    /** VLC-style gain stage after the sync analyzer (see its KDoc). */
+    private val boostProcessor = VolumeBoostProcessor()
+
+    /**
+     * Volume boost: 1.0 = off up to 3.0 (+9.5 dB). Runtime-safe — the audio
+     * thread reads the processor's volatile gain on every buffer.
+     */
+    fun setVolumeBoost(gain: Float) {
+        boostProcessor.gain = gain.coerceIn(1f, 3f)
+        AppLog.d("ENGINE", "volume boost gain=" + boostProcessor.gain)
+    }
+
     /**
      * Listeners that follow the player across rebuilds. External callers
      * register through [addListener]; on every [rebuild] we detach them
@@ -95,7 +121,7 @@ class PlaybackEngine(
      * [rebuild] can swap it out; all accessors read the field fresh so a
      * decoder swap is transparent to callers that just hold an engine ref.
      */
-    @Volatile var player: ExoPlayer = buildPlayer(context.applicationContext, useHw)
+    @Volatile var player: ExoPlayer = buildPlayer(context.applicationContext, decoderMode)
         private set
 
     /** Add a listener that survives [rebuild] — re-attached automatically. */
@@ -123,8 +149,9 @@ class PlaybackEngine(
     val currentAudioSessionId: Int
         get() = if (player.audioSessionId != C.AUDIO_SESSION_ID_UNSET) player.audioSessionId else 0
 
-    /** Whether the engine is currently driving the player in HW mode. */
-    val isHw: Boolean get() = useHw
+    /** Whether the engine is currently on a device-decoder profile
+     *  (anything except the FFmpeg-preferred mode). */
+    val isHw: Boolean get() = decoderMode != MODE_PREFER_APP
 
     /**
      * Speed the host wants applied to the rebuilt player. The host sets
@@ -155,30 +182,50 @@ class PlaybackEngine(
         hooks.forEach { it(newPlayer) }
     }
 
-    private fun buildPlayer(context: Context, hw: Boolean): ExoPlayer {
+    /** Audio sink shared by every decoder profile: sync analyzer first,
+     *  then the volume-boost gain stage. */
+    private fun buildAudioSink(
+        context: Context,
+        enableFloatOutput: Boolean,
+        enableAudioTrackPlaybackParams: Boolean,
+    ): AudioSink =
+        DefaultAudioSink.Builder(context)
+            .setEnableFloatOutput(enableFloatOutput)
+            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+            .setAudioProcessors(arrayOf(syncProcessor, boostProcessor))
+            .build()
+
+    private fun buildPlayer(context: Context, mode: Int): ExoPlayer {
         val trackSelector = DefaultTrackSelector(context)
         val renderersFactory: androidx.media3.exoplayer.RenderersFactory =
-            if (hw) {
-                // Pure hardware path: stock Media3 + Android MediaCodec.
-                DefaultRenderersFactory(context)
-                    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+            if (mode == MODE_DEVICE_ONLY) {
+                // Pure platform path: stock Media3 + Android MediaCodec,
+                // extension renderers fully disabled. The audio sink still
+                // carries the sync + boost processors.
+                object : DefaultRenderersFactory(context) {
+                    override fun buildAudioSink(
+                        context: Context,
+                        enableFloatOutput: Boolean,
+                        enableAudioTrackPlaybackParams: Boolean,
+                    ): AudioSink = buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+                }.apply {
+                    setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+                }
             } else {
-                // FFmpeg software path: nextlib inserts FfmpegAudio/Video
-                // renderers at the preferred slot so they win the selection
-                // race over the platform decoders.
+                // nextlib path: FFmpeg extension renderers are registered.
+                // ON = device decoders win, FFmpeg is the fallback;
+                // PREFER = FFmpeg wins the selection race.
                 object : NextRenderersFactory(context) {
                     override fun buildAudioSink(
                         context: Context,
                         enableFloatOutput: Boolean,
                         enableAudioTrackPlaybackParams: Boolean,
-                    ): AudioSink =
-                        DefaultAudioSink.Builder(context)
-                            .setEnableFloatOutput(enableFloatOutput)
-                            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                            .setAudioProcessors(arrayOf(syncProcessor))
-                            .build()
+                    ): AudioSink = buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
                 }.apply {
-                    setExtensionRendererMode(NextRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                    setExtensionRendererMode(
+                        if (mode == MODE_PREFER_APP) NextRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                        else NextRenderersFactory.EXTENSION_RENDERER_MODE_ON
+                    )
                 }
             }
         return ExoPlayer.Builder(context)
@@ -241,19 +288,35 @@ class PlaybackEngine(
         manualDelayMs: Long,
         persistedAutoOffsetMs: Long = 0L,
         persistedSpeedFactor: Float = 1f,
+        resume: Boolean = true,
+        syncEnabled: Boolean = true,
     ) {
         currentUri = uri
         currentMediaItem = mediaItem
         this.manualDelayMs = manualDelayMs
-        subtitleOffsetMs = persistedAutoOffsetMs + manualDelayMs
-        subtitleSpeedFactor = persistedSpeedFactor
-        attachSyncProcessor(cues, 0L)
+        if (syncEnabled) {
+            subtitleOffsetMs = persistedAutoOffsetMs + manualDelayMs
+            subtitleSpeedFactor = persistedSpeedFactor
+            attachSyncProcessor(cues, 0L)
+        } else {
+            // Auto-sync off: subs render exactly as timed in the file —
+            // no persisted lock, no live listening (empty cues = the
+            // processor's evaluate() never runs).
+            subtitleOffsetMs = manualDelayMs
+            subtitleSpeedFactor = 1f
+            attachSyncProcessor(emptyList(), 0L)
+        }
+
+        // Read the saved position BEFORE setMediaItem/prepare: the Room read
+        // suspends, and doing it after prepare would let the player start
+        // rendering at 0 and flash frame 0 before the seek lands.
+        // resume=false = "start over" — skip the stored position entirely.
+        val saved = if (resume) positionRestore(uri) else null
 
         AppLog.d("ENGINE", "play: setMediaItem+prepare uri=" + uri)
         player.setMediaItem(mediaItem)
         player.prepare()
 
-        val saved = positionRestore(uri)
         if (saved != null && saved > 0) {
             player.seekTo(saved)
             syncProcessor.setStartPosition(saved)
@@ -262,6 +325,14 @@ class PlaybackEngine(
             startPositionMs = 0L
         }
         AppLog.d("ENGINE", "calling play()")
+        // Bring up the foreground playback service: media session (lock-screen
+        // controls), the media notification, and the 5s position autosave.
+        // Media3's MediaSessionService takes over startForeground once the
+        // player is actually playing. Re-starting a running service is a
+        // cheap no-op, so this is safe on every play().
+        ContextCompat.startForegroundService(
+            appContext, Intent(appContext, PlayerService::class.java)
+        )
         player.play()
         wasPlaying = true
     }
@@ -277,11 +348,15 @@ class PlaybackEngine(
      * intact across a decoder swap.
      *
      * @return the new player's audio session id, or 0 if rebuild was a
-     *   no-op (same [useHw] flag).
+     *   no-op (same [decoderMode]).
      */
-    fun rebuild(hw: Boolean): Int {
-        if (hw == useHw) {
-            AppLog.d("ENGINE", "rebuild: no-op (hw=" + hw + ")")
+    fun rebuild(hw: Boolean): Int =
+        rebuildMode(if (hw) MODE_DEVICE_ONLY else MODE_PREFER_APP)
+
+    /** Three-mode variant of [rebuild] driven by the MODE_ constants. */
+    fun rebuildMode(mode: Int): Int {
+        if (mode == decoderMode) {
+            AppLog.d("ENGINE", "rebuild: no-op (mode=" + mode + ")")
             return if (player.audioSessionId != C.AUDIO_SESSION_ID_UNSET) player.audioSessionId else 0
         }
         val ctx = player.applicationContext
@@ -290,7 +365,7 @@ class PlaybackEngine(
         val playState = player.playbackState
         val item = currentMediaItem
 
-        AppLog.d("ENGINE", "rebuild: tearing down player (hw=" + useHw + " -> " + hw +
+        AppLog.d("ENGINE", "rebuild: tearing down player (mode=" + decoderMode + " -> " + mode +
             ") pos=" + pos + "ms state=" + playState + " item=" + (item?.mediaId ?: "null"))
 
         // Tear down on the main thread, in the same order Media3's docs
@@ -302,8 +377,8 @@ class PlaybackEngine(
         player.clearMediaItems()
         player.release()
 
-        useHw = hw
-        val newPlayer = buildPlayer(ctx, hw)
+        decoderMode = mode
+        val newPlayer = buildPlayer(ctx, mode)
         player = newPlayer
 
         // Re-attach every registered listener to the new player. We hold

@@ -192,6 +192,7 @@ data class SubtitleStyle(
     val size: SubtitleSize = SubtitleSize.MEDIUM,
     val position: SubtitlePosition = SubtitlePosition.LOW,
     val color: SubtitleColor = SubtitleColor.WHITE,
+    val bold: Boolean = true,
 )
 
 interface StyleOption {

@@ -31,14 +31,27 @@ class AudioSyncProcessor(
     private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
 
     @Volatile private var cues: List<SubtitleCue> = emptyList()
+    // Sliding window over absolute media time: audioBins[i] covers
+    // (baseIdx + i) * 100ms. The window slides forward once playback runs
+    // past its end, so live sync keeps working deep into (or after a
+    // resume far into) an episode instead of dying at a fixed cap.
     private val audioBins = FloatArray(40 * 10 * 2 + 15 * 60 * 10)
+    private var baseIdx = 0
     private var binCount = 0
     @Volatile private var locked = false
+    // Evaluation attempt cap: findOffset is ~10M ops and runs on the audio
+    // render thread; after MAX_EVAL_ATTEMPTS consecutive attempts without a
+    // lock we stop evaluating (gaveUp) until the next flush()/reset()/
+    // position reset — seeks and episode switches re-arm naturally.
+    private var failedEvals = 0
+    private var gaveUp = false
 
     private var totalFrames: Long = 0
     @Volatile var startPositionMs: Long = 0
 
-    private val windowSamples: ShortArray = ShortArray(320) // max 10ms @ 32kHz stereo
+    // One 10ms analysis window; sized in configure() once the real sample
+    // rate is known (320 = the old fixed size, kept as the floor).
+    private var windowSamples: ShortArray = ShortArray(320)
     private var windowN = 0
     private var windowTarget = 0
 
@@ -69,9 +82,10 @@ class AudioSyncProcessor(
         pendingResetPosition = null
         startPositionMs = reset
         java.util.Arrays.fill(audioBins, 0f)
-        binCount = 0; totalFrames = 0
+        baseIdx = 0; binCount = 0; totalFrames = 0
         windowN = 0; floor = 0.0; peak = 0.0; lastSpeech = 0.0
         lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
+        failedEvals = 0; gaveUp = false
         locked = false
     }
 
@@ -80,6 +94,10 @@ class AudioSyncProcessor(
         active = fmt.encoding == C.ENCODING_PCM_16BIT && sampleRate > 0 && channelCount > 0
         if (active) {
             windowTarget = max(1, sampleRate / 100)
+            // A full 10ms window at the real rate: windowTarget frames per
+            // channel. The 320-sample floor keeps the old minimum for very
+            // low rates; the fill loop guards on windowSamples.size.
+            windowSamples = ShortArray(max(windowTarget * channelCount, 320))
             resetAll()
         }
         return fmt
@@ -108,17 +126,19 @@ class AudioSyncProcessor(
     override fun flush() {
         inputEnded = false; outputEnded = false
         outputBuffer = AudioProcessor.EMPTY_BUFFER
-        java.util.Arrays.fill(audioBins, 0f); binCount = 0; totalFrames = 0
+        java.util.Arrays.fill(audioBins, 0f); baseIdx = 0; binCount = 0; totalFrames = 0
         windowN = 0; floor = 0.0; peak = 0.0; lastSpeech = 0.0
         lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
+        failedEvals = 0; gaveUp = false
     }
 
     override fun reset() { flush(); cues = emptyList(); active = false }
 
     private fun resetAll() {
-        java.util.Arrays.fill(audioBins, 0f); binCount = 0; totalFrames = 0
+        java.util.Arrays.fill(audioBins, 0f); baseIdx = 0; binCount = 0; totalFrames = 0
         windowN = 0; floor = 0.0; peak = 0.0; lastSpeech = 0.0
         lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
+        failedEvals = 0; gaveUp = false
         locked = false
     }
 
@@ -176,17 +196,39 @@ class AudioSyncProcessor(
     private fun accumulateBin(speech: Float) {
         val posMs = startPositionMs + totalFrames * 1000L / max(sampleRate, 1)
         val idx = (posMs / 100).toInt()
-        // Past capacity (or negative): skip instead of clamping into the last bin.
-        if (idx >= audioBins.size || idx < 0) return
-        binCount = max(binCount, idx + 1)
-        audioBins[idx] = max(audioBins[idx], speech)
-        
+        if (idx < 0 || idx < baseIdx) return
+        if (idx - baseIdx >= audioBins.size) {
+            if (binCount == 0) {
+                // Fresh window far into the media (mid-episode resume):
+                // anchor the window at the current position so the data
+                // grows from index 0 and cross-half validation stays sane.
+                baseIdx = idx
+                java.util.Arrays.fill(audioBins, 0f)
+            } else {
+                // Slide forward just enough to fit the new bin at the end.
+                val newBase = idx - audioBins.size + 1
+                val shift = newBase - baseIdx
+                if (shift >= audioBins.size) {
+                    java.util.Arrays.fill(audioBins, 0f)
+                    binCount = 0
+                } else {
+                    System.arraycopy(audioBins, shift, audioBins, 0, audioBins.size - shift)
+                    java.util.Arrays.fill(audioBins, audioBins.size - shift, audioBins.size, 0f)
+                    binCount = max(0, binCount - shift)
+                }
+                baseIdx = newBase
+            }
+        }
+        val rel = idx - baseIdx
+        binCount = max(binCount, rel + 1)
+        audioBins[rel] = max(audioBins[rel], speech)
+
         if (posMs - lastEvalPos >= 1400 || lastEvalPos == Long.MIN_VALUE) {
             if (lastEvalPos == Long.MIN_VALUE) lastEvalPos = posMs
             else {
                 lastEvalPos = posMs
                 val minBins = (SpeechCorrelator.MIN_AUDIO_SECONDS / SpeechCorrelator.ALIGN_BIN).toInt()
-                if (binCount >= minBins && cues.isNotEmpty()) {
+                if (binCount >= minBins && cues.isNotEmpty() && !gaveUp) {
                     evaluate(posMs)
                 }
             }
@@ -194,7 +236,13 @@ class AudioSyncProcessor(
     }
 
     private fun evaluate(posMs: Long) {
-        val result = SpeechCorrelator.findOffset(audioBins, binCount, cues) ?: return
+        val result = SpeechCorrelator.findOffset(
+            audioBins, binCount, cues,
+            baseSeconds = baseIdx * SpeechCorrelator.ALIGN_BIN,
+        ) ?: run {
+            countFailedEval(posMs)
+            return
+        }
         
         stableHits = if (!lastOffset.isNaN() &&
             abs(result.offsetSeconds - lastOffset) <= 0.25) stableHits + 1 else 1
@@ -209,10 +257,28 @@ class AudioSyncProcessor(
         if (stableHits >= 2) {
             locked = true
             listener.onSyncLocked(base.toFloat(), speedF)
+        } else {
+            countFailedEval(posMs)
+        }
+    }
+
+    /**
+     * Counts an evaluation that returned without locking; once the cap is
+     * reached, [gaveUp] stops further (expensive) attempts until the next
+     * flush()/reset()/position reset.
+     */
+    private fun countFailedEval(posMs: Long) {
+        failedEvals++
+        if (failedEvals >= MAX_EVAL_ATTEMPTS) {
+            gaveUp = true
+            AppLog.d("SYNC", "no lock after $failedEvals attempts, giving up at t=${posMs / 1000}s")
         }
     }
 
     companion object {
+        /** Consecutive no-lock evaluations before we stop trying. */
+        private const val MAX_EVAL_ATTEMPTS = 40
+
         fun min(a: Double, b: Double): Double = if (a < b) a else b
         fun max(a: Long, b: Int): Long = if (a > b) a else b.toLong()
         fun max(a: Double, b: Double): Double = if (a > b) a else b

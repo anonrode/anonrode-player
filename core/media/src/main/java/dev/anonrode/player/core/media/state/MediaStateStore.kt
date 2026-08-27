@@ -8,8 +8,11 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 /**
- * Per-video state repository: read-modify-write on the Room row, keyed by
- * content URI. Also prunes rows for URIs that vanished from the library.
+ * Per-video state repository keyed by content URI. Every writer is an
+ * ensureRow bootstrap + a partial-column UPDATE, so concurrent writers
+ * (position saves, sync locks, nudges, speed, fingerprint job) can never
+ * clobber each other's fields. Also prunes rows for URIs that vanished
+ * from the library.
  */
 class MediaStateStore(private val dao: MediaStateDao) {
 
@@ -24,51 +27,70 @@ class MediaStateStore(private val dao: MediaStateDao) {
     fun getAllStates(): Flow<List<MediaState>> = dao.getAll().map { list -> list.map { it.toModel() } }
 
     suspend fun updatePosition(uri: String, positionMs: Long, durationMs: Long?, finished: Boolean = false) {
-        val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
-        dao.upsert(
-            cur.copy(
-                playbackPositionMs = positionMs,
-                durationMs = durationMs,
-                finished = finished,
-                lastPlayedTimeMs = System.currentTimeMillis(),
-            )
-        )
+        dao.ensureRow(uri)
+        dao.updatePositionFields(uri, positionMs, durationMs, finished, System.currentTimeMillis())
     }
 
     suspend fun updateAudioTrack(uri: String, index: Int?) {
-        val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
-        dao.upsert(cur.copy(audioTrackIndex = index, lastPlayedTimeMs = System.currentTimeMillis()))
+        dao.ensureRow(uri)
+        dao.updateAudioTrackFields(uri, index, System.currentTimeMillis())
     }
 
     suspend fun updateSubtitleTrack(uri: String, index: Int?) {
-        val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
-        dao.upsert(cur.copy(subtitleTrackIndex = index, lastPlayedTimeMs = System.currentTimeMillis()))
+        dao.ensureRow(uri)
+        dao.updateSubtitleTrackFields(uri, index, System.currentTimeMillis())
+    }
+
+    /**
+     * Persist the picker's explicit subtitle source. See
+     * [MediaStateEntity.subtitleChoice] for the grammar
+     * (""=auto, "none", "embedded:N", "sidecar:name", "online:name").
+     */
+    suspend fun updateSubtitleChoice(uri: String, choice: String) {
+        dao.ensureRow(uri)
+        dao.updateSubtitleChoiceFields(uri, choice, System.currentTimeMillis())
     }
 
     suspend fun updateSubtitleDelay(uri: String, delayMs: Long) {
-        val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
-        dao.upsert(cur.copy(subtitleDelayMs = delayMs, lastPlayedTimeMs = System.currentTimeMillis()))
+        dao.ensureRow(uri)
+        dao.updateSubtitleDelayFields(uri, delayMs, System.currentTimeMillis())
     }
 
     /** Persist an auto-sync lock so re-watches start instantly in sync. */
     suspend fun updateAutoSyncSpeed(uri: String, speed: Float) {
-        val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
-        dao.upsert(cur.copy(autoSyncSpeedFactor = speed, lastPlayedTimeMs = System.currentTimeMillis()))
+        dao.ensureRow(uri)
+        dao.updateAutoSyncSpeedFields(uri, speed, System.currentTimeMillis())
     }
 
     suspend fun updateAutoSyncOffset(uri: String, offsetMs: Long) {
-        val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
-        dao.upsert(cur.copy(autoSyncOffsetMs = offsetMs, lastPlayedTimeMs = System.currentTimeMillis()))
+        dao.ensureRow(uri)
+        dao.updateAutoSyncOffsetFields(uri, offsetMs, System.currentTimeMillis())
+    }
+
+    /**
+     * Persist a complete auto-sync lock (offset + speed + optional piecewise
+     * cut segments) in ONE statement, so the fields can't clobber each other.
+     * Used by the background fingerprint job; the live engine keeps using
+     * the separate offset/speed writers above.
+     */
+    suspend fun updateAutoSync(
+        uri: String,
+        offsetMs: Long,
+        speed: Float,
+        piecewise: String = "",
+    ) {
+        dao.ensureRow(uri)
+        dao.updateAutoSyncFields(uri, offsetMs, speed, piecewise, System.currentTimeMillis())
     }
 
     suspend fun updateSpeed(uri: String, speed: Float) {
-        val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
-        dao.upsert(cur.copy(playbackSpeed = speed, lastPlayedTimeMs = System.currentTimeMillis()))
+        dao.ensureRow(uri)
+        dao.updateSpeedFields(uri, speed, System.currentTimeMillis())
     }
 
     suspend fun updateZoom(uri: String, scale: Float) {
-        val cur = dao.get(uri) ?: MediaStateEntity(uri = uri)
-        dao.upsert(cur.copy(videoScale = scale, lastPlayedTimeMs = System.currentTimeMillis()))
+        dao.ensureRow(uri)
+        dao.updateZoomFields(uri, scale, System.currentTimeMillis())
     }
 
     /** Remove state for videos that no longer exist in the library. */
@@ -86,8 +108,11 @@ class MediaStateStore(private val dao: MediaStateDao) {
         audioTrackIndex = audioTrackIndex,
         subtitleTrackIndex = subtitleTrackIndex,
         externalSubtitleUris = externalSubtitleUris.split(',').filter { it.isNotEmpty() },
+        subtitleChoice = subtitleChoice,
         subtitleDelayMs = subtitleDelayMs,
         autoSyncOffsetMs = autoSyncOffsetMs,
+        autoSyncSpeedFactor = autoSyncSpeedFactor,
+        autoSyncPiecewise = autoSyncPiecewise,
         playbackSpeed = playbackSpeed,
         videoScale = videoScale,
         lastPlayedTimeMs = lastPlayedTimeMs,

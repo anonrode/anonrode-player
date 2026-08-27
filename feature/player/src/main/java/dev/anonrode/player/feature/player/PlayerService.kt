@@ -24,6 +24,10 @@ class PlayerService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
     private var saveJob: Job? = null
+    // Kept so onDestroy can unregister the rebuild hook; a service restart
+    // would otherwise stack stale hooks building sessions against a dead
+    // service context.
+    private var rebuiltHook: ((ExoPlayer) -> Unit)? = null
 
     /**
      * Main dispatcher: the autosave loop reads ExoPlayer state, and Media3
@@ -52,7 +56,7 @@ class PlayerService : MediaSessionService() {
         // After a decoder swap the engine creates a fresh ExoPlayer; the
         // MediaSession is bound to the old instance, so rebuild it around
         // the new player to keep the notification + media controls live.
-        engine.addRebuiltHook { newPlayer ->
+        val hook: (ExoPlayer) -> Unit = { newPlayer ->
             AppLog.d("SERVICE", "player rebuilt — recreating MediaSession")
             mediaSession?.run {
                 // The old player was already released by PlaybackEngine.rebuild;
@@ -61,6 +65,8 @@ class PlayerService : MediaSessionService() {
             }
             mediaSession = MediaSession.Builder(this, newPlayer).build()
         }
+        rebuiltHook = hook
+        engine.addRebuiltHook(hook)
 
         // Periodic position persistence — a process kill loses at most 5s.
         saveJob = saveScope.launch {
@@ -92,8 +98,11 @@ class PlayerService : MediaSessionService() {
 
     override fun onDestroy() {
         saveJob?.cancel()
-        // Null-safe: onDestroy can fire even when onCreate bailed early on
-        // missing holder wiring.
+        // Unregister the rebuild hook so a restarted service doesn't stack
+        // stale hooks. Null-safe: onDestroy can fire even when onCreate
+        // bailed early on missing holder wiring.
+        rebuiltHook?.let { PlayerServiceHolder.engine?.removeRebuiltHook(it) }
+        rebuiltHook = null
         PlayerServiceHolder.engine?.savePositionNow()
         // Best-effort: if the media session's player was already released
         // by PlaybackEngine.rebuild, its release() would throw — so guard

@@ -12,3 +12,8 @@
 *.keystore
 !debug.keystore
 output.json
+
+# Python tooling artifacts (dev-only experiments, never shipped)
+__pycache__/
+*.pyc
+*.pkl

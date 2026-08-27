@@ -43,14 +43,20 @@ object SpeechCorrelator {
     }
 
     /**
-     * @param audio soft speech values per 0.1s bin (index = media time / 0.1s)
-     * @param binCount number of valid bins (media time covered = binCount*0.1s)
+     * @param audio soft speech values per 0.1s bin; index 0 is the window
+     *              start, i.e. bin i covers media time
+     *              baseSeconds + i*0.1s (the processor slides the window
+     *              forward for long/resumed playback)
+     * @param binCount number of valid bins (window span = binCount*0.1s)
+     * @param baseSeconds media time of audio[0]; cues are mapped onto the
+     *                    grid relative to it
      */
     fun findOffset(
         audio: FloatArray,
         binCount: Int,
         cues: List<SubtitleCue>,
         maxOffsetSec: Double = MAX_OFFSET_SEC,
+        baseSeconds: Double = 0.0,
     ): Result? {
         if (binCount < (MIN_AUDIO_SECONDS / ALIGN_BIN).toInt()) return null
         if (cues.size < 3) return null
@@ -70,8 +76,8 @@ object SpeechCorrelator {
         // ── subtitle track B on the same grid ──────────────────────
         val b = ByteArray(total)
         for (cue in cues) {
-            val i0 = maxOf(0, (cue.start / ALIGN_BIN).toInt())
-            val i1 = minOf(total - 1, (cue.end / ALIGN_BIN).toInt())
+            val i0 = maxOf(0, ((cue.start - baseSeconds) / ALIGN_BIN).toInt())
+            val i1 = minOf(total - 1, ((cue.end - baseSeconds) / ALIGN_BIN).toInt())
             for (i in i0..i1) b[i] = 1
         }
 

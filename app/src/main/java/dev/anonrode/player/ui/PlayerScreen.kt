@@ -1,14 +1,25 @@
 package dev.anonrode.player.ui
 
 import android.app.Activity
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.media.AudioManager
 import android.media.MediaMetadataRetriever
+import android.os.Build
+import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import android.view.HapticFeedbackConstants
+import android.view.PixelCopy
 import android.view.View
 import android.widget.Toast
+import java.io.ByteArrayOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -22,6 +33,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -51,6 +64,7 @@ import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
@@ -61,8 +75,10 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.ScreenLockRotation
@@ -72,6 +88,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -93,7 +110,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -103,6 +120,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -120,9 +138,16 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import dev.anonrode.player.PlayerPrefs
+import dev.anonrode.player.audio.SubtitleColor
+import dev.anonrode.player.audio.SubtitlePosition
+import dev.anonrode.player.audio.SubtitleSize
+import dev.anonrode.player.audio.SubtitleStyle
 import dev.anonrode.player.feature.player.PlaybackEngine
 import dev.anonrode.player.core.media.log.AppLog
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -164,6 +189,9 @@ private const val SUB_DEFAULT_Y = 0.66f
 
 /** Show the Next-Episode shortcut pill within this many seconds of the end. */
 private const val NEXT_BUTTON_WINDOW_SEC = 30f
+
+/** Playback rate applied while the hold-to-boost speed gesture is engaged. */
+private const val BOOST_SPEED = 2f
 
 private fun fmtTime(ms: Long): String {
     val s = ms / 1000
@@ -423,12 +451,15 @@ private fun SyncedChip(
     }
 }
 
-/* ── Subtitle style dropdown (long-press the subtitle to open) ─────────── */
+/* ── Subtitle style dropdown (long-press the subtitle to open) ───────────
+ * Operates on the host-owned [SubtitleStyle] — every mutation is routed
+ * through [onStyle] so the host persists it and flows it back into the
+ * screen (same value the SubtitleStyleSheet live-previews).
+ * ------------------------------------------------------------------------- */
 @Composable
 private fun SubtitleStyleDropdown(
-    size: Int, onSize: (Int) -> Unit,
-    pos: Int, onPos: (Int) -> Unit,
-    color: Int, onColor: (Int) -> Unit,
+    style: SubtitleStyle,
+    onStyle: (SubtitleStyle) -> Unit,
     onReset: () -> Unit,
     onDismiss: () -> Unit,
     accent: Color,
@@ -439,16 +470,25 @@ private fun SubtitleStyleDropdown(
         modifier = Modifier.background(Color(0xFF0E1017).copy(alpha = 0.96f), RoundedCornerShape(12.dp)),
     ) {
         androidx.compose.material3.DropdownMenuItem(
-            text = { Text("Size: ${if (size == 0) "S" else if (size == 1) "M" else "L"}", color = Color.White) },
-            onClick = { onSize((size + 1) % 3) },
+            text = { Text("Size: ${style.size.label}", color = Color.White) },
+            onClick = {
+                val next = SubtitleSize.entries[(style.size.ordinal + 1) % SubtitleSize.entries.size]
+                onStyle(style.copy(size = next))
+            },
         )
         androidx.compose.material3.DropdownMenuItem(
-            text = { Text("Position: ${if (pos == 0) "Low" else "Mid"}", color = Color.White) },
-            onClick = { onPos((pos + 1) % 2) },
+            text = { Text("Position: ${style.position.label}", color = Color.White) },
+            onClick = {
+                val next = SubtitlePosition.entries[(style.position.ordinal + 1) % SubtitlePosition.entries.size]
+                onStyle(style.copy(position = next))
+            },
         )
         androidx.compose.material3.DropdownMenuItem(
-            text = { Text("Color: ${listOf("White", "Yellow", "Green")[color]}", color = Color.White) },
-            onClick = { onColor((color + 1) % 3) },
+            text = { Text("Color: ${style.color.label}", color = Color.White) },
+            onClick = {
+                val next = SubtitleColor.entries[(style.color.ordinal + 1) % SubtitleColor.entries.size]
+                onStyle(style.copy(color = next))
+            },
         )
         androidx.compose.material3.HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
         androidx.compose.material3.DropdownMenuItem(
@@ -590,25 +630,25 @@ private fun PlayerOverlayToast(message: String?, accent: Color) {
 
 /**
  * MX subtitle look: bold white text with a black 8-way outline, no
- * background box, centered, at most two lines.
+ * background box, centered, at most two lines. Styled from the host-owned
+ * [SubtitleStyle] (size + color; placement is drag-driven).
  */
 @Composable
 private fun OutlinedSubtitleText(
     text: String,
     modifier: Modifier = Modifier,
-    subSize: Int = 1,
-    subPos: Int = 1,
-    subColor: Int = 0,
+    style: SubtitleStyle = SubtitleStyle(),
 ) {
-    val sizeSp = when (subSize) { 0 -> 15.sp; 1 -> 18.sp; else -> 22.sp }
+    val sizeSp = style.size.fontSp
     val lineSp = (sizeSp.value * 1.5f).sp
-    val fillColor = when (subColor) { 1 -> Color(0xFFFFD75E); 2 -> Color(0xFF7CE487); else -> Color.White }
+    val fillColor = style.color.value
+    val weight = if (style.bold) FontWeight.Bold else FontWeight.Medium
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         SubtitleOutlineOffsets.forEach { (dx, dy) ->
             Text(
                 text,
                 color = Color.Black,
-                fontWeight = FontWeight.Bold,
+                fontWeight = weight,
                 fontSize = sizeSp,
                 lineHeight = lineSp,
                 textAlign = TextAlign.Center,
@@ -621,7 +661,7 @@ private fun OutlinedSubtitleText(
         Text(
             text,
             color = fillColor,
-            fontWeight = FontWeight.Bold,
+            fontWeight = weight,
             fontSize = sizeSp,
             lineHeight = lineSp,
             textAlign = TextAlign.Center,
@@ -645,7 +685,7 @@ private fun OutlinedSubtitleText(
  * global default fallback (see [PlayerPrefs]). The overflow menu hosts the
  * sleep timer, aspect cycling, and rotation lock; the resize button cycles
  * FIT → CROP → STR. While in PiP ([isPipMode]) every overlay (controls,
- * subtitles, badges, diagnostics) hides.
+ * subtitles, badges) hides.
  */
 @UnstableApi
 @Composable
@@ -726,11 +766,60 @@ fun PlayerScreen(
      */
     onOpenSubStyle: () -> Unit = {},
     /**
+     * Subtitle style (size / position / color) the cue is rendered from.
+     * Owned by the host and shared with its SubtitleStyleSheet so the
+     * sheet's live preview matches the on-screen cue. In-screen mutations
+     * (long-press dropdown) are reported via [onSubtitleStyleChanged].
+     */
+    subtitleStyle: SubtitleStyle = SubtitleStyle(),
+    /**
+     * Called when the user mutates the subtitle style from inside the
+     * screen (long-press dropdown). The host should persist the value and
+     * flow it back through [subtitleStyle].
+     */
+    onSubtitleStyleChanged: (SubtitleStyle) -> Unit = {},
+    /**
+     * Open the subtitle source picker (embedded tracks / sidecar files /
+     * downloaded / online search). The host shows SubtitlePickerSheet and
+     * reloads the chosen source.
+     */
+    onOpenSubtitlePicker: () -> Unit = {},
+    /**
      * Open the audio track picker. The host reads [Player.getCurrentTracks]
      * and shows a bottom sheet of available audio tracks for the current
      * media.
      */
     onOpenAudioTrackPicker: () -> Unit = {},
+    /** Seek step (seconds) for the ±seek buttons and double-tap seek. */
+    seekIncrementSec: Int = 10,
+    /** Settings gates: each mirrors a PlayerSettings toggle. */
+    doubleTapSeekEnabled: Boolean = true,
+    swipeToSeekEnabled: Boolean = true,
+    volumeGestureEnabled: Boolean = true,
+    brightnessGestureEnabled: Boolean = true,
+    /** HUD auto-hide delay while playing (ms). */
+    autoHideControlsMs: Long = 3500L,
+    /** Sleep timer armed from the settings screen (0=off, -1=end of episode). */
+    initialSleepTimerMinutes: Int = 0,
+    /** Seeks bigger than this use fast (keyframe) seeking; smaller = exact. */
+    fastSeekThresholdSec: Long = 120L,
+    /**
+     * Per-video zoom mode (index into the screen's ZoomModes), persisted by
+     * the host via Room. Restored on entry; [onZoomChanged] reports cycles.
+     */
+    initialZoomIdx: Int = 0,
+    onZoomChanged: (Int) -> Unit = {},
+    /** Volume boost over system max (0/50/100/200 %); cycled in the menu. */
+    volumeBoostPct: Int = 0,
+    onVolumeBoostCycle: () -> Unit = {},
+    /**
+     * A-B repeat region (ms). null start = inactive. The host enforces the
+     * loop (seek back to A at B); the screen only surfaces state + the tap.
+     * Tap cycle: set A → set B (loop starts) → clear.
+     */
+    abStartMs: Long? = null,
+    abEndMs: Long? = null,
+    onAbRepeatTap: () -> Unit = {},
     /** True if a decoder swap is currently in flight; hides the HW chip. */
     isRebuildingDecoder: Boolean = false,
     /** Name of the currently selected Cast route, for the chip tooltip. */
@@ -756,8 +845,9 @@ fun PlayerScreen(
     var controlsVisible by remember { mutableStateOf(true) }
     var isPlaying by remember { mutableStateOf(livePlayer.isPlaying) }
     var locked by remember { mutableStateOf(false) }
-    var errorMsg by remember { mutableStateOf<String?>(null) }
-    var stateText by remember { mutableStateOf("IDLE") }
+    /** True while the hold-to-2× speed boost gesture is engaged. Guards
+     *  against re-entrant gestures double-applying the speed change. */
+    var boostActive by remember { mutableStateOf(false) }
     var showCC by remember { mutableStateOf(true) }
     val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
     // Keyed on initialSpeed so the button re-syncs when the activity restores
@@ -779,9 +869,7 @@ fun PlayerScreen(
     /** When true, shows the [EqualizerPanelSheet] with band sliders. */
     var eqPanelOpen by remember { mutableStateOf(false) }
     var headphonesOn by remember { mutableStateOf(false) }
-    /** 0=Speaker 1=BT 2=Wired. Drives the audio-output icon tint. */
-    var audioOutputMode by remember { mutableIntStateOf(0) }
-    var hwDecoder by remember { mutableStateOf(true) }
+    var hwDecoder by remember { mutableStateOf(engine?.isHw ?: true) }
     /** True = locked to portrait, false = sensor/landscape. */
     var portraitForced by remember { mutableStateOf(false) }
     var showSyncPopover by remember { mutableStateOf(false) }
@@ -806,6 +894,15 @@ fun PlayerScreen(
     var rotationLocked by remember { mutableStateOf(false) }
     /** Index into [ZoomModes]: FIT → CROP → STR. */
     var zoomIdx by remember { mutableIntStateOf(0) }
+
+    // Restore the per-video zoom persisted by the host — including after
+    // re-entry (opening the settings screen disposes this composable and
+    // resets the remember above).
+    LaunchedEffect(initialZoomIdx) {
+        if (initialZoomIdx in ZoomModes.indices && initialZoomIdx != zoomIdx) {
+            zoomIdx = initialZoomIdx
+        }
+    }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     /**
      * First-frame poster. Drawn behind the player view so the gap between
@@ -844,6 +941,10 @@ fun PlayerScreen(
     }
 
     // Sleep-timer countdown: checks every second; pause + clear past expiry.
+    // Keyed on the deadline only — NOT livePlayer — so the countdown
+    // survives decoder rebuilds; at expiry the player is read fresh off the
+    // engine because the livePlayer captured at composition may already be
+    // released by then (pause() on a released ExoPlayer throws).
     LaunchedEffect(sleepTimerEndMs) {
         while (sleepTimerEndMs != null) {
             delay(1000)
@@ -851,7 +952,7 @@ fun PlayerScreen(
             val remaining = endMs - System.currentTimeMillis()
             sleepRemainingMs = remaining.coerceAtLeast(0L)
             if (remaining <= 0L) {
-                livePlayer.pause()
+                (engine?.player ?: livePlayer).pause()
                 sleepTimerEndMs = null
                 sleepSelection = SleepOptions.first()
             }
@@ -866,16 +967,13 @@ fun PlayerScreen(
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 AppLog.d("PLAYER", "state=" + playbackState)
-                stateText = when (playbackState) {
-                    Player.STATE_IDLE -> "IDLE"
-                    Player.STATE_BUFFERING -> "BUFFERING"
-                    Player.STATE_READY -> "READY"
-                    Player.STATE_ENDED -> "ENDED"
-                    else -> "?"
-                }
-                // Re-assert the chosen speed when a new media item is ready.
+                // Re-assert the chosen speed when a new media item is ready
+                // (or the boost rate while a hold-to-boost is engaged, so a
+                // buffer stall mid-hold can't silently drop the 2×).
                 if (playbackState == Player.STATE_READY) {
-                    livePlayer.setPlaybackSpeed(speeds[speedIdx])
+                    livePlayer.setPlaybackSpeed(
+                        if (boostActive) BOOST_SPEED else speeds[speedIdx]
+                    )
                     // First frame has painted — drop the poster.
                     posterBitmap = null
                 }
@@ -890,18 +988,43 @@ fun PlayerScreen(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                errorMsg = error.errorCodeName + ": " + (error.cause?.message ?: error.message ?: "unknown")
+                AppLog.e(
+                    "PLAYER",
+                    "error " + error.errorCodeName + ": " +
+                        (error.cause?.message ?: error.message ?: "unknown"),
+                    error,
+                )
             }
         }
         livePlayer.addListener(l)
-        onDispose { livePlayer.removeListener(l) }
+        onDispose {
+            // PlaybackEngine.rebuild may have released this player before
+            // the effect is disposed (the ExoPlayer instance is swapped out
+            // from under us). Media3 generally tolerates removeListener on
+            // a released player, but never let cleanup crash the UI.
+            try {
+                livePlayer.removeListener(l)
+            } catch (_: Throwable) {
+                // Player already released — nothing left to detach.
+            }
+        }
     }
+
+    // Single hide runnable so back-to-back showHud calls (drag ticks, the
+    // boost keep-alive) can't have a stale timeout hide the pill early.
+    // Both runnables are hoisted into remember{} so their identity is
+    // stable across recompositions — a fresh Runnable per composition made
+    // view.removeCallbacks() miss the previously posted instance, letting
+    // a stale timeout hide the HUD / clear the toast early.
+    val hideHud = remember { Runnable { hudVisible = false } }
+    val clearTransientToast = remember { Runnable { transientToast = null } }
 
     fun showHud(icon: ImageVector, text: String) {
         hudIcon = icon
         hudText = text
         hudVisible = true
-        view.postDelayed({ hudVisible = false }, 900)
+        view.removeCallbacks(hideHud)
+        view.postDelayed(hideHud, 900)
     }
 
     fun toast(msg: String) {
@@ -918,7 +1041,90 @@ fun PlayerScreen(
         view.removeCallbacks(clearTransientToast)
         view.postDelayed(clearTransientToast, 1600L)
     }
-    val clearTransientToast = Runnable { transientToast = null }
+
+    val captureScope = rememberCoroutineScope()
+
+    /**
+     * Save the current video frame: PixelCopy the PlayerView's SurfaceView
+     * (which holds the decoded frame — a plain view screenshot would be
+     * black), then write a PNG to Pictures/AnonPlayer (MediaStore on
+     * API 29+, app-specific dir below that — no permission needed either
+     * way).
+     */
+    fun captureFrame() {
+        val pv = playerViewRef ?: return
+        if (Build.VERSION.SDK_INT < 24) {
+            showTransientToast("Screenshot needs Android 7.0+")
+            return
+        }
+        val surfaceView = pv.videoSurfaceView as? android.view.SurfaceView
+        if (surfaceView == null || surfaceView.width <= 0 || surfaceView.height <= 0) {
+            showTransientToast("Screenshot failed — no video surface")
+            return
+        }
+        val surface = surfaceView.holder.surface
+        if (surface == null || !surface.isValid) {
+            showTransientToast("Screenshot failed — surface not ready")
+            return
+        }
+        val bmp = Bitmap.createBitmap(
+            surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888
+        )
+        PixelCopy.request(surface, bmp, { result ->
+            if (result == PixelCopy.SUCCESS) saveFrame(bmp)
+            else showTransientToast("Screenshot failed (code " + result + ")")
+        }, Handler(Looper.getMainLooper()))
+    }
+
+    fun saveFrame(bmp: Bitmap) {
+        val base = title.substringAfterLast('/').substringBeforeLast('.')
+            .replace(Regex("[^A-Za-z0-9 ._\\-]"), "")
+            .ifEmpty { "frame" }
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val name = base + "_" + stamp + ".png"
+        captureScope.launch(Dispatchers.IO) {
+            try {
+                val bytes = ByteArrayOutputStream().use { out ->
+                    bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    out.toByteArray()
+                }
+                val where: String
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                        put(
+                            MediaStore.Images.Media.RELATIVE_PATH,
+                            Environment.DIRECTORY_PICTURES + "/AnonPlayer",
+                        )
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
+                    }
+                    val resolver = context.contentResolver
+                    val uri = resolver.insert(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
+                    ) ?: throw java.io.IOException("MediaStore insert failed")
+                    resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                        ?: throw java.io.IOException("no output stream")
+                    values.clear()
+                    values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                    where = "Pictures/AnonPlayer"
+                } else {
+                    // App-specific public dir: no WRITE_EXTERNAL_STORAGE
+                    // needed, visible to file managers.
+                    val dir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+                        ?: throw java.io.IOException("no external files dir")
+                    java.io.File(dir, name).writeBytes(bytes)
+                    where = dir.absolutePath
+                }
+                AppLog.d("SHOT", "saved " + name + " to " + where)
+                view.post { showTransientToast("Saved to " + where + "/" + name) }
+            } catch (e: Exception) {
+                AppLog.e("SHOT", "screenshot save failed", e)
+                view.post { showTransientToast("Screenshot save failed") }
+            }
+        }
+    }
 
     // ── quick-row wiring (all buttons fire a real action now) ──────
     fun toggleEqualizer() {
@@ -956,18 +1162,15 @@ fun PlayerScreen(
         showTransientToast(label)
     }
 
-    fun cycleAudioOutput() {
-        // We can't enumerate Bluetooth routes without permission + a scan, so
-        // cycle the icon and the AudioManager routing hints.
-        audioOutputMode = (audioOutputMode + 1) % 3
-        val label = when (audioOutputMode) {
-            0 -> "Speaker"
-            1 -> "Bluetooth"
-            else -> "Wired"
-        }
-        audioManager.isSpeakerphoneOn = audioOutputMode == 0
-        AppLog.d("PLAYER", "output=" + label)
-        showTransientToast("Output: $label")
+    fun openAudioOutputPicker() {
+        // The previous implementation toggled AudioManager.isSpeakerphoneOn,
+        // which requires MODIFY_AUDIO_SETTINGS (not declared) → guaranteed
+        // SecurityException on every tap, and did nothing useful for the
+        // music stream anyway. The MediaRouter sheet already covers every
+        // real output (speaker / Bluetooth / Cast / HDMI / wired), so the
+        // chip now just opens it. (Haptic fires inside QuickRowChip.)
+        AppLog.d("PLAYER", "output: opening route picker")
+        onOpenCastPicker()
     }
 
     fun toggleHwDecoder() {
@@ -1047,6 +1250,16 @@ fun PlayerScreen(
         sleepSelection = opt
     }
 
+    // Settings → player bridge: a sleep timer set in the settings screen
+    // arms here once, when the player composes. The in-screen menu can
+    // still override it afterwards.
+    LaunchedEffect(Unit) {
+        if (initialSleepTimerMinutes != 0) {
+            SleepOptions.firstOrNull { it.minutes == initialSleepTimerMinutes }
+                ?.let { selectSleep(it) }
+        }
+    }
+
     /** Checkmark condition for the dropdown entry matching the armed timer. */
     val isSleepSelected: (SleepOption) -> Boolean = { opt ->
         when {
@@ -1066,20 +1279,43 @@ fun PlayerScreen(
 
     fun cycleZoom() {
         zoomIdx = (zoomIdx + 1) % ZoomModes.size
+        onZoomChanged(zoomIdx)
         showHud(Icons.Filled.AspectRatio, ZoomModes[zoomIdx].abbreviation)
     }
 
     fun seekBy(sec: Int) {
-        val d = livePlayer.duration.takeIf { it > 0 } ?: return
-        livePlayer.seekTo((livePlayer.currentPosition + sec * 1000L).coerceIn(0L, d))
+        val p = engine?.player ?: livePlayer
+        val d = p.duration.takeIf { it > 0 } ?: return
+        // Big jumps snap to the nearest keyframe (instant); small ones
+        // stay frame-exact. EXACT is restored shortly after so drags and
+        // swipes are unaffected by the temporary parameter.
+        val fast = kotlin.math.abs(sec) >= fastSeekThresholdSec
+        if (fast) p.setSeekParameters(androidx.media3.common.SeekParameters.CLOSEST_SYNC)
+        p.seekTo((p.currentPosition + sec * 1000L).coerceIn(0L, d))
+        if (fast) {
+            view.postDelayed({
+                (engine?.player ?: livePlayer)
+                    .setSeekParameters(androidx.media3.common.SeekParameters.EXACT)
+            }, 500)
+        }
         flashSide = if (sec < 0) -1 else 1
         view.postDelayed({ flashSide = 0 }, 420)
     }
 
-    LaunchedEffect(controlsVisible, isPlaying, locked, menuOpen) {
+    LaunchedEffect(controlsVisible, isPlaying, locked, menuOpen, autoHideControlsMs) {
         if (controlsVisible && isPlaying && !locked && !menuOpen) {
-            kotlinx.coroutines.delay(2500)
+            kotlinx.coroutines.delay(autoHideControlsMs)
             controlsVisible = false
+        }
+    }
+
+    // Hold-to-2× boost: the gesture HUD pill auto-hides 900ms after each
+    // showHud, so re-post the "2× speed" pill while the finger stays down
+    // and the boost is engaged.
+    LaunchedEffect(boostActive) {
+        while (boostActive) {
+            showHud(Icons.Filled.FastForward, "2× speed")
+            delay(800)
         }
     }
 
@@ -1087,25 +1323,15 @@ fun PlayerScreen(
     var scrH by remember { mutableFloatStateOf(1000f) }
 
     // Subtitle placement (box center as stage fractions) + drag state.
+    // Visual style (size / position / color) comes from the host-owned
+    // [subtitleStyle] parameter — the same value the host's
+    // SubtitleStyleSheet live-previews — and any in-screen mutation is
+    // routed back through [onSubtitleStyleChanged].
     var subX by remember { mutableFloatStateOf(SUB_DEFAULT_X) }
     var subY by remember { mutableFloatStateOf(SUB_DEFAULT_Y) }
     var subDragging by remember { mutableStateOf(false) }
+    /** Long-press dropdown (Size / Position / Color / Reset) is open. */
     var subStyleMenuOpen by remember { mutableStateOf(false) }
-    var subSize by rememberSaveable { mutableStateOf(1) }          // 0=S 1=M 2=L
-    var subPos by rememberSaveable { mutableStateOf(1) }          // 0=low 1=mid
-    var subColor by rememberSaveable { mutableIntStateOf(0) }     // 0=white 1=yellow 2=green
-
-    // Long-press subtitle menu: a small DropdownMenu with Size / Position /
-    // Color / Reset. The first long-press opens it; the user can pick an
-    // option or long-press again to begin a drag. Cycling options are
-    // stored in remember-blocks so a single tap fires the next state.
-    var showSubtitleMenu by remember { mutableStateOf(false) }
-    /** S/M/L. Drives the OutlinedSubtitleText font size. */
-    var subSizeIdx by remember { mutableIntStateOf(1) }
-    /** 0 = bottom (default y), 1 = middle. */
-    var subPositionIdx by remember { mutableIntStateOf(0) }
-    /** 0 = White, 1 = Yellow, 2 = Green. */
-    var subColorIdx by remember { mutableIntStateOf(0) }
 
     // Restore the saved position for this video (global default fallback)
     // whenever the media item changes.
@@ -1113,6 +1339,26 @@ fun PlayerScreen(
         val saved = PlayerPrefs.subtitlePosition(context, mediaId)
         subX = saved?.first ?: SUB_DEFAULT_X
         subY = saved?.second ?: SUB_DEFAULT_Y
+    }
+
+    // The style system's Position row anchors the cue box to preset
+    // vertical bands. The first invocation is skipped so the per-video
+    // saved position (restored above) wins on entry; afterwards any
+    // position change (host sheet or long-press dropdown) moves the cue
+    // live and persists it as the new per-video position.
+    var subPosInitialized by remember { mutableStateOf(false) }
+    LaunchedEffect(subtitleStyle.position) {
+        if (!subPosInitialized) {
+            subPosInitialized = true
+            return@LaunchedEffect
+        }
+        subY = when (subtitleStyle.position) {
+            SubtitlePosition.TOP -> 0.18f
+            SubtitlePosition.HIGH -> 0.34f
+            SubtitlePosition.MID -> 0.50f
+            SubtitlePosition.LOW -> SUB_DEFAULT_Y
+        }
+        PlayerPrefs.saveSubtitlePosition(context, mediaId, subX, subY)
     }
 
     // First-frame poster: decode the video URI off the main thread, grab
@@ -1173,9 +1419,9 @@ fun PlayerScreen(
                         }
                     },
                     onDoubleTap = { off ->
-                        if (isPipMode || locked) return@detectTapGestures
+                        if (isPipMode || locked || !doubleTapSeekEnabled) return@detectTapGestures
                         val dir = if (off.x < scrW / 2) -1 else 1
-                        seekBy(dir * 10)
+                        seekBy(dir * seekIncrementSec)
                         controlsVisible = false
                     },
                     onLongPress = {
@@ -1210,12 +1456,18 @@ fun PlayerScreen(
                             val dx = abs(x - startX)
                             val dy = abs(y - startY)
                             if (dx > 24 || dy > 24) {
-                                mode = when {
-                                    dx > dy -> "seek"
-                                    startX < scrW / 2 -> "bri"
-                                    else -> "vol"
+                                // Each gesture family is individually gated
+                                // by its PlayerSettings toggle; a disabled
+                                // family simply never engages (mode stays
+                                // null and the drag is a no-op).
+                                val m = when {
+                                    dx > dy -> if (swipeToSeekEnabled) "seek" else null
+                                    startX < scrW / 2 ->
+                                        if (brightnessGestureEnabled) "bri" else null
+                                    else -> if (volumeGestureEnabled) "vol" else null
                                 }
-                                controlsVisible = false
+                                mode = m
+                                if (m != null) controlsVisible = false
                             }
                         }
                         when (mode) {
@@ -1255,6 +1507,76 @@ fun PlayerScreen(
                     onDragEnd = { mode = null },
                     onDragCancel = { mode = null },
                 )
+            }
+            .pointerInput(locked, isPipMode) {
+                // Hold-to-2× speed boost (MX Player / YouTube style): keep a
+                // finger pressed on the video and playback jumps to 2× after
+                // a long-press; lifting the finger restores whatever speed
+                // was active before the hold. detectTapGestures' onLongPress
+                // has no release callback, so the hold lives in its own
+                // detector: requireUnconsumed = false sees the down without
+                // stealing it, and nothing is consumed unless the boost
+                // actually engages — taps, double-taps and drags keep working.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    // Locked / PiP / paused / already boosting: leave the
+                    // pointer to the tap + drag detectors. Only boost while
+                    // playing so a paused video can't burst audio.
+                    if (locked || isPipMode || boostActive || !isPlaying) {
+                        return@awaitEachGesture
+                    }
+                    // Survive the long-press timeout with the finger down,
+                    // alone, and within touch slop: lifting early falls
+                    // through to the tap path, moving hands the pointer to
+                    // the drag detector, a second finger aborts.
+                    val activated = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                        var ok = true
+                        while (ok) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val pressed = event.changes.filter { it.pressed }
+                            ok = when {
+                                pressed.isEmpty() -> false // lifted early → tap
+                                pressed.size > 1 -> false  // second finger → abort
+                                else -> {
+                                    // Same pointer must survive: a lift+new
+                                    // down in one event batch is NOT a hold.
+                                    val p = pressed.first()
+                                    p.id == down.id &&
+                                        (p.position - down.position)
+                                            .getDistance() <= viewConfiguration.touchSlop
+                                }
+                            }
+                        }
+                        false
+                    } ?: true
+                    if (!activated) return@awaitEachGesture
+                    // Long-press survived — engage the boost.
+                    boostActive = true
+                    view.haptic(HapticFeedbackConstants.LONG_PRESS)
+                    (engine?.player ?: livePlayer).setPlaybackSpeed(BOOST_SPEED)
+                    showHud(Icons.Filled.FastForward, "2× speed")
+                    try {
+                        // Hold until the finger lifts; a second finger going
+                        // down aborts the boost. Consume the changes so the
+                        // drag detector can't start seeking mid-boost.
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            event.changes.forEach { it.consume() }
+                            val pressed = event.changes.filter { it.pressed }
+                            val held = event.changes.any { it.id == down.id && it.pressed }
+                            if (!held || pressed.isEmpty() || pressed.size > 1) break
+                        }
+                    } finally {
+                        // Restore exactly once per activation, to the user's
+                        // chosen speed (NOT a hardcoded 1×). Read the player
+                        // fresh off the engine: a decoder rebuild mid-hold
+                        // swaps the ExoPlayer instance under us.
+                        boostActive = false
+                        (engine?.player ?: livePlayer).setPlaybackSpeed(speeds[speedIdx])
+                        showHud(Icons.Filled.FastForward,
+                            speedLabel(speeds[speedIdx]) + " speed")
+                    }
+                }
             }
     ) {
         // ── video ────────────────────────────────────────────────────
@@ -1311,28 +1633,24 @@ fun PlayerScreen(
                             alpha = if (subDragging) 0.9f else 1f
                         }
                         .pointerInput(showCC) {
-                            // First long-press opens a small context menu
-                            // (Size / Position / Color / Reset). If the user
-                            // long-presses again, or starts moving while the
-                            // menu is open, the existing drag behavior takes
-                            // over exactly as before. detectTapGestures'
-                            // onLongPress competes with the drag detector;
-                            // we explicitly prefer the menu the first time
-                            // and the drag the second.
+                            // Single long-press entry point (this used to be
+                            // two competing handlers: a pointerInput menu
+                            // opener plus a combinedClickable). A stationary
+                            // long-press opens the style dropdown; a
+                            // long-press that moves drags the cue anywhere on
+                            // the stage (persisted per video). Plain taps are
+                            // swallowed so they don't toggle the HUD.
                             detectTapGestures(
+                                onTap = { /* no-op: keep taps off the HUD toggle */ },
                                 onLongPress = {
-                                    if (!showSubtitleMenu) {
-                                        showSubtitleMenu = true
-                                        view.performHapticFeedback(
-                                            HapticFeedbackConstants.VIRTUAL_KEY
-                                        )
-                                    }
+                                    view.haptic(HapticFeedbackConstants.LONG_PRESS)
+                                    subStyleMenuOpen = true
                                 },
                             )
                             detectDragGesturesAfterLongPress(
                                 onDragStart = {
                                     subDragging = true
-                                    showSubtitleMenu = false
+                                    subStyleMenuOpen = false
                                 },
                                 onDrag = { change, amount ->
                                     change.consume()
@@ -1346,24 +1664,24 @@ fun PlayerScreen(
                                 onDragCancel = { subDragging = false },
                             )
                         }
-                        .combinedClickable(
-                            onClick = { /* no-op */ },
-                            onLongClick = {
-                                view.haptic(HapticFeedbackConstants.LONG_PRESS)
-                                subStyleMenuOpen = true
-                            },
-                        )
                         .padding(horizontal = 32.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    OutlinedSubtitleText(txt, subSize = subSize, subPos = subPos, subColor = subColor)
+                    OutlinedSubtitleText(txt, style = subtitleStyle)
                     if (subStyleMenuOpen) {
                         SubtitleStyleDropdown(
-                            size = subSize, onSize = { subSize = it; subStyleMenuOpen = false },
-                            pos = subPos, onPos = { subPos = it; subStyleMenuOpen = false },
-                            color = subColor, onColor = { subColor = it; subStyleMenuOpen = false },
-                            onReset = { subX = SUB_DEFAULT_X; subY = SUB_DEFAULT_Y; subSize = 1; subPos = 1; subColor = 0; subStyleMenuOpen = false
-                                PlayerPrefs.saveSubtitlePosition(context, mediaId, subX, subY) },
+                            style = subtitleStyle,
+                            onStyle = {
+                                onSubtitleStyleChanged(it)
+                                subStyleMenuOpen = false
+                            },
+                            onReset = {
+                                onSubtitleStyleChanged(SubtitleStyle())
+                                subX = SUB_DEFAULT_X
+                                subY = SUB_DEFAULT_Y
+                                subStyleMenuOpen = false
+                                PlayerPrefs.saveSubtitlePosition(context, mediaId, subX, subY)
+                            },
                             onDismiss = { subStyleMenuOpen = false },
                             accent = accent,
                         )
@@ -1421,25 +1739,6 @@ fun PlayerScreen(
             ) {
                 Icon(Icons.Filled.Lock, null, tint = accent)
             }
-        }
-
-        // diagnostics overlay (temporary - engine debugging)
-        if (!isPipMode && (errorMsg != null || stateText != "READY")) {
-            val diag = buildString {
-                errorMsg?.let { append("ERROR: ").append(it).append('\n') }
-                append("state=").append(stateText)
-                append(" pos=").append(livePlayer.currentPosition / 1000f).append("s")
-                append(" video=").append(livePlayer.videoSize.width)
-                    .append("x").append(livePlayer.videoSize.height)
-            }
-            Text(
-                diag,
-                color = Color(0xFFFFD166),
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 48.dp)
-                    .background(Color.Black.copy(alpha = 0.7f))
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
-            )
         }
 
         // ── controls overlay (hidden entirely while in PiP) ──────────
@@ -1543,6 +1842,18 @@ fun PlayerScreen(
                                 },
                                 onClick = { showCC = !showCC; menuOpen = false }
                             )
+                            DropdownMenuItem(
+                                text = { Text("Subtitle track…", color = Color.White) },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.Subtitles, null,
+                                        tint = Color.White.copy(alpha = 0.7f))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    view.haptic()
+                                    onOpenSubtitlePicker()
+                                }
+                            )
                             HorizontalDivider(color = MxMenuDivider)
                             DropdownMenuItem(
                                 text = {
@@ -1591,6 +1902,62 @@ fun PlayerScreen(
                             )
                             HorizontalDivider(color = MxMenuDivider)
                             DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when {
+                                            abStartMs == null -> "A-B repeat: set start"
+                                            abEndMs == null ->
+                                                "A-B repeat: set end (A = " +
+                                                    fmtTime(abStartMs) + ")"
+                                            else -> "A-B repeat: clear (" +
+                                                fmtTime(abStartMs) + " – " +
+                                                fmtTime(abEndMs) + ")"
+                                        },
+                                        color = Color.White,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.Repeat, null,
+                                        tint = if (abStartMs != null) accent
+                                        else Color.White.copy(alpha = 0.7f))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    view.haptic(HapticFeedbackConstants.VIRTUAL_KEY)
+                                    onAbRepeatTap()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Screenshot", color = Color.White) },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.PhotoCamera, null,
+                                        tint = Color.White.copy(alpha = 0.7f))
+                                },
+                                onClick = { menuOpen = false; captureFrame() },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "Volume boost: " + when (volumeBoostPct) {
+                                            0 -> "Off"
+                                            else -> "+${volumeBoostPct}%"
+                                        },
+                                        color = Color.White,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.VolumeUp, null,
+                                        tint = if (volumeBoostPct > 0) accent
+                                        else Color.White.copy(alpha = 0.7f))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    view.haptic(HapticFeedbackConstants.VIRTUAL_KEY)
+                                    onVolumeBoostCycle()
+                                },
+                            )
+                            HorizontalDivider(color = MxMenuDivider)
+                            DropdownMenuItem(
                                 text = { Text("Settings", color = Color.White) },
                                 leadingIcon = {
                                     Icon(Icons.Filled.Settings, null,
@@ -1636,10 +2003,10 @@ fun PlayerScreen(
                     )
                     QuickRowChip(
                         icon = Icons.Filled.Tune,
-                        contentDescription = "Audio output",
-                        active = audioOutputMode != 0,
+                        contentDescription = "Audio output picker",
+                        active = castRouteName != null,
                         accent = accent,
-                        onClick = { cycleAudioOutput() },
+                        onClick = { openAudioOutputPicker() },
                     )
                     Box(
                         modifier = Modifier
@@ -1756,7 +2123,7 @@ fun PlayerScreen(
                             accent = accent,
                             onClick = {
                                 view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                                seekBy(-10)
+                                seekBy(-seekIncrementSec)
                             },
                         )
                     }
@@ -1827,7 +2194,7 @@ fun PlayerScreen(
                             accent = accent,
                             onClick = {
                                 view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                                seekBy(10)
+                                seekBy(seekIncrementSec)
                             },
                         )
                     }
@@ -1857,6 +2224,34 @@ fun PlayerScreen(
             }
         }
     }
+
+        // ── A-B repeat chip (top-center while a region is set/looping);
+        //    tap to advance the cycle (set B / clear). ─────────────────
+        if (!isPipMode && abStartMs != null) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 72.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
+                    .clickable { onAbRepeatTap() }
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Repeat,
+                    contentDescription = "A-B repeat",
+                    tint = accent,
+                    modifier = Modifier.size(15.dp),
+                )
+                Text(
+                    if (abEndMs != null) fmtTime(abStartMs) + " – " + fmtTime(abEndMs)
+                    else "A = " + fmtTime(abStartMs) + " — now set B",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                )
+            }
+        }
 
         // ── Up Next pill (final 30 s of an episode) ──────────────────
         if (!isPipMode && hasNextEpisode && durationSec > 0f &&

@@ -3,20 +3,27 @@ package dev.anonrode.player
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +58,39 @@ class MainActivity : ComponentActivity() {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
 
+    /**
+     * Sidecar subtitle files (.srt/.ass…) are non-media: on Android 11+
+     * they're invisible without all-files access. Videos still play
+     * fine without it, so this only drives a banner, not a gate.
+     */
+    private var allFilesGranted by mutableStateOf(true)
+
+    private fun refreshAllFilesGranted() {
+        allFilesGranted = if (Build.VERSION.SDK_INT >= 30) {
+            Environment.isExternalStorageManager()
+        } else {
+            true
+        }
+    }
+
+    private fun openAllFilesSettings() {
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:$packageName"),
+                )
+            )
+        } catch (e: Exception) {
+            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshAllFilesGranted()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = AnonrodeApp.get(this)
@@ -63,11 +103,32 @@ class MainActivity : ComponentActivity() {
                     SettingsScreen(onBack = { settingsOpen = false })
                 } else if (hasVideoPermission()) {
                     // LibraryScreen draws its own top bar and bottom navigation.
-                    LibraryScreen(
-                        viewModelFactory = LibraryVmFactory(app.scanner, app.stateStore),
-                        onOpenVideo = { video -> play(video.uri, video.title) },
-                        onOpenSettings = { settingsOpen = true },
-                    )
+                    Box(Modifier.fillMaxSize()) {
+                        LibraryScreen(
+                            viewModelFactory = LibraryVmFactory(app.scanner, app.stateStore),
+                            onOpenVideo = { video -> play(video.uri, video.title) },
+                            onOpenSettings = { settingsOpen = true },
+                        )
+                        if (!allFilesGranted) {
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                            ) {
+                                Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                                    Text(
+                                        "Enable all-files access to find subtitle files " +
+                                            "(.srt/.ass) next to your videos.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    TextButton(onClick = { openAllFilesSettings() }) {
+                                        Text("Open settings")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 } else {
                     PermissionGate(
                         onRequest = { permissionLauncher.launch(requiredPermissions()) },

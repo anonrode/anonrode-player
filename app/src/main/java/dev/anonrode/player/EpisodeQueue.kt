@@ -73,6 +73,35 @@ data class EpisodeQueue(
             if (index < 0) return null
             return EpisodeQueue(episodes = siblings, currentIndex = index)
         }
+
+        /**
+         * Queue from an explicit user-selected ordered URI list (library
+         * multi-select), preserving the caller's order instead of episode-sorting.
+         * URIs missing from the MediaStore snapshot are skipped; returns null when
+         * [currentUri] itself is absent so the caller can fall back to folder
+         * siblings.
+         */
+        suspend fun fromExplicitUris(
+            scanner: MediaScanner,
+            orderedUris: List<String>,
+            currentUri: String,
+        ): EpisodeQueue? =
+            withContext(Dispatchers.IO) {
+                fromExplicitVideos(scanner.scan().videos, orderedUris, currentUri)
+            }
+
+        /** Pure variant of [fromExplicitUris] for callers holding a snapshot. */
+        fun fromExplicitVideos(
+            videos: List<Video>,
+            orderedUris: List<String>,
+            currentUri: String,
+        ): EpisodeQueue? {
+            val byUri = videos.associateBy { it.uri }
+            val episodes = orderedUris.mapNotNull { byUri[it] }
+            val index = episodes.indexOfFirst { it.uri == currentUri }
+            if (index < 0) return null
+            return EpisodeQueue(episodes = episodes, currentIndex = index)
+        }
     }
 }
 

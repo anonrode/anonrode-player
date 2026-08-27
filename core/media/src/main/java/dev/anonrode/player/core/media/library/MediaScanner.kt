@@ -41,6 +41,9 @@ class MediaScanner(private val context: Context) {
         MediaStore.Video.Media.DATA,
     )
 
+    @Volatile private var cache: LibrarySnapshot? = null
+    @Volatile private var cacheAt: Long = 0L
+
     /** Reactive library: re-queries on every MediaStore change (debounced). */
     fun observeLibrary(): Flow<LibrarySnapshot> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
@@ -55,12 +58,22 @@ class MediaScanner(private val context: Context) {
         awaitClose { resolver.unregisterContentObserver(observer) }
     }
         .debounce(250)
-        .map { scan() }
+        .map { scan(force = true) }
         // flowOn only affects upstream operators, so it must come AFTER map
         // for scan() to run off the collector's (main) thread.
         .flowOn(Dispatchers.IO)
 
-    fun scan(): LibrarySnapshot {
+    /**
+     * MediaStore query with a 3-second TTL cache: EpisodeQueue.build and
+     * other callers hit scan() back-to-back when opening a video, and the
+     * library cannot change that fast. [force] bypasses the cache and
+     * refreshes it (observer-driven refreshes).
+     */
+    fun scan(force: Boolean = false): LibrarySnapshot {
+        if (!force) {
+            val c = cache
+            if (c != null && System.currentTimeMillis() - cacheAt < 3000L) return c
+        }
         val videos = ArrayList<Video>()
         resolver.query(
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
@@ -96,7 +109,10 @@ class MediaScanner(private val context: Context) {
                 )
             }
         }
-        return LibrarySnapshot(videos, groupIntoSeries(videos))
+        val fresh = LibrarySnapshot(videos, groupIntoSeries(videos))
+        cache = fresh
+        cacheAt = System.currentTimeMillis()
+        return fresh
     }
 
     /** Whitelisted folder roots (SAF tree URIs), applied as a filter. */

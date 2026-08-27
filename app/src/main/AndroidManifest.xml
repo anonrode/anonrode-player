@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- Sidecar subtitles (.srt/.ass/…) are NON-media files: invisible to
+         MediaStore.Files on Android 11+ without all-files access. This is
+         a personal local player, so we ask for it directly (VLC/MX style). -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -21,6 +29,7 @@
         android:icon="@drawable/ic_launcher"
         android:supportsRtl="true"
         android:appCategory="video"
+        android:requestLegacyExternalStorage="true"
         android:theme="@style/Theme.AnonrodePlayer">
 
         <activity

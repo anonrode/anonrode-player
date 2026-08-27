@@ -1,7 +1,9 @@
 package dev.anonrode.player.ui
 
+import android.content.Intent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,11 +22,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,6 +49,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil3.compose.AsyncImage
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,11 +62,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.anonrode.player.PlayerActivity
 import dev.anonrode.player.core.model.Series
 import dev.anonrode.player.core.model.Video
 import dev.anonrode.player.core.ui.theme.rememberSkinPalette
@@ -110,6 +124,42 @@ fun LibraryScreen(
     val libAccent = palette.accent
     val libSecondary = palette.textDim
 
+    // ── Multi-select play queue ───────────────────────────────────────
+    // Long-press a video row to enter selection mode; taps then toggle
+    // rows in/out of `selected`, whose order defines the playback queue.
+    var selecting by remember { mutableStateOf(false) }
+    val selected = remember { mutableStateListOf<String>() }
+    val context = LocalContext.current
+
+    fun exitSelectionMode() {
+        selecting = false
+        selected.clear()
+    }
+
+    fun toggleSelected(uri: String) {
+        if (!selected.remove(uri)) selected.add(uri)
+    }
+
+    fun playSelectedQueue() {
+        val firstUri = selected.firstOrNull() ?: return
+        val firstTitle = state.videos.firstOrNull { it.uri == firstUri }?.title
+            ?: state.series.flatMap { it.videos }.firstOrNull { it.uri == firstUri }?.title
+            ?: firstUri
+        // Same launch as the single-video tap (MainActivity.play → plain
+        // Intent, no flags), plus the ordered queue extra. Keys match
+        // PlayerActivity.EXTRA_URI / EXTRA_TITLE / EXTRA_QUEUE_URIS.
+        context.startActivity(
+            Intent(context, PlayerActivity::class.java).apply {
+                putExtra("uri", firstUri)
+                putExtra("title", firstTitle)
+                putStringArrayListExtra("queue_uris", ArrayList(selected))
+            }
+        )
+        exitSelectionMode()
+    }
+
+    BackHandler(enabled = selecting) { exitSelectionMode() }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = libBg,
@@ -146,6 +196,18 @@ fun LibraryScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {
+            // ── Selection action bar (multi-select mode) ─────────────
+            if (selecting) {
+                item(key = "selection-bar") {
+                    SelectionActionBar(
+                        count = selected.size,
+                        canPlay = selected.isNotEmpty(),
+                        onPlay = { playSelectedQueue() },
+                        onCancel = { exitSelectionMode() },
+                    )
+                }
+            }
+
             // ── Continue watching ────────────────────────────────────
             if (state.inProgress.isNotEmpty()) {
                 item(key = "header-continue") { SectionHeader("CONTINUE WATCHING") }
@@ -192,7 +254,17 @@ fun LibraryScreen(
                 }
             } else {
                 items(state.videos, key = { "video-" + it.uri }) { v ->
-                    VideoRow(v, onClick = { onOpenVideo(v) })
+                    VideoRow(
+                        v,
+                        selected = selecting && v.uri in selected,
+                        onClick = {
+                            if (selecting) toggleSelected(v.uri) else onOpenVideo(v)
+                        },
+                        onLongClick = if (selecting) null else {
+                            selecting = true
+                            if (v.uri !in selected) selected.add(v.uri)
+                        },
+                    )
                 }
             }
         }
@@ -240,13 +312,19 @@ private fun SectionHeader(text: String) {
     )
 }
 
-/** Duo-tone gradient "poster art" generated from the title hash. */
+/**
+ * Duo-tone gradient "poster art" generated from the title hash. When
+ * [videoUri] is provided, the real video frame (Coil video decoder) is
+ * drawn over the gradient — which stays as placeholder while loading and
+ * as fallback if the frame can't be decoded.
+ */
 @Composable
 fun PosterArt(
     title: String,
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 14.dp,
     letterStyle: TextStyle? = null,
+    videoUri: String? = null,
 ) {
     val hue = posterHue(title)
     val c1 = Color.hsv(hue, 0.62f, 0.60f)
@@ -261,6 +339,16 @@ fun PosterArt(
             style = letterStyle ?: MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Black,
         )
+        if (videoUri != null) {
+            AsyncImage(
+                model = videoUri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(cornerRadius)),
+            )
+        }
     }
 }
 
@@ -292,7 +380,7 @@ private fun ContinueCard(item: InProgressItem, onClick: () -> Unit) {
         modifier = Modifier.width(150.dp),
     ) {
         Box {
-            PosterArt(item.video.title, modifier = Modifier.fillMaxWidth().height(88.dp), cornerRadius = 0.dp)
+            PosterArt(item.video.title, modifier = Modifier.fillMaxWidth().height(88.dp), cornerRadius = 0.dp, videoUri = item.video.uri)
             Box(
                 modifier = Modifier
                     .align(Alignment.Center)
@@ -338,7 +426,7 @@ private fun SeriesCard(s: Series, modifier: Modifier = Modifier, onClick: () -> 
         colors = CardDefaults.cardColors(containerColor = palette.surface),
         modifier = modifier,
     ) {
-        PosterArt(s.name, modifier = Modifier.fillMaxWidth().height(110.dp), cornerRadius = 0.dp)
+        PosterArt(s.name, modifier = Modifier.fillMaxWidth().height(110.dp), cornerRadius = 0.dp, videoUri = s.videos.firstOrNull()?.uri)
         Column(modifier = Modifier.padding(11.dp)) {
             Text(
                 s.name,
@@ -360,22 +448,99 @@ private fun SeriesCard(s: Series, modifier: Modifier = Modifier, onClick: () -> 
     }
 }
 
+/** Multi-select action bar: selection count plus play / cancel actions. */
 @Composable
-private fun VideoRow(v: Video, onClick: () -> Unit) {
+private fun SelectionActionBar(
+    count: Int,
+    canPlay: Boolean,
+    onPlay: () -> Unit,
+    onCancel: () -> Unit,
+) {
     val palette = rememberSkinPalette()
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 6.dp)
+            .background(palette.surface, RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "$count selected",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = palette.text,
+            modifier = Modifier.weight(1f),
+        )
+        Button(
+            onClick = onPlay,
+            enabled = canPlay,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = palette.accent,
+                contentColor = BrandTextPrimary,
+            ),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text("Play")
+        }
+        IconButton(onClick = onCancel) {
+            Icon(Icons.Filled.Close, contentDescription = "Cancel selection", tint = palette.textDim)
+        }
+    }
+}
+
+@Composable
+private fun VideoRow(
+    v: Video,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
+    val palette = rememberSkinPalette()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        PosterArt(
-            v.title,
-            modifier = Modifier.size(width = 64.dp, height = 38.dp),
-            cornerRadius = 8.dp,
-            letterStyle = MaterialTheme.typography.labelMedium,
-        )
+        Box {
+            PosterArt(
+                v.title,
+                modifier = Modifier.size(width = 64.dp, height = 38.dp),
+                cornerRadius = 8.dp,
+                letterStyle = MaterialTheme.typography.labelMedium,
+                videoUri = v.uri,
+            )
+            if (selected) {
+                // Accent scrim + check badge mark the row as queued.
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(palette.accent.copy(alpha = 0.30f), RoundedCornerShape(8.dp)),
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(18.dp)
+                        .background(palette.accent, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = "Selected",
+                        tint = BrandTextPrimary,
+                        modifier = Modifier.size(12.dp),
+                    )
+                }
+            }
+        }
         Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
             Text(
                 v.title,
