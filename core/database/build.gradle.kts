@@ -22,7 +22,9 @@ android {
 }
 
 dependencies {
-    implementation(libs.androidx.room.runtime)
+    // api (not implementation): MediaDatabase's RoomDatabase supertype must
+    // be visible to consumer modules (core:media) that call MediaDatabase.get().
+    api(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 }

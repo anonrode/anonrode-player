@@ -12,10 +12,11 @@ import java.io.FileDescriptor
  * engine work on them unchanged.
  *
  * Strategy: [MediaExtractor] enumerates tracks; text tracks are identified
- * by MIME. Samples are read with their container timestamps (sampleTime /
- * sampleDuration) instead of re-parsing timing out of the payload — this is
- * container-agnostic and matches how Media3's own SubripDecoder/SubRip
- * handling treats Matroska blocks. Per-MIME payload handling:
+ * by MIME. Samples are read with their container timestamps; since
+ * MediaExtractor exposes no duration for text samples, cue ends are derived
+ * from the following sample's start — this is container-agnostic and matches
+ * how Media3's own SubripDecoder/SubRip handling treats Matroska blocks.
+ * Per-MIME payload handling:
  *   - application/x-subrip : payload is the cue text (timing lives in the
  *     container block), strip HTML-style tags.
  *   - text/vtt             : cue payload, strip tags + cue settings.
@@ -45,6 +46,9 @@ object EmbeddedSubtitleExtractor {
 
     private const val MAX_SAMPLES = 60_000
     private const val DEFAULT_CUE_LEN_SEC = 2.0
+
+    /** Cap for cues whose successor is far away (silence gap), in seconds. */
+    private const val MAX_CUE_LEN_SEC = 7.0
 
     private val MIME_SRT = "application/x-subrip"
     private val MIME_VTT = "text/vtt"
@@ -100,7 +104,9 @@ object EmbeddedSubtitleExtractor {
             val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
             if (!isTextMime(mime)) continue
             val lang = fmt.getString(MediaFormat.KEY_LANGUAGE)?.takeIf { it.isNotEmpty() }
-            val title = fmt.getString(MediaFormat.KEY_TITLE)?.takeIf { it.isNotEmpty() }
+            // android.media.MediaFormat has no KEY_TITLE constant; MKV track
+            // name tags surface (if at all) under the raw "title" key.
+            val title = fmt.getString("title")?.takeIf { it.isNotEmpty() }
             out.add(Track(i, mime, lang, title, buildLabel(lang, title, mime)))
         }
         return out
@@ -150,20 +156,32 @@ object EmbeddedSubtitleExtractor {
 
         val buf = java.nio.ByteBuffer.allocateDirect(512 * 1024)
         val cues = ArrayList<SubtitleCue>()
+        // MediaExtractor exposes no per-sample duration for text tracks, so
+        // each cue ends when the next sample starts (capped at
+        // MAX_CUE_LEN_SEC so a silence gap can't freeze a cue on screen);
+        // the final sample gets the default length.
+        var prevStartSec = -1.0
+        var prevPayload: String? = null
         var guard = 0
         while (guard++ < MAX_SAMPLES) {
             buf.clear()
             val n = ex.readSampleData(buf, 0)
             if (n < 0) break
             val startSec = ex.sampleTime / 1_000_000.0
-            val durSec = ex.sampleDuration / 1_000_000.0
             val bytes = ByteArray(n)
             buf.position(0)
             buf.get(bytes, 0, n)
             val payload = String(bytes, Charsets.UTF_8)
-            val endSec = if (durSec > 0.0) startSec + durSec else startSec + DEFAULT_CUE_LEN_SEC
-            addCue(cues, mime, payload, startSec, endSec)
+            if (prevPayload != null) {
+                val endSec = minOf(startSec, prevStartSec + MAX_CUE_LEN_SEC)
+                addCue(cues, mime, prevPayload, prevStartSec, endSec)
+            }
+            prevStartSec = startSec
+            prevPayload = payload
             if (!ex.advance()) break
+        }
+        if (prevPayload != null) {
+            addCue(cues, mime, prevPayload, prevStartSec, prevStartSec + DEFAULT_CUE_LEN_SEC)
         }
         cues.sortBy { it.start }
         return cues

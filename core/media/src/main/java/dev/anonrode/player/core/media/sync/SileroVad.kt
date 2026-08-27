@@ -117,12 +117,16 @@ class SileroVad(context: Context) : AutoCloseable {
         val sess = session ?: return
         // input = [context(64)? , chunk(512)] — first call has no context
         val width = if (hasContext) WINDOW + CONTEXT else WINDOW
-        val fb = inputBuf.clear().asFloatBuffer()
+        // (clear() returns the Buffer base type in the Android stubs, so
+        // the asFloatBuffer() call must not chain off it.)
+        inputBuf.clear()
+        val fb = inputBuf.asFloatBuffer()
         if (hasContext) fb.put(contextSamples)
         fb.put(chunk)
         fb.flip() // position=0, limit=width — ONNX reads remaining()
 
-        val stBuf = stateBuf.clear().asFloatBuffer()
+        stateBuf.clear()
+        val stBuf = stateBuf.asFloatBuffer()
         stBuf.put(state)
         stBuf.rewind() // position=0, limit=STATE_LEN
 

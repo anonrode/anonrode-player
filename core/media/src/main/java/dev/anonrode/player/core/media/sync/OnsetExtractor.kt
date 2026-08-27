@@ -1,6 +1,7 @@
 package dev.anonrode.player.core.media.sync
 
 import android.content.Context
+import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -234,7 +235,7 @@ class OnsetExtractor(private val context: Context) {
                         of.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 0
                     isFloat = of.containsKey(MediaFormat.KEY_PCM_ENCODING) &&
                         of.getInteger(MediaFormat.KEY_PCM_ENCODING) ==
-                        MediaFormat.ENCODING_PCM_FLOAT
+                        AudioFormat.ENCODING_PCM_FLOAT
                 } else if (outIdx >= 0) {
                     if (info.size > 0 && sampleRate > 0 && channels > 0) {
                         val buf = codec.getOutputBuffer(outIdx)

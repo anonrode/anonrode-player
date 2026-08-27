@@ -4,7 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
 import androidx.work.CoroutineWorker
-import androidx.work.Result
+import androidx.work.ListenableWorker.Result
 import androidx.work.WorkerParameters
 import dev.anonrode.player.core.database.MediaDatabase
 import dev.anonrode.player.core.media.log.AppLog
