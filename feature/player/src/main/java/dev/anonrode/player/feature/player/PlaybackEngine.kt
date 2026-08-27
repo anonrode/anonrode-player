@@ -222,9 +222,11 @@ class PlaybackEngine(
                         enableAudioTrackPlaybackParams: Boolean,
                     ): AudioSink = buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
                 }.apply {
+                    // The MODE_ constants are declared on DefaultRenderersFactory;
+                    // Kotlin won't resolve them through the nextlib subclass.
                     setExtensionRendererMode(
-                        if (mode == MODE_PREFER_APP) NextRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
-                        else NextRenderersFactory.EXTENSION_RENDERER_MODE_ON
+                        if (mode == MODE_PREFER_APP) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                        else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
                     )
                 }
             }
@@ -359,7 +361,7 @@ class PlaybackEngine(
             AppLog.d("ENGINE", "rebuild: no-op (mode=" + mode + ")")
             return if (player.audioSessionId != C.AUDIO_SESSION_ID_UNSET) player.audioSessionId else 0
         }
-        val ctx = player.applicationContext
+        val ctx = appContext
         val pos = player.currentPosition
         val wasPlayWhenReady = player.playWhenReady
         val playState = player.playbackState
