@@ -16,9 +16,30 @@ android {
         versionName = "0.5.2"
     }
 
+    // One stable signing identity for every build so updates always install
+    // in place (no uninstall/reinstall cycle, user data survives). The
+    // keystore itself lives in CI secrets — this repo is public, so it must
+    // never be committed. The workflow decodes it to a temp file and points
+    // ANONRODE_KEYSTORE_PATH at it. Without that env (plain checkout) the
+    // build falls back to the transient debug key.
+    val sharedKeyAvailable = System.getenv("ANONRODE_KEYSTORE_PATH") != null
+
+    signingConfigs {
+        create("shared") {
+            val path = System.getenv("ANONRODE_KEYSTORE_PATH")
+            if (path != null) {
+                storeFile = java.io.File(path)
+                storePassword = System.getenv("ANONRODE_STORE_PASSWORD").orEmpty()
+                keyAlias = System.getenv("ANONRODE_KEY_ALIAS") ?: "anonrode"
+                keyPassword = System.getenv("ANONRODE_KEY_PASSWORD").orEmpty()
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            if (sharedKeyAvailable) signingConfig = signingConfigs.getByName("shared")
         }
         release {
             isMinifyEnabled = true
@@ -27,6 +48,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (sharedKeyAvailable) signingConfig = signingConfigs.getByName("shared")
         }
         create("releaseWithDebugSigning") {
             initWith(getByName("release"))
@@ -35,7 +57,9 @@ android {
             // builds unshrunk until proper keep rules are proven.
             isMinifyEnabled = false
             isShrinkResources = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig =
+                if (sharedKeyAvailable) signingConfigs.getByName("shared")
+                else signingConfigs.getByName("debug")
             applicationIdSuffix = ".release"
         }
     }
