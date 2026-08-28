@@ -5,7 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.session.MediaNotificationManager
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.common.util.UnstableApi
@@ -140,7 +140,7 @@ class PlayerService : MediaSessionService() {
             builder.setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle("Anonrode Player")
                 .setOngoing(true)
-            startForeground(MediaNotificationManager.DEFAULT_NOTIFICATION_ID, builder.build())
+            startForeground(DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID, builder.build())
             foregroundAnnounced = true
         } catch (e: Exception) {
             AppLog.e("SERVICE", "startForeground failed", e)
