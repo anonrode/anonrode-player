@@ -8,6 +8,9 @@ import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.model.SubtitleCue
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -25,6 +28,7 @@ class AudioSyncProcessor(
 
     @Volatile private var sampleRate = 0
     @Volatile private var channelCount = 0
+    @Volatile private var inputIsFloat = false
     @Volatile private var active = false
     private var inputEnded = false
     private var outputEnded = false
@@ -39,12 +43,36 @@ class AudioSyncProcessor(
     private var baseIdx = 0
     private var binCount = 0
     @Volatile private var locked = false
-    // Evaluation attempt cap: findOffset is ~10M ops and runs on the audio
-    // render thread; after MAX_EVAL_ATTEMPTS consecutive attempts without a
-    // lock we stop evaluating (gaveUp) until the next flush()/reset()/
-    // position reset — seeks and episode switches re-arm naturally.
-    private var failedEvals = 0
-    private var gaveUp = false
+    // Evaluation attempt cap: findOffset is ~10M ops; after
+    // MAX_EVAL_ATTEMPTS consecutive attempts without a lock we stop
+    // evaluating (gaveUp) until the next flush()/reset()/position reset —
+    // seeks and episode switches re-arm naturally. 40 attempts ≈ 56s of
+    // evaluation slots (one per ~1.4s of audio): generous enough that a
+    // legitimate lock (two agreeing evaluations) still lands, while content
+    // that never passes the gates stops burning CPU.
+    @Volatile private var failedEvals = 0
+    @Volatile private var gaveUp = false
+
+    // Single-flight background evaluation (#6): findOffset must not run on
+    // the audio render thread (underrun risk on mid-range devices). The
+    // audio thread only accumulates bins and hands a snapshot to
+    // [evalExecutor]; if an evaluation is already in flight the slot is
+    // dropped (drop-if-busy) and the next one (~1.4s of audio later)
+    // retries.
+    private val evalInFlight = AtomicBoolean(false)
+    private val evalExecutor: ExecutorService by lazy {
+        Executors.newSingleThreadExecutor { r ->
+            Thread(r, "sync-eval").apply {
+                isDaemon = true
+                priority = Thread.MIN_PRIORITY
+            }
+        }
+    }
+
+    // Bumped on every window reset (flush/reset/position re-anchor) so an
+    // evaluation already in flight against stale bins is discarded instead
+    // of locking or counting against the new window.
+    @Volatile private var generation = 0
 
     private var totalFrames: Long = 0
     @Volatile var startPositionMs: Long = 0
@@ -61,8 +89,10 @@ class AudioSyncProcessor(
 
     private val driftTracker = DriftTracker()
     private var lastEvalPos = Long.MIN_VALUE
-    private var stableHits = 0
-    private var lastOffset = Double.NaN
+    // Written by the eval worker, reset by the audio thread, read back by
+    // the worker on the next evaluation — needs cross-thread visibility.
+    @Volatile private var stableHits = 0
+    @Volatile private var lastOffset = Double.NaN
 
     fun setCues(cues: List<SubtitleCue>) {
         this.cues = cues
@@ -87,11 +117,19 @@ class AudioSyncProcessor(
         lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
         failedEvals = 0; gaveUp = false
         locked = false
+        generation++ // invalidate any in-flight evaluation
     }
 
     override fun configure(fmt: AudioFormat): AudioFormat {
         sampleRate = fmt.sampleRate; channelCount = fmt.channelCount
-        active = fmt.encoding == C.ENCODING_PCM_16BIT && sampleRate > 0 && channelCount > 0
+        inputIsFloat = fmt.encoding == C.ENCODING_PCM_FLOAT
+        // Accept 16-bit AND float PCM (#24): float-passthrough devices used
+        // to be silently inactive (no sync at all). Float input is converted
+        // sample-by-sample onto the 16-bit window pipeline in analyze(); the
+        // output format is the untouched input format either way (this
+        // processor is a pure passthrough).
+        active = (fmt.encoding == C.ENCODING_PCM_16BIT || inputIsFloat) &&
+            sampleRate > 0 && channelCount > 0
         if (active) {
             windowTarget = max(1, sampleRate / 100)
             // A full 10ms window at the real rate: windowTarget frames per
@@ -130,6 +168,7 @@ class AudioSyncProcessor(
         windowN = 0; floor = 0.0; peak = 0.0; lastSpeech = 0.0
         lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
         failedEvals = 0; gaveUp = false
+        generation++ // invalidate any in-flight evaluation
     }
 
     override fun reset() { flush(); cues = emptyList(); active = false }
@@ -140,18 +179,27 @@ class AudioSyncProcessor(
         lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
         failedEvals = 0; gaveUp = false
         locked = false
+        generation++ // invalidate any in-flight evaluation
     }
 
     private fun analyze(pcm: ByteBuffer) {
         checkAndApplyReset()
         if (locked) return
-        val nCh = channelCount; val frameBytes = 2 * nCh
+        val nCh = channelCount
+        val frameBytes = (if (inputIsFloat) 4 else 2) * nCh
         while (pcm.remaining() >= frameBytes) {
             checkAndApplyReset()
-            // fill one window
+            // fill one window; pcm.short / pcm.float advance the position by
+            // 2 / 4 bytes. Float input is converted onto the 16-bit pipeline
+            // (Q15, clamped) so the features below stay bit-for-bit the same
+            // computation as native 16-bit input (#24).
             for (ch in 0 until nCh) {
                 if (windowN < windowSamples.size) {
-                    windowSamples[windowN++] = pcm.short // pcm.short advances position by 2 bytes
+                    windowSamples[windowN++] = if (inputIsFloat) {
+                        (pcm.float * 32768f).coerceIn(-32768f, 32767f).toInt().toShort()
+                    } else {
+                        pcm.short
+                    }
                 }
             }
             totalFrames += 1
@@ -229,45 +277,86 @@ class AudioSyncProcessor(
                 lastEvalPos = posMs
                 val minBins = (SpeechCorrelator.MIN_AUDIO_SECONDS / SpeechCorrelator.ALIGN_BIN).toInt()
                 if (binCount >= minBins && cues.isNotEmpty() && !gaveUp) {
-                    evaluate(posMs)
+                    scheduleEvaluate(posMs)
                 }
             }
         }
     }
 
-    private fun evaluate(posMs: Long) {
+    /**
+     * Hands a snapshot of the current bin window to the single-flight
+     * background worker (#6). The audio render thread must only accumulate
+     * bins — findOffset is ~801 shifts x binCount (up to ~10M+ ops) and
+     * running it here risks underruns on mid-range devices. If an evaluation
+     * is already in flight this slot is dropped (drop-if-busy); the next
+     * slot (~1.4s of audio later) retries.
+     */
+    private fun scheduleEvaluate(posMs: Long) {
+        if (!evalInFlight.compareAndSet(false, true)) return // busy: drop
+        val bins = audioBins.copyOf()
+        val count = binCount
+        val base = baseIdx
+        val cueList = cues
+        val gen = generation
+        evalExecutor.execute {
+            try {
+                evaluate(bins, count, base, cueList, posMs, gen)
+            } catch (t: Throwable) {
+                AppLog.e("SYNC", "background eval failed", t)
+            } finally {
+                evalInFlight.set(false)
+            }
+        }
+    }
+
+    /** Runs on [evalExecutor] — never on the audio render thread. */
+    private fun evaluate(
+        bins: FloatArray,
+        count: Int,
+        base: Int,
+        cueList: List<SubtitleCue>,
+        posMs: Long,
+        gen: Int,
+    ) {
+        if (gen != generation || locked) return
         val result = SpeechCorrelator.findOffset(
-            audioBins, binCount, cues,
-            baseSeconds = baseIdx * SpeechCorrelator.ALIGN_BIN,
+            bins, count, cueList,
+            baseSeconds = base * SpeechCorrelator.ALIGN_BIN,
         ) ?: run {
-            countFailedEval(posMs)
+            countFailedEval(posMs, gen)
             return
         }
-        
+
+        // Discard stale results: a flush()/reset()/position re-anchor may
+        // have landed on the audio thread while findOffset was running.
+        if (gen != generation || locked) return
+
         stableHits = if (!lastOffset.isNaN() &&
             abs(result.offsetSeconds - lastOffset) <= 0.25) stableHits + 1 else 1
         lastOffset = result.offsetSeconds
-        
+
         // drift detection from segment offsets
         driftTracker.add(posMs / 1000.0, result.offsetSeconds)
-        val (base, speedF) = driftTracker.getCorrection(posMs / 1000.0)
-        
+        val (baseOffset, speedF) = driftTracker.getCorrection(posMs / 1000.0)
+
         AppLog.d("SYNC", "eval t=${posMs/1000}s off=${result.offsetSeconds}s speed=$speedF hits=$stableHits")
 
         if (stableHits >= 2) {
             locked = true
-            listener.onSyncLocked(base.toFloat(), speedF)
+            listener.onSyncLocked(baseOffset.toFloat(), speedF)
         } else {
-            countFailedEval(posMs)
+            countFailedEval(posMs, gen)
         }
     }
 
     /**
      * Counts an evaluation that returned without locking; once the cap is
      * reached, [gaveUp] stops further (expensive) attempts until the next
-     * flush()/reset()/position reset.
+     * flush()/reset()/position reset. Evaluations invalidated by a window
+     * reset (stale [gen]) are not counted against the new window.
      */
-    private fun countFailedEval(posMs: Long) {
+    private fun countFailedEval(posMs: Long, gen: Int) {
+        if (gen != generation) return
         failedEvals++
         if (failedEvals >= MAX_EVAL_ATTEMPTS) {
             gaveUp = true

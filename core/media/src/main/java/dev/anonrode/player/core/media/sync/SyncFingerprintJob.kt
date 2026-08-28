@@ -215,11 +215,12 @@ class SyncFingerprintJob(
 
     /**
      * Find the auto-picked sidecar subtitle for the video. Delegates to the
-     * SAME name-based picker playback uses
-     * ([SubtitleSourceResolver.pickAutoSidecar]), then decodes the chosen
-     * file's bytes — so with 2+ sidecars the persisted lock can never be
-     * fitted to a different file than the one rendered. Returns
-     * (fileName, text) of the pick, or null when there is none.
+     * SAME score-based picker playback uses
+     * ([SubtitleSourceResolver.pickAutoSidecar] — the canonical
+     * SubtitleMatcher-scored AUTO pick), then decodes the chosen file's
+     * bytes — so with 2+ sidecars the persisted lock can never be fitted to
+     * a different file than the one rendered. Returns (fileName, text) of
+     * the pick, or null when there is none.
      */
     private fun findSidecarSubtitle(videoUri: String, videoPath: String): Pair<String, String>? {
         val sidecar = SubtitleSourceResolver.pickAutoSidecar(applicationContext, videoPath) ?: return null
