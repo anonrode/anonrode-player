@@ -28,7 +28,7 @@ android {
         create("shared") {
             val path = System.getenv("ANONRODE_KEYSTORE_PATH")
             if (path != null) {
-                storeFile = java.io.File(path)
+                storeFile = File(path)
                 storePassword = System.getenv("ANONRODE_STORE_PASSWORD").orEmpty()
                 keyAlias = System.getenv("ANONRODE_KEY_ALIAS") ?: "anonrode"
                 keyPassword = System.getenv("ANONRODE_KEY_PASSWORD").orEmpty()
