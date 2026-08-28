@@ -123,7 +123,8 @@ class PlayerActivity : ComponentActivity() {
     /** URI of the media the engine is playing (speed persistence target). */
     private var currentUriStr: String? = null
 
-    /** In-flight [openVideo] coroutine; cancelled when a newer open starts. */
+    /** In-flight open pipeline: the [openVideo] coroutine, later replaced by
+     *  its [commitPlay] coroutine. Cancelled when a newer open starts. */
     private var openJob: Job? = null
 
     /** Monotonic guard: a stale [openVideo] must not commit over a newer one. */
@@ -233,7 +234,9 @@ class PlayerActivity : ComponentActivity() {
     @Volatile
     private var currentSettings: PlayerSettings = PlayerSettings()
 
-    /** Everything [commitPlay] needs, stashed while the resume prompt is up. */
+    /** Everything [commitPlay] needs, stashed while the resume prompt is up.
+     *  [gen] is the [openGeneration] that produced it: commitPlay refuses to
+     *  run for a superseded generation (stale resume-prompt clicks). */
     private data class PendingPlay(
         val uriStr: String,
         val cues: List<SubtitleCue>,
@@ -245,6 +248,7 @@ class PlayerActivity : ComponentActivity() {
         val finished: Boolean,
         val savedPosMs: Long,
         val audioTrackIdx: Int?,
+        val gen: Int,
     )
 
     private var pendingPlay: PendingPlay? = null
@@ -753,6 +757,9 @@ class PlayerActivity : ComponentActivity() {
                 // empty choice = legacy auto-pick of the best sidecar.
                 val choice = state?.subtitleChoice.orEmpty()
                 val videoPath = resolveVideoPath(uriStr)
+                // resolveVideoPath blocks (not cancellable) — a newer open
+                // may have landed while it ran; don't publish stale state.
+                if (gen != openGeneration) return@launch
                 currentVideoPath = videoPath
                 val parsed = SubtitleSourceResolver.resolveCues(
                     applicationContext, uriStr, videoPath, choice,
@@ -782,6 +789,8 @@ class PlayerActivity : ComponentActivity() {
                 }
 
                 withContext(Dispatchers.Main) {
+                    // A newer open may have landed during the hop to Main.
+                    if (gen != openGeneration) return@withContext
                     manualNudgeMs = manual
                     subtitleChoice = choice
                 }
@@ -798,13 +807,23 @@ class PlayerActivity : ComponentActivity() {
                 sessionSpeed = speed
 
                 // Episode queue: an explicit multi-select list (library) wins;
-                // otherwise every MediaStore video sharing this folder, sorted
-                // by season/episode number, index resolved to uriStr. One
-                // library snapshot (MediaScanner is TTL-cached) is fetched and
-                // reused for both queue paths instead of re-scanning per call.
+                // otherwise every video sharing this folder, sorted by
+                // season/episode number, index resolved to uriStr. Built from
+                // the already-observed library snapshot — the library screen's
+                // observer keeps the scanner cache fresh, so opens don't pay
+                // for a MediaStore round-trip. A scan happens only when no
+                // snapshot exists yet (cold open), with one retry when the
+                // video is missing from a stale snapshot.
                 val queueUris = explicitQueueUris
-                val snapshot = app.scanner.scan().videos
-                val currentVideo = snapshot.firstOrNull { it.uri == uriStr }
+                var snapshot = app.scanner.cachedSnapshot()?.videos
+                    ?: app.scanner.scan().videos
+                var currentVideo = snapshot.firstOrNull { it.uri == uriStr }
+                if (currentVideo == null) {
+                    // Absent from the (possibly stale) snapshot — refresh
+                    // once; scan() is a cheap no-op when already fresh.
+                    snapshot = app.scanner.scan().videos
+                    currentVideo = snapshot.firstOrNull { it.uri == uriStr }
+                }
                 val queue = if (queueUris != null && queueUris.size > 1) {
                     EpisodeQueue.fromExplicitVideos(snapshot, queueUris, uriStr)
                         ?: currentVideo?.let { EpisodeQueue.fromVideos(snapshot, it) }
@@ -831,6 +850,7 @@ class PlayerActivity : ComponentActivity() {
                         finished = state?.finished == true,
                         savedPosMs = state?.playbackPositionMs ?: 0L,
                         audioTrackIdx = state?.audioTrackIndex,
+                        gen = gen,
                     )
                     pendingPlay = pending
                     // Resume behavior (Settings): ask once per open when a
@@ -865,8 +885,16 @@ class PlayerActivity : ComponentActivity() {
      * Final step of [openVideo] — directly, or once the user answers the
      * resume prompt. Applies the speed, starts the engine (restoring the
      * persisted audio track), and launches the subtitle render loop.
+     *
+     * Serialized with [openVideo] through [openGeneration] + [openJob]: a
+     * commit produced by a superseded open never reaches the engine, and a
+     * newer openVideo cancels this commit while it is still queued.
      */
     private fun commitPlay(pending: PendingPlay, resume: Boolean) {
+        // Generation guard: a newer [openVideo] supersedes this commit.
+        // Covers the resume-prompt path too — a click already in flight when
+        // the user switches videos must not start the stale episode.
+        if (pending.gen != openGeneration) return
         val app = AnonrodeApp.get(this)
         val engine = app.engine
         resumePromptMs = null
@@ -875,7 +903,9 @@ class PlayerActivity : ComponentActivity() {
         // notification) starts inside engine.play() below, so ask for the
         // notification permission here rather than cold in onCreate.
         ensureNotificationPermission()
-        lifecycleScope.launch {
+        // Tracked as [openJob] so a newer openVideo cancels this commit.
+        openJob = lifecycleScope.launch {
+            if (pending.gen != openGeneration) return@launch
             // Persistent decoder priority (Settings): three real engine
             // profiles — HW+SW (device wins, FFmpeg fallback), APP SW
             // (FFmpeg preferred), HW ONLY (no extension renderers).
@@ -892,12 +922,28 @@ class PlayerActivity : ComponentActivity() {
             }
             val player = engine.player
             player.setPlaybackSpeed(pending.speed)
+            // Fresh resume point, read BEFORE the engine starts: a position
+            // save may have landed mid-open (episode switches and subtitle
+            // reloads persist progress right before re-opening). This is the
+            // last suspension before playback — the value is handed to
+            // engine.play, which then runs the whole setMediaItem → seekTo →
+            // prepare pipeline without suspending (no frame-0 flash, and no
+            // window where a newer open could interleave).
+            val savedPosMs = if (resume) {
+                app.stateStore.get(pending.uriStr)?.playbackPositionMs ?: 0L
+            } else {
+                0L
+            }
+            if (pending.gen != openGeneration) return@launch
             engine.play(
                 MediaItem.fromUri(pending.uriStr), pending.uriStr, pending.cues,
                 pending.manual, pending.auto, pending.autoSpeed,
                 resume = resume,
                 syncEnabled = currentSettings.autoSyncEnabled,
+                savedPositionMs = savedPosMs,
             )
+            // Belt-and-braces: skip publishing state if a newer open landed.
+            if (pending.gen != openGeneration) return@launch
             // Fully-watched episodes restart from the top instead of
             // resuming at the final frame; the resulting seek
             // discontinuity re-anchors the sync processor.

@@ -53,17 +53,23 @@ data class EpisodeQueue(
         fun sortEpisodes(videos: List<Video>): List<Video> = videos.sortedWith(episodeOrder())
 
         /**
-         * Scan MediaStore and build the queue around [currentUri]: all videos
-         * sharing its parent directory path, episode-sorted, with the current
-         * index resolved. Returns null when the video is no longer in
-         * MediaStore (queue features silently disable).
+         * Build the queue around [currentUri] from the scanner's
+         * already-observed snapshot: all videos sharing its parent directory
+         * path, episode-sorted, with the current index resolved. A MediaStore
+         * scan happens only when no snapshot exists yet (or the video is
+         * missing from a stale one). Returns null when the video is not in
+         * the library (queue features silently disable).
          */
         suspend fun build(scanner: MediaScanner, currentUri: String): EpisodeQueue? =
             withContext(Dispatchers.IO) {
-                val videos = scanner.scan().videos
-                val current = videos.firstOrNull { it.uri == currentUri }
-                    ?: return@withContext null
-                fromVideos(videos, current)
+                var videos = scanner.cachedSnapshot()?.videos ?: scanner.scan().videos
+                var current = videos.firstOrNull { it.uri == currentUri }
+                if (current == null) {
+                    // Not in the (possibly stale) snapshot — refresh once.
+                    videos = scanner.scan().videos
+                    current = videos.firstOrNull { it.uri == currentUri }
+                }
+                current?.let { fromVideos(videos, it) }
             }
 
         /** Pure variant of [build] for callers that already hold a library snapshot. */
@@ -77,9 +83,10 @@ data class EpisodeQueue(
         /**
          * Queue from an explicit user-selected ordered URI list (library
          * multi-select), preserving the caller's order instead of episode-sorting.
-         * URIs missing from the MediaStore snapshot are skipped; returns null when
+         * URIs missing from the library snapshot are skipped; returns null when
          * [currentUri] itself is absent so the caller can fall back to folder
-         * siblings.
+         * siblings. Served from the scanner's cached snapshot when one exists;
+         * scans only when there is none yet.
          */
         suspend fun fromExplicitUris(
             scanner: MediaScanner,
@@ -87,7 +94,8 @@ data class EpisodeQueue(
             currentUri: String,
         ): EpisodeQueue? =
             withContext(Dispatchers.IO) {
-                fromExplicitVideos(scanner.scan().videos, orderedUris, currentUri)
+                val videos = scanner.cachedSnapshot()?.videos ?: scanner.scan().videos
+                fromExplicitVideos(videos, orderedUris, currentUri)
             }
 
         /** Pure variant of [fromExplicitUris] for callers holding a snapshot. */

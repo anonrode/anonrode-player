@@ -9,12 +9,14 @@ import androidx.work.WorkerParameters
 import dev.anonrode.player.core.database.MediaDatabase
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.state.MediaStateStore
+import dev.anonrode.player.core.datastore.playerSettingsDataStore
 import dev.anonrode.player.core.media.subtitle.SubtitleDecoder
 import dev.anonrode.player.core.media.subtitle.SubtitleParser
 import dev.anonrode.player.core.media.subtitle.SubtitleSourceResolver
 import dev.anonrode.player.core.model.SubtitleCue
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 /**
@@ -48,6 +50,21 @@ class SyncFingerprintJob(
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        // Re-check the live setting on EVERY attempt: a job enqueued while
+        // auto-sync was on keeps retrying across process restarts, and the
+        // user may have switched it off since. Without this check the
+        // full-file decode runs forever against the user's explicit choice.
+        // Returning success() terminates the retry chain for good.
+        val syncEnabled = try {
+            applicationContext.playerSettingsDataStore.data.first().autoSyncEnabled
+        } catch (e: Exception) {
+            true
+        }
+        if (!syncEnabled) {
+            AppLog.d("SYNC_JOB", "auto-sync disabled in settings — dropping fingerprint job")
+            return@withContext Result.success()
+        }
+
         val videoUri = inputData.getString(KEY_VIDEO_URI)
         if (videoUri.isNullOrEmpty()) {
             AppLog.e("SYNC_JOB", "no video uri in input")

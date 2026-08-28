@@ -25,6 +25,14 @@ import kotlin.math.abs
  *                                           second half (multiple-comparisons
  *                                           guard: chance peaks don't
  *                                           replicate, true offsets do)
+ *
+ * Implementation note: this runs on the sync-eval worker thread (never on
+ * the audio render thread). The shift loops are written range-check-free:
+ * for a shift δ only speech bins with i+δ inside the subtitle track can
+ * contribute a +1, and every out-of-range speech bin contributes exactly
+ * −1 = 2·0−1, so score(δ) = (2·hits(δ) − mass) / mass with hits counted
+ * only over the in-range i interval. Same integers, same order, same
+ * scores as the naive formulation — just no per-sample bounds tests.
  */
 object SpeechCorrelator {
 
@@ -88,14 +96,16 @@ object SpeechCorrelator {
         var bestScore = -2.0f
         var bestShift = 0
         for (shift in lo..hi) {
-            var sc = 0
-            for (i in 0 until binCount) {
-                if (a[i].toInt() == 0) continue
-                val j = i + shift
-                val bit = if (j in 0 until total) b[j].toInt() else 0
-                sc += 2 * bit - 1
+            // i range where j = i + shift stays inside the subtitle track.
+            val i0 = if (shift < 0) -shift else 0
+            val i1 = if (binCount < total - shift) binCount else total - shift
+            var hits = 0
+            for (i in i0 until i1) {
+                if (a[i].toInt() != 0 && b[i + shift].toInt() != 0) hits++
             }
-            val norm = sc / mass.toFloat()
+            // Σ (2·B−1) over ALL speech bins = 2·hits − mass (out-of-range
+            // bins contribute −1 each, which 2·0−1 in −mass already covers).
+            val norm = (2 * hits - mass) / mass.toFloat()
             scores[shift - lo] = norm
             if (norm > bestScore) {
                 bestScore = norm
@@ -114,28 +124,32 @@ object SpeechCorrelator {
         val margin = bestScore - second
 
         // ── containment: audio speech mass inside cues at the peak ─
+        // (hits at bestShift, the same restricted-range count as above)
+        val c0 = if (bestShift < 0) -bestShift else 0
+        val c1 = if (binCount < total - bestShift) binCount else total - bestShift
         var inside = 0
-        for (i in 0 until binCount) {
-            if (a[i].toInt() == 0) continue
-            val j = i + bestShift
-            inside += if (j in 0 until total) b[j].toInt() else 0
+        for (i in c0 until c1) {
+            if (a[i].toInt() != 0 && b[i + bestShift].toInt() != 0) inside++
         }
         val containment = inside / mass.toFloat()
 
         // ── cross-half validation ──────────────────────────────────
         val mid = binCount / 2
+        // Speech mass of the first half — shift-independent, counted once.
+        var halfMass = 0f
+        for (i in 0 until mid) {
+            if (a[i].toInt() != 0) halfMass += 1f
+        }
         var half1Shift = Int.MIN_VALUE
         var half1Score = -2.0f
         for (shift in lo..hi) {
-            var sc = 0f
-            var m = 0f
-            for (i in 0 until mid) {
-                if (a[i].toInt() == 0) continue
-                m += 1f
-                val j = i + shift
-                sc += if (j in 0 until total) b[j].toInt() else 0
+            val i0 = if (shift < 0) -shift else 0
+            val i1 = if (mid < total - shift) mid else total - shift
+            var hits = 0
+            for (i in i0 until i1) {
+                if (a[i].toInt() != 0 && b[i + shift].toInt() != 0) hits++
             }
-            val v = if (m > 0f) sc / m else 0f
+            val v = if (halfMass > 0f) hits / halfMass else 0f
             if (v > half1Score) {
                 half1Score = v
                 half1Shift = shift

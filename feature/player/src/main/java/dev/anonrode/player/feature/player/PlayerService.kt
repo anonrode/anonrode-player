@@ -1,6 +1,11 @@
 package dev.anonrode.player.feature.player
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.os.Build
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaNotificationManager
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.common.util.UnstableApi
@@ -24,6 +29,12 @@ class PlayerService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
     private var saveJob: Job? = null
+    // Set when onCreate runs before the app has wired PlayerServiceHolder
+    // (system restarted the service ahead of AnonrodeApp.onCreate). The
+    // service still MUST announce foreground in onStartCommand — Android
+    // kills the whole app otherwise — and then stops itself cleanly.
+    private var degraded = false
+    private var foregroundAnnounced = false
     // Kept so onDestroy can unregister the rebuild hook; a service restart
     // would otherwise stack stale hooks building sessions against a dead
     // service context.
@@ -39,12 +50,14 @@ class PlayerService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        ensureNotificationChannel()
         // The system can restart this exported service after process death,
         // before AnonrodeApp.onCreate has re-wired [PlayerServiceHolder].
         // Degrade gracefully (no session, no autosave) instead of crashing.
         val engine = PlayerServiceHolder.engine
         if (engine == null || PlayerServiceHolder.stateStore == null) {
             AppLog.e("SERVICE", "holder not wired yet (service restarted before app init); skipping setup")
+            degraded = true
             return
         }
 
@@ -83,6 +96,56 @@ class PlayerService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
         mediaSession
+
+    override fun onStartCommand(intent: android.content.Intent?, flags: Int, startId: Int): Int {
+        // startForegroundService() gives us ~5s to call startForeground() or
+        // Android kills the WHOLE app (ForegroundServiceDidNotStartInTimeException).
+        // Media3's MediaSessionService only promotes us to foreground once the
+        // player is non-idle and its notification is ready — that races the
+        // deadline on slow devices. Bridge the gap with a minimal placeholder
+        // under Media3's own notification id; the session's notification
+        // manager replaces it the moment real playback state arrives.
+        ensureForeground()
+        if (degraded) {
+            // Nothing can play in this state; shut down cleanly (still
+            // foreground-announced, so no crash on the way out).
+            stopSelf()
+        }
+        return super.onStartCommand(intent, flags, startId)
+    }
+
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT < 26) return
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(CHANNEL_ID, "Playback", NotificationManager.IMPORTANCE_LOW)
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("SERVICE", "notification channel create failed", e)
+        }
+    }
+
+    private fun ensureForeground() {
+        if (foregroundAnnounced) return
+        try {
+            val builder = if (Build.VERSION.SDK_INT >= 26) {
+                Notification.Builder(this, CHANNEL_ID)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(this)
+            }
+            builder.setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentTitle("Anonrode Player")
+                .setOngoing(true)
+            startForeground(MediaNotificationManager.DEFAULT_NOTIFICATION_ID, builder.build())
+            foregroundAnnounced = true
+        } catch (e: Exception) {
+            AppLog.e("SERVICE", "startForeground failed", e)
+        }
+    }
 
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
         val engine = PlayerServiceHolder.engine
@@ -131,3 +194,5 @@ object PlayerServiceHolder {
     var engine: PlaybackEngine? = null
     var stateStore: MediaStateStore? = null
 }
+
+private const val CHANNEL_ID = "anonrode_playback"

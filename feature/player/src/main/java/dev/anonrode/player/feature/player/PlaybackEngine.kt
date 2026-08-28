@@ -69,6 +69,12 @@ class PlaybackEngine(
     private var currentUri: String? = null
     private var manualDelayMs: Long = 0L
 
+    /** Persisted auto-sync offset (fingerprint lock) applied at [play]. Kept
+     *  so [onSyncNoMatch] can fall back to it instead of dropping the lock:
+     *  a failed LIVE re-lock must not undo a good persisted one. Written on
+     *  the main thread, read from the sync-eval worker thread. */
+    @Volatile private var persistedAutoMs: Long = 0L
+
     /**
      * Cached media item + start position from the most recent [play] call.
      * Used by [rebuild] to restore the same content after the player is
@@ -303,9 +309,23 @@ class PlaybackEngine(
     }
 
     override fun onSyncNoMatch() {
-        subtitleOffsetMs = manualDelayMs
+        // Live re-lock gave up: keep the persisted fingerprint lock (if any)
+        // rather than dropping back to the bare manual delay — undoing a good
+        // stored lock mid-episode would desync already-correct subtitles.
+        subtitleOffsetMs = persistedAutoMs + manualDelayMs
     }
 
+    /**
+     * Start playback of [mediaItem].
+     *
+     * [savedPositionMs] is the caller's pre-read resume position. When it is
+     * provided this function never suspends — the whole
+     * setMediaItem → seekTo → prepare → play pipeline runs in one go, so the
+     * player never renders frame 0 before the resume seek lands. Callers
+     * without a pre-read value leave it null; the [positionRestore] store
+     * read then happens BEFORE setMediaItem (it suspends, but never inside
+     * the pipeline).
+     */
     suspend fun play(
         mediaItem: MediaItem,
         uri: String,
@@ -315,10 +335,12 @@ class PlaybackEngine(
         persistedSpeedFactor: Float = 1f,
         resume: Boolean = true,
         syncEnabled: Boolean = true,
+        savedPositionMs: Long? = null,
     ) {
         currentUri = uri
         currentMediaItem = mediaItem
         this.manualDelayMs = manualDelayMs
+        persistedAutoMs = if (syncEnabled) persistedAutoOffsetMs else 0L
         if (syncEnabled) {
             subtitleOffsetMs = persistedAutoOffsetMs + manualDelayMs
             subtitleSpeedFactor = persistedSpeedFactor
@@ -332,16 +354,17 @@ class PlaybackEngine(
             attachSyncProcessor(emptyList(), 0L)
         }
 
-        // Read the saved position BEFORE setMediaItem/prepare: the Room read
-        // suspends, and doing it after prepare would let the player start
-        // rendering at 0 and flash frame 0 before the seek lands.
-        // resume=false = "start over" — skip the stored position entirely.
-        val saved = if (resume) positionRestore(uri) else null
+        // Resume position: caller's pre-read value wins (suspension-free hot
+        // path); otherwise fall back to the store read. resume=false =
+        // "start over" — skip the stored position entirely.
+        val saved = if (!resume) null else savedPositionMs ?: positionRestore(uri)
 
         AppLog.d("ENGINE", "play: setMediaItem+prepare uri=" + uri)
+        // setMediaItem → seekTo → prepare with no suspension in between:
+        // setting the start position BEFORE prepare means buffering begins
+        // at the resume point and the first rendered frame is the resume
+        // frame — no frame-0 flash.
         player.setMediaItem(mediaItem)
-        player.prepare()
-
         if (saved != null && saved > 0) {
             player.seekTo(saved)
             syncProcessor.setStartPosition(saved)
@@ -349,6 +372,7 @@ class PlaybackEngine(
         } else {
             startPositionMs = 0L
         }
+        player.prepare()
         AppLog.d("ENGINE", "calling play()")
         // Bring up the foreground playback service: media session (lock-screen
         // controls), the media notification, and the 5s position autosave.
@@ -433,13 +457,16 @@ class PlaybackEngine(
         toReplay.forEach { newPlayer.addListener(it) }
 
         if (item != null) {
+            // Same order as [play]: setMediaItem → seekTo → prepare, so the
+            // rebuilt player starts buffering at the old position instead of
+            // flashing frame 0 before a post-prepare seek lands.
             newPlayer.setMediaItem(item)
-            newPlayer.prepare()
             if (pos > 0L) {
                 newPlayer.seekTo(pos)
                 syncProcessor.setStartPosition(pos)
                 startPositionMs = pos
             }
+            newPlayer.prepare()
             // Restore transport state. STATE_READY/STATE_BUFFERING mean the
             // user was actively watching; we re-enter play() to mirror the
             // prior playWhenReady.

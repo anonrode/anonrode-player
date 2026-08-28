@@ -32,8 +32,10 @@ import kotlinx.coroutines.Dispatchers
  * Caching: [scan] serves an in-memory snapshot and only re-queries MediaStore
  * when the snapshot was invalidated (a class-level ContentObserver marks it
  * dirty on any Video-table change), when the TTL backstop expires, or when
- * [force] is set. Back-to-back callers (EpisodeQueue.build on every open,
- * settings rescan) therefore hit memory, not the provider.
+ * [force] is set. Back-to-back callers (rescan from settings) therefore hit
+ * memory, not the provider. The playback open path goes further: it reads
+ * [cachedSnapshot] (never scans) and falls back to [scan] only when no
+ * snapshot exists yet.
  *
  * Robustness: hidden directories (any path segment starting with '.') and
  * pending files are skipped, rows are deduplicated by path, display titles
@@ -163,6 +165,16 @@ class MediaScanner(private val context: Context) {
             return fresh
         }
     }
+
+    /**
+     * The in-memory snapshot if one exists — even when stale (dirty or past
+     * the TTL backstop) — or null when nothing has been scanned yet.
+     * Callers that tolerate a slightly stale view (the episode queue on the
+     * open hot path) prefer this over [scan] to skip the MediaStore
+     * round-trip entirely; [scan] remains the fallback for the no-snapshot
+     * case.
+     */
+    fun cachedSnapshot(): LibrarySnapshot? = cache
 
     /**
      * Videos in ONE folder (direct children), episode-sorted. Served from

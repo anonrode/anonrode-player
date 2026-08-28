@@ -46,13 +46,6 @@ class VolumeBoostProcessor : AudioProcessor {
     override fun queueInput(inputBuffer: ByteBuffer) {
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
-        val g = gain
-        if (g == 1f) {
-            // Unity gain: hand the buffer straight through, no copy.
-            inputBuffer.position(inputBuffer.limit())
-            outputBuffer = inputBuffer
-            return
-        }
         val out = if (reuseBuffer.capacity() < remaining) {
             ByteBuffer.allocateDirect(remaining).order(ByteOrder.nativeOrder())
                 .also { reuseBuffer = it }
@@ -60,18 +53,27 @@ class VolumeBoostProcessor : AudioProcessor {
             reuseBuffer
         }
         out.clear()
-        val src = inputBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-        while (src.hasRemaining()) {
-            val v = src.short * g
-            out.putShort(
-                when {
-                    v > Short.MAX_VALUE -> Short.MAX_VALUE
-                    v < Short.MIN_VALUE -> Short.MIN_VALUE
-                    else -> v.toInt().toShort()
-                }
-            )
+        val g = gain
+        if (g == 1f) {
+            // Unity gain: bulk copy. NOTE: the output must be a fresh
+            // buffer with position=0 — handing back the input buffer after
+            // consuming it (position==limit) delivers ZERO bytes downstream:
+            // total silence, and the audio-driven clock stalls the video.
+            out.put(inputBuffer) // advances inputBuffer.position to limit
+        } else {
+            val src = inputBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+            while (src.hasRemaining()) {
+                val v = src.short * g
+                out.putShort(
+                    when {
+                        v > Short.MAX_VALUE -> Short.MAX_VALUE
+                        v < Short.MIN_VALUE -> Short.MIN_VALUE
+                        else -> v.toInt().toShort()
+                    }
+                )
+            }
+            inputBuffer.position(inputBuffer.limit())
         }
-        inputBuffer.position(inputBuffer.limit())
         out.flip()
         outputBuffer = out
     }
