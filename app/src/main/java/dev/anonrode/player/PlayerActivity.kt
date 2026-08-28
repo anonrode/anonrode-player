@@ -359,7 +359,13 @@ class PlayerActivity : ComponentActivity() {
         // MediaRouter is an application service; grab it once and hold a
         // reference for the activity's lifetime. The picker composable
         // subscribes to its callback while visible; we release on destroy.
-        mediaRouter = getSystemService(Context.MEDIA_ROUTER_SERVICE) as MediaRouter
+        //
+        // Don't use getSystemService(MEDIA_ROUTER_SERVICE) here — on
+        // Android 11+ that returns the framework android.media.MediaRouter
+        // and casting it to androidx.mediarouter.media.MediaRouter throws
+        // ClassCastException on every tap. The AndroidX wrapper exposes
+        // its singleton through getInstance(context).
+        mediaRouter = MediaRouter.getInstance(this)
         refreshCastRouteName()
         // (SimpleCallback was removed in mediarouter 1.8 — subclass Callback
         // directly; its many hooks are open with empty defaults.)

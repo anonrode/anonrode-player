@@ -284,6 +284,20 @@ body[data-scr="player"] #scr-player{display:block}
   content:"";position:absolute;inset:0;
   background:radial-gradient(120% 100% at 50% 45%,transparent 55%,rgba(0,0,0,.55) 100%);
 }
+/* faux video surface — canvas-driven animated movie scene */
+.video{position:absolute;inset:0;z-index:1;width:100%;height:100%;display:block}
+.rec{position:absolute;top:18px;right:22px;z-index:6;display:none;align-items:center;gap:7px;
+  font-family:'Courier New',monospace;font-size:11px;font-weight:700;letter-spacing:.18em;
+  color:#FFD0D0;text-shadow:0 1px 0 rgba(0,0,0,.6);pointer-events:none}
+.rec.on{display:flex}
+.rec .red{width:9px;height:9px;border-radius:50%;background:#E53935;
+  box-shadow:0 0 12px #E53935,0 0 0 2px rgba(229,57,53,.2);
+  animation:rec-pulse 1.4s ease-in-out infinite}
+@keyframes rec-pulse{50%{opacity:.45;box-shadow:0 0 8px #E53935,0 0 0 6px rgba(229,57,53,.15)}}
+.tc-overlay{position:absolute;top:18px;right:80px;z-index:6;
+  font-family:'Courier New',monospace;font-size:11px;letter-spacing:.06em;
+  color:#E8F1F2;text-shadow:0 1px 0 rgba(0,0,0,.6);pointer-events:none;
+  font-variant-numeric:tabular-nums}
 .scan{
   position:absolute;inset:0;
   background:repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 1px,transparent 1px 4px);
@@ -759,7 +773,20 @@ body[data-ui="hide"] .dock{opacity:0;transform:translateY(30px);pointer-events:n
     <div class="poster" id="poster">
       <div class="poster-tag">LOADING FIRST FRAME</div>
     </div>
-    <div class="scene"></div><div class="glow"></div><div class="scan"></div>
+    <div class="scene"></div>
+    <!--
+      Faux video content: this is a stand-in for the actual decoded
+      video surface. The HTML mockup doesn't play real video, so we
+      draw an animated scene that visibly moves when the player is
+      playing, freezes when paused, and re-anchors on seek. Looks like
+      a movie, behaves like a movie scrubber, no codec needed.
+    -->
+    <canvas id="video" class="video"></canvas>
+    <div class="rec" id="rec">
+      <span class="red"></span><span>REC</span>
+    </div>
+    <div class="tc-overlay" id="tcOverlay">00:00:00:00</div>
+    <div class="glow"></div><div class="scan"></div>
 
     <!-- calibration banner -->
     <div class="calib" id="calib">
@@ -1865,7 +1892,9 @@ function bindLockLongPress(){
 /* ============== ticker ============== */
 var lastTick=0;
 function tick(ts){
- if(curScr==='player'&&P.playing&&!P.calib){
+ if(curScr==='player'){
+  paintVideo();
+  if(P.playing&&!P.calib){
   var now=ts||performance.now();
   var dt=(now-lastTick)/1000;
   lastTick=now;
@@ -1873,6 +1902,10 @@ function tick(ts){
   if(P.pos>=P.dur){P.pos=0;setPlaying(false)}
   paintTimes();paintSeek();
   if(ns.cc){subIdx=Math.floor(P.pos/9)%SUBL.length;paintSub()}
+  // REC + timecode HUD
+  $('rec').classList.toggle('on',P.playing);
+  var t=P.pos,hh=Math.floor(t/3600),mm=Math.floor((t%3600)/60),ss=Math.floor(t%60),ff=Math.floor((t*24)%24);
+  $('tcOverlay').textContent=('0'+hh).slice(-2)+':'+('0'+mm).slice(-2)+':'+('0'+ss).slice(-2)+':'+('0'+ff).slice(-2);
   var rem=P.dur-P.pos;
   if(rem<14&&rem>0&&P.playing){show('upnext');$('upT').textContent=Math.ceil(rem)+'s'}
   else{hide('upnext')}
@@ -1880,7 +1913,89 @@ function tick(ts){
    document.body.dataset.ui='hide';
   }
  }else{lastTick=ts||performance.now()}
+ }
  requestAnimationFrame(tick);
+}
+
+/*
+ * paintVideo — faux movie surface.
+ * HTML mockup can't decode real video, so we draw a stylized animated
+ * "scene" that visibly moves when the player is playing, freezes on
+ * pause, and scrubs in real time on seek. Reads the player's current
+ * `P.pos` so the visible frame matches the timecode HUD.
+ */
+function paintVideo(){
+ var c=document.getElementById('video');
+ if(!c||c.width===0)return;
+ var w=c.clientWidth,h=c.clientHeight;
+ if(c.width!==w||c.height!==h){c.width=w;c.height=h}
+ var ctx=c.getContext('2d');
+ var t=P.pos;                 // seconds
+ var moving=P.playing?(performance.now()/1000):0;
+ // base sky gradient
+ var g=ctx.createLinearGradient(0,0,0,h);
+ g.addColorStop(0,'#1a3550');
+ g.addColorStop(0.55,'#2a5476');
+ g.addColorStop(1,'#08182a');
+ ctx.fillStyle=g;ctx.fillRect(0,0,w,h);
+ // drifting sun
+ var sunX=w*(0.2+0.06*Math.sin(moving*0.4));
+ var sunY=h*(0.35+0.04*Math.sin(moving*0.3));
+ var sun=ctx.createRadialGradient(sunX,sunY,0,sunX,sunY,w*0.18);
+ sun.addColorStop(0,'rgba(255,210,140,0.9)');
+ sun.addColorStop(0.4,'rgba(255,180,120,0.4)');
+ sun.addColorStop(1,'rgba(255,180,120,0)');
+ ctx.fillStyle=sun;ctx.beginPath();ctx.arc(sunX,sunY,w*0.18,0,Math.PI*2);ctx.fill();
+ // mountains: 3 parallax ridges, positions seeded by t so seek jumps shift them
+ var ridges=[{y:0.62,h:0.32,c:'#0d1f33',p:0.04},
+             {y:0.7, h:0.40,c:'#152a45',p:0.10},
+             {y:0.78,h:0.55,c:'#0a1626',p:0.18}];
+ for(var r=0;r<ridges.length;r++){
+  var rd=ridges[r];
+  ctx.fillStyle=rd.c;ctx.beginPath();ctx.moveTo(0,h);
+  var offset=((t*40*rd.p)+(r*23))%(w*0.5);
+  for(var x=0;x<=w;x+=20){
+   var peakX=x+offset;
+   var peakY=h*rd.y-Math.abs(Math.sin(peakX*0.005+r))*h*rd.h;
+   ctx.lineTo(x,peakY);
+  }
+  ctx.lineTo(w,h);ctx.closePath();ctx.fill();
+ }
+ // foreground silhouettes: two animated figures walking
+ function figure(x,y,scale,phase,hue){
+  ctx.save();ctx.translate(x,y);ctx.scale(scale,scale);
+  var leg=Math.sin(moving*4+phase)*8;
+  // body
+  ctx.fillStyle=hue;ctx.beginPath();
+  ctx.ellipse(0,0,12,22,0,0,Math.PI*2);ctx.fill();
+  // head
+  ctx.beginPath();ctx.arc(0,-28,8,0,Math.PI*2);ctx.fill();
+  // legs
+  ctx.strokeStyle=hue;ctx.lineWidth=5;ctx.lineCap='round';
+  ctx.beginPath();ctx.moveTo(-3,18);ctx.lineTo(-3+leg,40);ctx.moveTo(3,18);ctx.lineTo(3-leg,40);ctx.stroke();
+  // arms
+  ctx.beginPath();ctx.moveTo(-10,-6);ctx.lineTo(-15+leg*0.5,15);ctx.moveTo(10,-6);ctx.lineTo(15-leg*0.5,15);ctx.stroke();
+  ctx.restore();
+ }
+ var walkX=function(start,period){var x=start+(t*40)%period;return x%period;};
+ figure(walkX(w*0.15,w*1.4),h*0.82,1.0,0,'#0b1c30');
+ figure(walkX(w*0.65,w*1.2),h*0.83,0.9,1.4,'#0b1c30');
+ // a slow car (just a box) crossing once
+ var carX=(t*60)%(w+200)-100;
+ ctx.fillStyle='#0a1422';
+ ctx.fillRect(carX,h*0.86,50,16);
+ ctx.fillStyle='#0a1422';
+ ctx.beginPath();ctx.arc(carX+12,h*0.92,4,0,Math.PI*2);ctx.fill();
+ ctx.beginPath();ctx.arc(carX+38,h*0.92,4,0,Math.PI*2);ctx.fill();
+ // letterbox bars (cinematic 2.35:1) — keep the video inside 16:9
+ // with thin black bars only if container is wider than 2.35:1
+ var ratio=w/h;
+ if(ratio>2.34){
+  var bar=(w-h*2.35)/2;
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,bar,h);
+  ctx.fillRect(w-bar,0,bar,h);
+ }
 }
 
 /* ============== ripple on play click ============== */
