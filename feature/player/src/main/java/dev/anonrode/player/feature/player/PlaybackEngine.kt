@@ -94,6 +94,12 @@ class PlaybackEngine(
     @Volatile var subtitleSpeedFactor: Float = 1f
         private set
 
+    /** Invoked when a LIVE auto-sync lock lands mid-playback. Fires on the
+     *  sync-eval worker thread — receivers must post to their own thread.
+     *  The UI uses it to drop in-memory piecewise segments, which the
+     *  persistence side clears in the same lock write. */
+    @Volatile var onLiveSyncLocked: (() -> Unit)? = null
+
     private val syncProcessor = AudioSyncProcessor(this)
 
     /** VLC-style gain stage after the sync analyzer (see its KDoc). */
@@ -293,6 +299,7 @@ class PlaybackEngine(
         if (uri != null) {
             scope.launch { onAutoSyncSave(uri, autoMs, speedFactor) }
         }
+        onLiveSyncLocked?.invoke()
     }
 
     override fun onSyncNoMatch() {

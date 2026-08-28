@@ -117,9 +117,14 @@ fun SubtitlePickerSheet(
             when {
                 res == null -> searchNote =
                     "Can't fingerprint this video (network/SAF source?)."
-                res.isEmpty() -> searchNote =
-                    "No subtitles matched this exact file" +
-                        if (!allLangs) " in Chinese/English. Try all languages." else "."
+                res.isEmpty() -> {
+                    // The client records WHY the endpoint refused/latched —
+                    // surface that instead of a misleading "no match".
+                    val notice = OpenSubtitlesClient.serviceNotice()
+                    searchNote = notice
+                        ?: ("No subtitles matched this exact file" +
+                            if (!allLangs) " in Chinese/English. Try all languages." else ".")
+                }
                 else -> results = res
             }
         }
@@ -167,6 +172,19 @@ fun SubtitlePickerSheet(
                 modifier = Modifier.weight(1f),
             )
             if (searchMode) {
+                if (OpenSubtitlesClient.EXPERIMENTAL) {
+                    Text(
+                        "EXPERIMENTAL",
+                        color = accent,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(accent.copy(alpha = 0.12f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                    Spacer(Modifier.size(8.dp))
+                }
                 TextButton(onClick = { searchMode = false }) {
                     Text("Back", color = accent)
                 }

@@ -1,7 +1,9 @@
 package dev.anonrode.player.feature.library
 
+import androidx.datastore.core.DataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.anonrode.player.core.datastore.PlayerSettings
 import dev.anonrode.player.core.media.library.LibrarySnapshot
 import dev.anonrode.player.core.media.library.MediaScanner
 import dev.anonrode.player.core.media.state.MediaStateStore
@@ -15,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
@@ -42,6 +45,7 @@ enum class FolderSort(val label: String) {
 class LibraryViewModel(
     private val scanner: MediaScanner,
     private val stateStore: MediaStateStore,
+    private val settings: DataStore<PlayerSettings>,
 ) : ViewModel() {
 
     data class InProgress(
@@ -141,6 +145,19 @@ class LibraryViewModel(
                 rebuildUi()
             }
         }
+        // Restore the persisted folder sort from the previous session.
+        viewModelScope.launch {
+            val saved = try {
+                settings.data.first().librarySort
+            } catch (e: Exception) {
+                null
+            }
+            val mode = saved?.let { s -> FolderSort.entries.firstOrNull { it.name == s } }
+            if (mode != null && mode != sort) {
+                sort = mode
+                rebuildUi()
+            }
+        }
     }
 
     /**
@@ -158,10 +175,17 @@ class LibraryViewModel(
         rebuildUi()
     }
 
-    /** Sort the FOLDERS section (in-memory; not persisted yet). */
+    /** Sort the FOLDERS section; persisted to settings across launches. */
     fun setSort(mode: FolderSort) {
         sort = mode
         rebuildUi()
+        viewModelScope.launch {
+            try {
+                settings.updateData { it.copy(librarySort = mode.name) }
+            } catch (e: Exception) {
+                // Sort still applies in-memory; persistence is best-effort.
+            }
+        }
     }
 
     private fun rebuildUi() {

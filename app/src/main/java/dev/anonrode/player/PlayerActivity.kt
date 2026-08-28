@@ -342,6 +342,14 @@ class PlayerActivity : ComponentActivity() {
         val app = AnonrodeApp.get(this)
         val engine = app.engine
 
+        // A live re-lock clears the persisted piecewise curve (persistence
+        // side does it in the same write); drop our in-memory copy too so
+        // the render loop stops applying a stale piecewise beta. Callback
+        // fires on the sync-eval worker thread — post to main.
+        engine.onLiveSyncLocked = {
+            handler.post { piecewiseSegments = emptyList() }
+        }
+
         // A video player keeps the screen on while it's up; the DataStore
         // setting can opt out once its async read lands (default = on).
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

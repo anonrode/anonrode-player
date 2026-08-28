@@ -47,6 +47,11 @@ data class PlayerSettings(
      * player picks it up through its existing global-speed fallback.
      */
     val defaultPlaybackSpeed: Float = 1.0f,
+    /**
+     * Persisted FOLDERS sort mode (FolderSort name: NAME_ASC / NAME_DESC /
+     * RECENT / MOST_VIDEOS). Unknown values fall back to NAME_ASC.
+     */
+    val librarySort: String = "NAME_ASC",
 )
 
 enum class DecoderPriority { PREFER_DEVICE, PREFER_APP, DEVICE_ONLY }

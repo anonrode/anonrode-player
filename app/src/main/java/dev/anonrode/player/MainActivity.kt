@@ -191,7 +191,11 @@ class MainActivity : ComponentActivity() {
                     // LibraryScreen draws its own top bar and bottom navigation.
                     Box(Modifier.fillMaxSize()) {
                         LibraryScreen(
-                            viewModelFactory = LibraryVmFactory(app.scanner, app.stateStore),
+                            viewModelFactory = LibraryVmFactory(
+                                app.scanner,
+                                app.stateStore,
+                                app.playerSettingsDataStore,
+                            ),
                             onOpenVideo = { video -> play(video.uri, video.title) },
                             onOpenSettings = { settingsOpen = true },
                         )
@@ -244,10 +248,11 @@ class MainActivity : ComponentActivity() {
 class LibraryVmFactory(
     private val scanner: dev.anonrode.player.core.media.library.MediaScanner,
     private val stateStore: dev.anonrode.player.core.media.state.MediaStateStore,
+    private val settings: androidx.datastore.core.DataStore<dev.anonrode.player.core.datastore.PlayerSettings>,
 ) : androidx.lifecycle.ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
-        dev.anonrode.player.feature.library.LibraryViewModel(scanner, stateStore) as T
+        dev.anonrode.player.feature.library.LibraryViewModel(scanner, stateStore, settings) as T
 }
 
 @Composable

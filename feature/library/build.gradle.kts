@@ -24,6 +24,7 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:media"))
     implementation(project(":core:database"))
+    implementation(project(":core:datastore"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.viewModel.ktx)
     implementation(libs.androidx.lifecycle.runtimeCompose)
