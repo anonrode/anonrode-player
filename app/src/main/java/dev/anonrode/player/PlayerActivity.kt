@@ -1,7 +1,6 @@
 package dev.anonrode.player
 
 import android.app.PictureInPictureParams
-import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -101,7 +100,6 @@ class PlayerActivity : ComponentActivity() {
 
         /** Ordered URI list from library multi-select; plays in this order. */
         const val EXTRA_QUEUE_URIS = "queue_uris"
-        private val SUB_EXTS = listOf("srt", "vtt", "ass", "ssa")
         private const val NEXT_COUNTDOWN_SEC = 5
         // Selector used for both the activity-level route-name observer
         // and the picker composable. Covers Cast, Bluetooth, HDMI, Miracast.
@@ -447,8 +445,10 @@ class PlayerActivity : ComponentActivity() {
                             nextCountdownSec = nextCountdownSec,
                             onCancelNext = { cancelNextCountdown() },
                             onHoldAutoAdvance = { holdAutoAdvance() },
-                            upNextTitle = episodeQueue?.next()
-                                ?.let { it.title.substringAfterLast('/').substringBeforeLast('.') },
+                            // Scanner already cleans titles (no extension,
+                            // no path) — stripping here would truncate
+                            // titles with internal dots ("Mr. Robot").
+                            upNextTitle = episodeQueue?.next()?.title,
                             onOpenSettings = { settingsOpen = true },
                             liveOffsetMs = liveOffsetMs,
                             isCalibrating = isCalibrating,
@@ -1489,74 +1489,6 @@ class PlayerActivity : ComponentActivity() {
             AppLog.e("SUB", "path resolution failed", e)
             null
         }
-    }
-
-    /**
-     * Subtitle resolution: tries exact name match first, then ANY supported
-     * subtitle file in the same directory (MediaStore.Files query).
-     * LEGACY: superseded by SubtitleSourceResolver (kept for reference).
-     */
-    private fun findSidecarSubtitle(videoUri: Uri): Pair<String, String>? = try {
-        val videoPath = contentResolver.query(
-            videoUri, arrayOf(android.provider.MediaStore.Video.Media.DATA), null, null, null
-        )?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: return null
-
-        AppLog.d("SUB", "video path: $videoPath")
-        val parentDir = videoPath.substringBeforeLast('/')
-        val base = videoPath.substringAfterLast('/').substringBeforeLast('.')
-        val filesUri = android.provider.MediaStore.Files.getContentUri("external")
-
-        // Collect all candidate subtitle files in the same tree
-        data class Candidate(val uri: Uri, val name: String, val path: String)
-
-        val candidates = mutableListOf<Candidate>()
-        // Filter at the query level: never pull the whole Files table.
-        val selection = buildString {
-            SUB_EXTS.forEachIndexed { i, ext ->
-                if (i > 0) append(" OR ")
-                append(android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME)
-                    .append(" LIKE '%.").append(ext).append("'")
-            }
-        }
-        contentResolver.query(
-            filesUri,
-            arrayOf(android.provider.MediaStore.Files.FileColumns._ID,
-                android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME,
-                android.provider.MediaStore.Files.FileColumns.DATA),
-            selection, null, null
-        )?.use { c ->
-            val idCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Files.FileColumns._ID)
-            val nameCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME)
-            val dataCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Files.FileColumns.DATA)
-            while (c.moveToNext()) {
-                val name = c.getString(nameCol) ?: continue
-                val ext = name.substringAfterLast('.', "").lowercase()
-                if (ext !in SUB_EXTS) continue
-                val path = c.getString(dataCol) ?: continue
-                // Must be in same directory as the video
-                if (path.substringBeforeLast('/') != parentDir) continue
-                candidates.add(Candidate(
-                    uri = ContentUris.withAppendedId(filesUri, c.getLong(idCol)),
-                    name = name, path = path
-                ))
-            }
-        }
-
-        AppLog.d("SUB", "found ${candidates.size} subtitle files in $parentDir")
-        if (candidates.isEmpty()) return null
-
-        val chosen = candidates.firstOrNull { it.name.substringBeforeLast('.').equals(base, ignoreCase = true) }
-            ?: candidates.firstOrNull { it.name.substringBeforeLast('.').startsWith(base, ignoreCase = true) }
-            ?: candidates.firstOrNull()
-
-        if (chosen == null) return null
-        AppLog.d("SUB", "chosen: " + chosen.name)
-        val text = contentResolver.openInputStream(chosen.uri)
-            ?.bufferedReader()?.use { it.readText() }
-        if (text.isNullOrEmpty()) null else chosen.name to text
-    } catch (e: Exception) {
-        AppLog.e("SUB", "subtitle resolution failed", e)
-        null
     }
 
     override fun onDestroy() {

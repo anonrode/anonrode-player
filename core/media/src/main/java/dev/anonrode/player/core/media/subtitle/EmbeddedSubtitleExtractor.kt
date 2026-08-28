@@ -4,6 +4,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import dev.anonrode.player.core.model.SubtitleCue
 import java.io.FileDescriptor
+import java.nio.ByteBuffer
 
 /**
  * Extracts embedded (in-container) text subtitle tracks — the subtitle
@@ -26,6 +27,9 @@ import java.io.FileDescriptor
  *     \N stripped (same rules as [SubtitleParser.parseAss]).
  *   - application/ttml+xml : basic <p begin end> extraction, sample time
  *     fallback.
+ *   - application/x-quicktime-tx3g (MP4/MOV) : binary sample — uint16
+ *     big-endian text length + UTF-8 text (3GPP TS 26.245), style records
+ *     after the text are dropped.
  * Bitmap tracks (PGS / DVB) are NOT enumerated — they need OCR/rendering,
  * out of scope for a text overlay.
  */
@@ -50,10 +54,14 @@ object EmbeddedSubtitleExtractor {
     /** Cap for cues whose successor is far away (silence gap), in seconds. */
     private const val MAX_CUE_LEN_SEC = 7.0
 
+    /** Text samples are tiny; a sample this big is corrupt — skip it. */
+    private const val MAX_SAMPLE_BYTES = 1024 * 1024
+
     private val MIME_SRT = "application/x-subrip"
     private val MIME_VTT = "text/vtt"
     private val MIME_SSA = "text/x-ssa"
     private val MIME_TTML = setOf("application/ttml+xml", "text/ttml", "video/ttml")
+    private val MIME_TX3G = setOf("application/x-quicktime-tx3g", "text/3gpp")
 
     /** Caption formats that carry no usable text samples via MediaExtractor. */
     private val MIME_SKIP = setOf(
@@ -100,14 +108,20 @@ object EmbeddedSubtitleExtractor {
     private fun listTextTracks(ex: MediaExtractor): List<Track> {
         val out = ArrayList<Track>()
         for (i in 0 until ex.trackCount) {
-            val fmt = ex.getTrackFormat(i)
-            val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
-            if (!isTextMime(mime)) continue
-            val lang = fmt.getString(MediaFormat.KEY_LANGUAGE)?.takeIf { it.isNotEmpty() }
-            // android.media.MediaFormat has no KEY_TITLE constant; MKV track
-            // name tags surface (if at all) under the raw "title" key.
-            val title = fmt.getString("title")?.takeIf { it.isNotEmpty() }
-            out.add(Track(i, mime, lang, title, buildLabel(lang, title, mime)))
+            // One exotic/corrupt track must not hide the other tracks.
+            try {
+                val fmt = ex.getTrackFormat(i)
+                val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
+                if (!isTextMime(mime)) continue
+                val lang = fmt.getString(MediaFormat.KEY_LANGUAGE)?.takeIf { it.isNotEmpty() }
+                // android.media.MediaFormat has no KEY_TITLE constant; MKV
+                // track name tags surface (if at all) under the raw "title"
+                // key.
+                val title = fmt.getString("title")?.takeIf { it.isNotEmpty() }
+                out.add(Track(i, mime, lang, title, buildLabel(lang, title, mime)))
+            } catch (t: Throwable) {
+                continue
+            }
         }
         return out
     }
@@ -117,8 +131,10 @@ object EmbeddedSubtitleExtractor {
         if (m in MIME_SKIP) return false
         return m.startsWith("text/") ||
             m == MIME_SRT ||
+            m in MIME_TX3G ||
             (m.startsWith("application/") &&
-                (m.contains("subrip") || m.contains("ttml") || m.contains("ssa")))
+                (m.contains("subrip") || m.contains("ttml") || m.contains("ssa") ||
+                    m.contains("tx3g")))
     }
 
     private fun buildLabel(lang: String?, title: String?, mime: String): String {
@@ -128,6 +144,7 @@ object EmbeddedSubtitleExtractor {
             MIME_VTT -> "VTT"
             MIME_SSA -> "ASS"
             in MIME_TTML -> "TTML"
+            in MIME_TX3G -> "TX3G"
             else -> mime.substringAfterLast('/').uppercase()
         }
         return if (title.isNullOrBlank()) "$langName · $fmtName" else "$title ($langName · $fmtName)"
@@ -154,30 +171,34 @@ object EmbeddedSubtitleExtractor {
         if (!isTextMime(mime)) return emptyList()
         ex.selectTrack(trackIndex)
 
-        val buf = java.nio.ByteBuffer.allocateDirect(512 * 1024)
+        val buf = ByteBuffer.allocateDirect(MAX_SAMPLE_BYTES)
         val cues = ArrayList<SubtitleCue>()
         // MediaExtractor exposes no per-sample duration for text tracks, so
         // each cue ends when the next sample starts (capped at
         // MAX_CUE_LEN_SEC so a silence gap can't freeze a cue on screen);
         // the final sample gets the default length.
         var prevStartSec = -1.0
-        var prevPayload: String? = null
+        var prevPayload: ByteArray? = null
         var guard = 0
         while (guard++ < MAX_SAMPLES) {
             buf.clear()
             val n = ex.readSampleData(buf, 0)
             if (n < 0) break
             val startSec = ex.sampleTime / 1_000_000.0
+            if (n > buf.capacity()) {
+                // Corrupt/huge sample: drop it, keep the stream moving.
+                if (!ex.advance()) break
+                continue
+            }
             val bytes = ByteArray(n)
             buf.position(0)
             buf.get(bytes, 0, n)
-            val payload = String(bytes, Charsets.UTF_8)
             if (prevPayload != null) {
                 val endSec = minOf(startSec, prevStartSec + MAX_CUE_LEN_SEC)
                 addCue(cues, mime, prevPayload, prevStartSec, endSec)
             }
             prevStartSec = startSec
-            prevPayload = payload
+            prevPayload = bytes
             if (!ex.advance()) break
         }
         if (prevPayload != null) {
@@ -190,17 +211,19 @@ object EmbeddedSubtitleExtractor {
     private fun addCue(
         cues: ArrayList<SubtitleCue>,
         mime: String,
-        payload: String,
+        payload: ByteArray,
         startSec: Double,
         endSec: Double,
     ) {
         if (startSec < 0 || endSec <= startSec) return
         val lines: List<String> = when {
-            mime == MIME_SRT || mime.contains("subrip") -> plainLines(payload)
-            mime == MIME_VTT -> vttLines(payload)
-            mime == MIME_SSA || mime.contains("ssa") -> assLines(payload)
-            mime in MIME_TTML -> ttmlLines(payload)
-            else -> plainLines(payload)
+            mime == MIME_SRT || mime.contains("subrip") ->
+                plainLines(String(payload, Charsets.UTF_8))
+            mime == MIME_VTT -> vttLines(String(payload, Charsets.UTF_8))
+            mime == MIME_SSA || mime.contains("ssa") -> assLines(String(payload, Charsets.UTF_8))
+            mime in MIME_TTML -> ttmlLines(String(payload, Charsets.UTF_8))
+            mime in MIME_TX3G || mime.contains("tx3g") -> tx3gLines(payload)
+            else -> plainLines(String(payload, Charsets.UTF_8))
         }
         if (lines.isNotEmpty()) cues.add(SubtitleCue(startSec, endSec, lines))
     }
@@ -247,6 +270,23 @@ object EmbeddedSubtitleExtractor {
             .replace(Regex("\\\\[Nn]"), "\n")
             .replace("\\h", " ")
         return text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    /**
+     * MP4/MOV tx3g sample (3GPP TS 26.245): uint16 BIG-endian text length,
+     * then UTF-8 text, then optional style/box records — drop everything
+     * after the text. Some muxers omit the length prefix; fall back to
+     * treating the whole payload as text.
+     */
+    private fun tx3gLines(payload: ByteArray): List<String> {
+        if (payload.size >= 2) {
+            val len = ((payload[0].toInt() and 0xFF) shl 8) or
+                (payload[1].toInt() and 0xFF)
+            if (len in 1..(payload.size - 2)) {
+                return plainLines(String(payload, 2, len, Charsets.UTF_8))
+            }
+        }
+        return plainLines(String(payload, Charsets.UTF_8))
     }
 
     /** Minimal TTML: pull <p begin=".." end="..">text</p> bodies. */
