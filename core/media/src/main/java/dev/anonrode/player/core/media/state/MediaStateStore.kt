@@ -11,8 +11,7 @@ import kotlinx.coroutines.flow.map
  * Per-video state repository keyed by content URI. Every writer is an
  * ensureRow bootstrap + a partial-column UPDATE, so concurrent writers
  * (position saves, sync locks, nudges, speed, fingerprint job) can never
- * clobber each other's fields. Also prunes rows for URIs that vanished
- * from the library.
+ * clobber each other's fields.
  */
 class MediaStateStore(private val dao: MediaStateDao) {
 
@@ -26,6 +25,11 @@ class MediaStateStore(private val dao: MediaStateDao) {
     /** Every persisted state (including finished rows), most recently played first. */
     fun getAllStates(): Flow<List<MediaState>> = dao.getAll().map { list -> list.map { it.toModel() } }
 
+    /**
+     * Persist position/duration/finished. A null [durationMs] means "unknown"
+     * and NEVER clobbers a previously stored duration (the UPDATE uses
+     * COALESCE for it).
+     */
     suspend fun updatePosition(uri: String, positionMs: Long, durationMs: Long?, finished: Boolean = false) {
         dao.ensureRow(uri)
         dao.updatePositionFields(uri, positionMs, durationMs, finished, System.currentTimeMillis())
@@ -93,8 +97,23 @@ class MediaStateStore(private val dao: MediaStateDao) {
         dao.updateZoomFields(uri, scale, System.currentTimeMillis())
     }
 
-    /** Remove state for videos that no longer exist in the library. */
-    suspend fun pruneMissing(existingUris: Set<String>) {
+    /**
+     * Remove state rows for videos that no longer exist in the library.
+     *
+     * DANGEROUS BY DESIGN unless the caller asserts [fullScanConfirmed]:
+     * [existingUris] must be the complete URI set of a FULL, SUCCESSFUL
+     * library scan. Feeding it a partial or failed scan (one folder, a
+     * query that threw, a scan that ran before the video permission was
+     * granted) would mass-delete watch history for every video the partial
+     * scan missed. With [fullScanConfirmed] = false (the default) this is a
+     * no-op, so a careless call cannot destroy data.
+     *
+     * Only `content://` rows are ever pruned — state keyed by other schemes
+     * (SAF documents, file://) is left alone since MediaStore scans cannot
+     * prove their absence.
+     */
+    suspend fun pruneMissing(existingUris: Set<String>, fullScanConfirmed: Boolean = false) {
+        if (!fullScanConfirmed) return
         val all = dao.getAll().first()
         val missing = all.filter { it.uri.startsWith("content://") && it.uri !in existingUris }
             .map { it.uri }

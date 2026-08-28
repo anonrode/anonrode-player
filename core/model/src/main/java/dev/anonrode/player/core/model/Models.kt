@@ -15,7 +15,15 @@ data class Video(
     val lastModifiedMs: Long,
     val mediaStoreId: Long,
     val parentPath: String,
+    /**
+     * Raw MediaStore DISPLAY_NAME (filename with extension). [title] is the
+     * cleaned, human-readable version (extension stripped, separator runs
+     * collapsed); consumers that need the exact filename — hash lookups,
+     * sidecar subtitle matching — use this instead.
+     */
+    val displayName: String = "",
 ) {
+    /** Derived: the title matches a season/episode pattern (see [EpisodePattern]). */
     val isSeriesEpisode: Boolean get() = EpisodePattern.find(title) != null
 }
 
@@ -26,7 +34,15 @@ data class Series(
     val videos: List<Video>,
     val totalWatched: Int,
     val totalEpisodes: Int,
+    /**
+     * Most recent playback time (epoch ms) of any video in the folder;
+     * 0 = never played. The scanner cannot know playback state, so it leaves
+     * this at 0 — the library view model fills it in when it joins the
+     * snapshot with the state store ("Recently played" sorting).
+     */
+    val lastPlayedTimeMs: Long = 0L,
 ) {
+    /** Derived: watched fraction 0..1 (totalWatched / totalEpisodes). */
     val progress: Float get() = if (totalEpisodes == 0) 0f else totalWatched.toFloat() / totalEpisodes
 }
 
@@ -79,4 +95,52 @@ object EpisodePattern {
 
     /** 0-based episode index used for ordering within a season. */
     fun episodeIndex(name: String): Int? = find(name)?.second
+}
+
+/**
+ * Natural-order string comparison: digit runs compare numerically instead of
+ * lexicographically, so "Episode 2" sorts before "Episode 10" regardless of
+ * zero-padding ("007" == "7" in value; the longer run wins ties). Letters
+ * compare case-insensitively. Canonical scan-order comparator — the library
+ * UI and the player's episode queue may layer episode-pattern logic on top.
+ */
+object NaturalOrder : Comparator<String> {
+
+    override fun compare(a: String, b: String): Int {
+        var ia = 0
+        var ib = 0
+        while (ia < a.length && ib < b.length) {
+            val ca = a[ia]
+            val cb = b[ib]
+            if (ca.isDigit() && cb.isDigit()) {
+                // Compare the whole digit runs numerically: strip leading
+                // zeros, then longer significant part = larger number.
+                var ea = ia
+                while (ea < a.length && a[ea].isDigit()) ea++
+                var eb = ib
+                while (eb < b.length && b[eb].isDigit()) eb++
+                val na = a.substring(ia, ea).trimStart('0')
+                val nb = b.substring(ib, eb).trimStart('0')
+                val cmp = when {
+                    na.length != nb.length -> na.length.compareTo(nb.length)
+                    na.isNotEmpty() -> na.compareTo(nb)
+                    else -> 0 // both chunks are zero
+                }
+                if (cmp != 0) return cmp
+                // Equal values ("007" vs "7"): more leading zeros sorts first
+                // so the comparison stays deterministic.
+                val sigA = ea - ia - na.length
+                val sigB = eb - ib - nb.length
+                if (sigA != sigB) return sigA.compareTo(sigB)
+                ia = ea
+                ib = eb
+            } else {
+                val cmp = ca.lowercaseChar().compareTo(cb.lowercaseChar())
+                if (cmp != 0) return cmp
+                ia++
+                ib++
+            }
+        }
+        return (a.length - ia).compareTo(b.length - ib)
+    }
 }
