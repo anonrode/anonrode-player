@@ -37,7 +37,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
-import androidx.datastore.core.updateData
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -299,7 +298,7 @@ class PlayerActivity : ComponentActivity() {
                         .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
                     builder.clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
                     builder.addOverride(
-                        androidx.media3.common.TrackSelectionParameters.TrackSelectionOverride(
+                        androidx.media3.common.TrackSelectionOverride(
                             group.mediaTrackGroup, listOf(idx),
                         )
                     )
@@ -362,7 +361,9 @@ class PlayerActivity : ComponentActivity() {
         // subscribes to its callback while visible; we release on destroy.
         mediaRouter = getSystemService(Context.MEDIA_ROUTER_SERVICE) as MediaRouter
         refreshCastRouteName()
-        val cb = object : MediaRouter.SimpleCallback() {
+        // (SimpleCallback was removed in mediarouter 1.8 — subclass Callback
+        // directly; its many hooks are open with empty defaults.)
+        val cb = object : MediaRouter.Callback() {
             override fun onRouteSelected(router: MediaRouter, route: RouteInfo) {
                 refreshCastRouteName()
             }
@@ -406,7 +407,7 @@ class PlayerActivity : ComponentActivity() {
                                 // Persist per-video playback speed (Room, media_state)
                                 // plus the global play_speed preference.
                                 sessionSpeed = speed
-                                PlayerPrefs.saveGlobalSpeed(this, speed)
+                                PlayerPrefs.saveGlobalSpeed(this@PlayerActivity, speed)
                                 val targetUri = currentUriStr
                                 if (targetUri != null) {
                                     lifecycleScope.launch(Dispatchers.IO) {
@@ -1055,44 +1056,44 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun onAudioTrackSelected(trackId: String) {
-        // trackId is "trackInfoId:trackIndexInGroup" — split and apply via Media3's
-        // TrackSelectionParameters. We use the Player.setTrackSelectionParameters
-        // API which is the supported public way to switch tracks at runtime.
+        // trackId is "groupIndex:trackIndexInGroup" (the picker builds it
+        // from the same currentTracks snapshot). Resolve the group and
+        // apply via TrackSelectionOverride — the supported public way to
+        // switch tracks at runtime.
         val parts = trackId.split(":")
         if (parts.size != 2) {
             AppLog.e("TRACKS", "bad trackId format: " + trackId)
             return
         }
         val player = AnonrodeApp.get(this).engine.player
-        val targetInfoId = parts[0]
+        val groupIdx = parts[0].toIntOrNull()
         val targetIndex = parts[1].toIntOrNull()
-        if (targetIndex == null) {
-            AppLog.e("TRACKS", "non-int trackIndex in: " + trackId)
+        if (groupIdx == null || targetIndex == null) {
+            AppLog.e("TRACKS", "non-int trackId parts: " + trackId)
             return
         }
-        for (trackInfo in player.currentTracks) {
-            if (trackInfo.type != androidx.media3.common.C.TRACK_TYPE_AUDIO) continue
-            if (trackInfo.id != targetInfoId) continue
-            val builder = player.trackSelectionParameters.buildUpon()
-                .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
-            // Build a new selection matching only the chosen index.
-            val selection = androidx.media3.common.TrackSelectionParameters.TrackSelectionOverride(
-                trackInfo.mediaTrackGroup,
-                listOf(targetIndex),
+        val group = player.currentTracks.groups.getOrNull(groupIdx)
+        if (group == null || group.type != androidx.media3.common.C.TRACK_TYPE_AUDIO) {
+            AppLog.e("TRACKS", "no audio group at index: " + groupIdx)
+            return
+        }
+        val builder = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
+        builder.clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
+        builder.addOverride(
+            androidx.media3.common.TrackSelectionOverride(
+                group.mediaTrackGroup, listOf(targetIndex),
             )
-            builder.clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
-            builder.addOverride(selection)
-            player.trackSelectionParameters = builder.build()
-            AppLog.d("TRACKS", "selected track: $trackId")
-            // Persist so the same track is restored on the next open (#30).
-            val uri = currentUriStr
-            if (uri != null) {
-                val app = AnonrodeApp.get(this)
-                lifecycleScope.launch(Dispatchers.IO) {
-                    app.stateStore.updateAudioTrack(uri, targetIndex)
-                }
+        )
+        player.trackSelectionParameters = builder.build()
+        AppLog.d("TRACKS", "selected track: $trackId")
+        // Persist so the same track is restored on the next open (#30).
+        val uri = currentUriStr
+        if (uri != null) {
+            val app = AnonrodeApp.get(this)
+            lifecycleScope.launch(Dispatchers.IO) {
+                app.stateStore.updateAudioTrack(uri, targetIndex)
             }
-            break
         }
         audioTrackPickerOpen = false
     }

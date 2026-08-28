@@ -71,20 +71,25 @@ fun CastRoutePickerSheet(
             .addControlCategory(MediaControlIntent.CATEGORY_REMOTE_PLAYBACK)
             .build()
     }
-    var routes by remember { mutableStateOf(mediaRouter.selectRoutes(selector)) }
+    // MediaRouter has no "query by selector" call — snapshot its route set
+    // and filter with RouteInfo.matchesSelector instead.
+    fun refreshRoutes(): List<RouteInfo> =
+        mediaRouter.routes.filter { it.matchesSelector(selector) }
+
+    var routes by remember { mutableStateOf(refreshRoutes()) }
     var selectedRouteId by remember { mutableStateOf(mediaRouter.selectedRoute?.id) }
 
     DisposableEffect(mediaRouter) {
         val callback = object : MediaRouter.Callback() {
             override fun onRouteAdded(router: MediaRouter, route: RouteInfo) {
-                if (selector.matchesRoute(route)) {
+                if (route.matchesSelector(selector)) {
                     AppLog.d("CAST", "route added: " + route.name + " id=" + route.id)
-                    routes = mediaRouter.selectRoutes(selector)
+                    routes = refreshRoutes()
                 }
             }
             override fun onRouteRemoved(router: MediaRouter, route: RouteInfo) {
                 AppLog.d("CAST", "route removed: " + route.name)
-                routes = mediaRouter.selectRoutes(selector)
+                routes = refreshRoutes()
             }
             override fun onRouteSelected(router: MediaRouter, route: RouteInfo) {
                 AppLog.d("CAST", "route selected: " + route.name)
@@ -184,16 +189,16 @@ private fun CastRouteRow(
     val icon: ImageVector = when {
         // isDefault() is a RouteInfo method exposed as a Kotlin property.
         route.isDefault -> Icons.Filled.Speaker
-        // deviceType constants live on RouteInfo; we read via the Kotlin
-        // property accessor generated for the Java getter.
-        route.deviceType == RouteInfo.DEVICE_TYPE_BLUETOOTH -> Icons.Filled.Headphones
+        // isBluetooth() covers both A2DP and BLE headset routes (the old
+        // DEVICE_TYPE_BLUETOOTH constant was split in mediarouter 1.8).
+        route.isBluetooth -> Icons.Filled.Headphones
         route.deviceType == RouteInfo.DEVICE_TYPE_HDMI -> Icons.Filled.Tv
         route.deviceType == RouteInfo.DEVICE_TYPE_WIRED_HEADSET -> Icons.Filled.Headphones
         else -> Icons.Filled.Cast
     }
     val typeLabel = when {
         route.isDefault -> "This phone"
-        route.deviceType == RouteInfo.DEVICE_TYPE_BLUETOOTH -> "Bluetooth"
+        route.isBluetooth -> "Bluetooth"
         route.deviceType == RouteInfo.DEVICE_TYPE_HDMI -> "Display"
         route.deviceType == RouteInfo.DEVICE_TYPE_WIRED_HEADSET -> "Wired headset"
         route.deviceType == RouteInfo.DEVICE_TYPE_USB_DEVICE ||

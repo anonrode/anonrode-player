@@ -53,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -542,7 +543,7 @@ private fun SettingsRow(
     title: String,
     subtitle: String?,
     trailing: @Composable () -> Unit,
-    onClick: () -> Unit,
+    onClick: () -> Unit = {},
 ) {
     Box(
         modifier = Modifier
@@ -648,6 +649,5 @@ private fun SettingsBackButton(palette: SkinPalette, onClick: () -> Unit) {
 }
 
 /** Tiny shim so we can call .align() inside the toggle's Box from anywhere. */
-private fun Modifier.graphicsLayerScale(rotationZ: Float) = this.then(
-    androidx.compose.ui.graphics.graphicsLayer(rotationZ = rotationZ)
-)
+private fun Modifier.graphicsLayerScale(rotationZ: Float): Modifier =
+    this.graphicsLayer(rotationZ = rotationZ)

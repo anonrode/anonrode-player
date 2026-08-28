@@ -45,11 +45,10 @@ class EqualizerManager {
             val range = eq.bandLevelRange
             AppLog.d("EQ", "bound: sessionId=" + sessionId + " bands=" + bands +
                 " range=" + range[0].toInt() + ".." + range[1].toInt() + " mB")
-            // Log the centre frequencies so the band panel can be wired up
-            // later without re-instantiating the effect.
-            val freqs = ShortArray(bands)
-            eq.getBandFreqRange(freqs) // pairs (low, high) per band, but cheap
-            AppLog.d("EQ", "band range low=" + freqs[0] + "Hz, high=" + freqs[1] + "Hz (band 0)")
+            // Log band 0's frequency range so the band panel can be wired
+            // up later without re-instantiating the effect.
+            val freqRange = eq.getBandFreqRange(0.toShort()) // [low, high] mHz
+            AppLog.d("EQ", "band 0 range low=" + freqRange[0] + " high=" + freqRange[1] + " mHz")
             eq.enabled = lastEnabled
             equalizer = eq
             lastSessionId = sessionId
@@ -100,7 +99,7 @@ class EqualizerManager {
     fun getCentreFreqMhz(bandIndex: Int): Int {
         val eq = equalizer ?: return 0
         return try {
-            eq.getCentreFreq(bandIndex.toShort())
+            eq.getCenterFreq(bandIndex.toShort())
         } catch (e: Throwable) {
             0
         }

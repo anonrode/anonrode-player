@@ -254,16 +254,19 @@ fun LibraryScreen(
                 }
             } else {
                 items(state.videos, key = { "video-" + it.uri }) { v ->
+                    // Explicit lambda type: `if (selecting) null else { … }`
+                    // can't infer the else-branch's return on its own.
+                    val enterSelection: () -> Unit = {
+                        selecting = true
+                        if (v.uri !in selected) selected.add(v.uri)
+                    }
                     VideoRow(
                         v,
                         selected = selecting && v.uri in selected,
                         onClick = {
                             if (selecting) toggleSelected(v.uri) else onOpenVideo(v)
                         },
-                        onLongClick = if (selecting) null else {
-                            selecting = true
-                            if (v.uri !in selected) selected.add(v.uri)
-                        },
+                        onLongClick = if (selecting) null else enterSelection,
                     )
                 }
             }

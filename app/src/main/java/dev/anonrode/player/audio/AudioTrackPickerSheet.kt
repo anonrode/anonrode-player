@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,7 +30,6 @@ import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.Player
 import androidx.media3.common.TrackGroup
-import androidx.media3.common.TrackInfo
 import dev.anonrode.player.core.media.log.AppLog
 
 /**
@@ -129,14 +129,14 @@ private data class AudioTrackRowData(
 
 private fun buildAudioTrackList(player: Player): List<AudioTrackRowData> {
     val out = mutableListOf<AudioTrackRowData>()
-    val seen = HashSet<String>()
-    for (trackInfo in player.currentTracks) {
-        if (trackInfo.type != C.TRACK_TYPE_AUDIO) continue
-        val group: TrackGroup = trackInfo.trackGroup
+    // Media3 exposes tracks as Tracks.Group wrappers around a TrackGroup;
+    // the row id is "groupIndex:indexInGroup", which is exactly what the
+    // host needs to build a TrackSelectionOverride.
+    for ((groupIdx, trackGroup) in player.currentTracks.groups.withIndex()) {
+        if (trackGroup.type != C.TRACK_TYPE_AUDIO) continue
+        val group: TrackGroup = trackGroup.mediaTrackGroup
         for (i in 0 until group.length) {
-            // Media3 exposes track ids as `TrackInfo.getId()` (groupId + index in group).
-            val id = trackInfo.id + ":" + i
-            if (!seen.add(id)) continue
+            val id = "$groupIdx:$i"
             val format: Format = group.getFormat(i)
             val title = format.label?.takeIf { it.isNotBlank() }
                 ?: languageLabel(format.language)
@@ -165,11 +165,11 @@ private fun buildAudioTrackList(player: Player): List<AudioTrackRowData> {
 }
 
 private fun currentAudioTrackId(player: Player): String? {
-    val sel = player.currentTrackSelections
-    for (s in sel.trackSelections) {
-        if (s.trackType != C.TRACK_TYPE_AUDIO) continue
-        val ti: TrackInfo = s.trackInfo ?: continue
-        return ti.id + ":" + s.trackIndexInTrackGroup
+    for ((groupIdx, trackGroup) in player.currentTracks.groups.withIndex()) {
+        if (trackGroup.type != C.TRACK_TYPE_AUDIO || !trackGroup.isSelected) continue
+        for (i in 0 until trackGroup.mediaTrackGroup.length) {
+            if (trackGroup.isTrackSelected(i)) return "$groupIdx:$i"
+        }
     }
     return null
 }

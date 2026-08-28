@@ -56,7 +56,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.ripple.rememberRipple
+import androidx.compose.material3.ripple
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -160,7 +160,7 @@ import kotlin.math.roundToInt
  * permission needed).
  */
 fun View.haptic(
-    @HapticFeedbackConstants type: Int = HapticFeedbackConstants.KEYBOARD_TAP,
+    type: Int = HapticFeedbackConstants.KEYBOARD_TAP,
 ) {
     try { performHapticFeedback(type) } catch (_: Throwable) { /* devices without haptics */ }
 }
@@ -270,7 +270,7 @@ private fun TimeSeekButton(
             .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = rememberRipple(bounded = true, color = accent),
+                indication = ripple(bounded = true, color = accent),
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
@@ -309,7 +309,7 @@ private fun EpisodeJumpButton(
             .clickable(
                 enabled = enabled,
                 interactionSource = remember { MutableInteractionSource() },
-                indication = rememberRipple(bounded = true, color = Color.White),
+                indication = ripple(bounded = true, color = Color.White),
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
@@ -364,7 +364,7 @@ private fun QuickRowChip(
         androidx.compose.foundation.layout.Box(
             modifier = baseModifier.combinedClickable(
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                indication = androidx.compose.material.ripple.rememberRipple(bounded = true, color = accent),
+                indication = ripple(bounded = true, color = accent),
                 onClick = {
                     view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
                     onClick()
@@ -416,18 +416,21 @@ private fun SyncedChip(
     // briefly pops (~1.08) then settles to 1.0 with a tiny overshoot,
     // so the user sees "yes, something just happened" without any banner.
     val pulseKey = (offsetMs / 100).toInt()
-    val scale by androidx.compose.animation.core.remember(pulseKey) {
+    val scaleAnim = remember(pulseKey) {
         androidx.compose.animation.core.Animatable(0.85f)
-    }.let { anim ->
-        androidx.compose.runtime.LaunchedEffect(pulseKey) { anim.animateTo(1f,
+    }
+    LaunchedEffect(pulseKey) {
+        scaleAnim.animateTo(1f,
             androidx.compose.animation.core.spring(
                 dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
-                stiffness = androidx.compose.animation.core.Spring.StiffnessMedium)) }
-        anim
+                stiffness = androidx.compose.animation.core.Spring.StiffnessMedium))
     }
     Box(
         modifier = Modifier
-            .graphicsLayer { this.scaleX = scale; this.scaleY = scale }
+            .graphicsLayer {
+                this.scaleX = scaleAnim.value
+                this.scaleY = scaleAnim.value
+            }
             .clip(RoundedCornerShape(999.dp))
             .background(Color.Black.copy(alpha = 0.45f))
             .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
@@ -1044,38 +1047,6 @@ fun PlayerScreen(
 
     val captureScope = rememberCoroutineScope()
 
-    /**
-     * Save the current video frame: PixelCopy the PlayerView's SurfaceView
-     * (which holds the decoded frame — a plain view screenshot would be
-     * black), then write a PNG to Pictures/AnonPlayer (MediaStore on
-     * API 29+, app-specific dir below that — no permission needed either
-     * way).
-     */
-    fun captureFrame() {
-        val pv = playerViewRef ?: return
-        if (Build.VERSION.SDK_INT < 24) {
-            showTransientToast("Screenshot needs Android 7.0+")
-            return
-        }
-        val surfaceView = pv.videoSurfaceView as? android.view.SurfaceView
-        if (surfaceView == null || surfaceView.width <= 0 || surfaceView.height <= 0) {
-            showTransientToast("Screenshot failed — no video surface")
-            return
-        }
-        val surface = surfaceView.holder.surface
-        if (surface == null || !surface.isValid) {
-            showTransientToast("Screenshot failed — surface not ready")
-            return
-        }
-        val bmp = Bitmap.createBitmap(
-            surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888
-        )
-        PixelCopy.request(surface, bmp, { result ->
-            if (result == PixelCopy.SUCCESS) saveFrame(bmp)
-            else showTransientToast("Screenshot failed (code " + result + ")")
-        }, Handler(Looper.getMainLooper()))
-    }
-
     fun saveFrame(bmp: Bitmap) {
         val base = title.substringAfterLast('/').substringBeforeLast('.')
             .replace(Regex("[^A-Za-z0-9 ._\\-]"), "")
@@ -1124,6 +1095,39 @@ fun PlayerScreen(
                 view.post { showTransientToast("Screenshot save failed") }
             }
         }
+    }
+
+    /**
+     * Save the current video frame: PixelCopy the PlayerView's SurfaceView
+     * (which holds the decoded frame — a plain view screenshot would be
+     * black), then write a PNG to Pictures/AnonPlayer (MediaStore on
+     * API 29+, app-specific dir below that — no permission needed either
+     * way). Declared after [saveFrame] because Kotlin local functions are
+     * not hoisted — a forward call would not resolve.
+     */
+    fun captureFrame() {
+        val pv = playerViewRef ?: return
+        if (Build.VERSION.SDK_INT < 24) {
+            showTransientToast("Screenshot needs Android 7.0+")
+            return
+        }
+        val surfaceView = pv.videoSurfaceView as? android.view.SurfaceView
+        if (surfaceView == null || surfaceView.width <= 0 || surfaceView.height <= 0) {
+            showTransientToast("Screenshot failed — no video surface")
+            return
+        }
+        val surface = surfaceView.holder.surface
+        if (surface == null || !surface.isValid) {
+            showTransientToast("Screenshot failed — surface not ready")
+            return
+        }
+        val bmp = Bitmap.createBitmap(
+            surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888
+        )
+        PixelCopy.request(surface, bmp, { result ->
+            if (result == PixelCopy.SUCCESS) saveFrame(bmp)
+            else showTransientToast("Screenshot failed (code " + result + ")")
+        }, Handler(Looper.getMainLooper()))
     }
 
     // ── quick-row wiring (all buttons fire a real action now) ──────
@@ -1289,13 +1293,17 @@ fun PlayerScreen(
         // Big jumps snap to the nearest keyframe (instant); small ones
         // stay frame-exact. EXACT is restored shortly after so drags and
         // swipes are unaffected by the temporary parameter.
+        // (setSeekParameters/SeekParameters live on ExoPlayer, not Player.)
         val fast = kotlin.math.abs(sec) >= fastSeekThresholdSec
-        if (fast) p.setSeekParameters(androidx.media3.common.SeekParameters.CLOSEST_SYNC)
+        if (fast) {
+            (p as? androidx.media3.exoplayer.ExoPlayer)
+                ?.setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
+        }
         p.seekTo((p.currentPosition + sec * 1000L).coerceIn(0L, d))
         if (fast) {
             view.postDelayed({
-                (engine?.player ?: livePlayer)
-                    .setSeekParameters(androidx.media3.common.SeekParameters.EXACT)
+                ((engine?.player ?: livePlayer) as? androidx.media3.exoplayer.ExoPlayer)
+                    ?.setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
             }, 500)
         }
         flashSide = if (sec < 0) -1 else 1
@@ -2147,7 +2155,7 @@ fun PlayerScreen(
                             .border(2.dp, Color.White, CircleShape)
                             .clickable(
                                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                                indication = rememberRipple(bounded = true, radius = 36.dp, color = accent),
+                                indication = ripple(bounded = true, radius = 36.dp, color = accent),
                                 onClick = {
                                     view.haptic(HapticFeedbackConstants.VIRTUAL_KEY)
                                     if (livePlayer.isPlaying) livePlayer.pause() else livePlayer.play()
