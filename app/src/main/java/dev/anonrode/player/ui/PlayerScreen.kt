@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspect
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -90,6 +91,7 @@ import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -220,14 +222,23 @@ private val SleepOptions = listOf(
 
 /**
  * Zoom modes cycled by the resize button; [resizeMode] maps directly onto
- * PlayerView's AspectRatioFrameLayout constants.
+ * PlayerView's AspectRatioFrameLayout constants. When [forcedAspect] is
+ * non-null the playback surface is letterboxed to that ratio and stretched
+ * to fill it (RESIZE_MODE_FILL inside an aspect-locked container), which is
+ * how a "force 16:9 / 4:3" toggle behaves in mainstream players.
  */
-private data class ZoomMode(val abbreviation: String, val resizeMode: Int)
+private data class ZoomMode(
+    val abbreviation: String,
+    val resizeMode: Int,
+    val forcedAspect: Float? = null,
+)
 
 private val ZoomModes = listOf(
     ZoomMode("FIT", AspectRatioFrameLayout.RESIZE_MODE_FIT),
     ZoomMode("CROP", AspectRatioFrameLayout.RESIZE_MODE_ZOOM),
     ZoomMode("STR", AspectRatioFrameLayout.RESIZE_MODE_FILL),
+    ZoomMode("16:9", AspectRatioFrameLayout.RESIZE_MODE_FILL, 16f / 9f),
+    ZoomMode("4:3", AspectRatioFrameLayout.RESIZE_MODE_FILL, 4f / 3f),
 )
 
 /** 8-way offsets for the black subtitle outline. */
@@ -800,6 +811,8 @@ fun PlayerScreen(
     swipeToSeekEnabled: Boolean = true,
     volumeGestureEnabled: Boolean = true,
     brightnessGestureEnabled: Boolean = true,
+    /** Gates the two-finger pinch-to-zoom gesture (Settings → Pinch zoom). */
+    pinchZoomEnabled: Boolean = true,
     /** HUD auto-hide delay while playing (ms). */
     autoHideControlsMs: Long = 3500L,
     /** Sleep timer armed from the settings screen (0=off, -1=end of episode). */
@@ -847,6 +860,8 @@ fun PlayerScreen(
 
     var controlsVisible by remember { mutableStateOf(true) }
     var isPlaying by remember { mutableStateOf(livePlayer.isPlaying) }
+    /** True while the player is stalled/buffering — drives the spinner. */
+    var isBuffering by remember { mutableStateOf(false) }
     var locked by remember { mutableStateOf(false) }
     /** True while the hold-to-2× speed boost gesture is engaged. Guards
      *  against re-entrant gestures double-applying the speed change. */
@@ -970,6 +985,7 @@ fun PlayerScreen(
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 AppLog.d("PLAYER", "state=" + playbackState)
+                isBuffering = playbackState == Player.STATE_BUFFERING
                 // Re-assert the chosen speed when a new media item is ready
                 // (or the boost rate while a hold-to-boost is engaged, so a
                 // buffer stall mid-hold can't silently drop the 2×).
@@ -991,6 +1007,9 @@ fun PlayerScreen(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                // Drop the spinner so an error doesn't render as "buffering";
+                // the recoverable error dialog is owned by the host activity.
+                isBuffering = false
                 AppLog.e(
                     "PLAYER",
                     "error " + error.errorCodeName + ": " +
@@ -1287,6 +1306,18 @@ fun PlayerScreen(
         showHud(Icons.Filled.AspectRatio, ZoomModes[zoomIdx].abbreviation)
     }
 
+    /**
+     * Step the zoom mode by [dir] (+1 / -1), clamped to the mode list. Used
+     * by the pinch gesture; a no-op at either end. Persists like [cycleZoom].
+     */
+    fun zoomBy(dir: Int) {
+        val next = (zoomIdx + dir).coerceIn(0, ZoomModes.size - 1)
+        if (next == zoomIdx) return
+        zoomIdx = next
+        onZoomChanged(zoomIdx)
+        showHud(Icons.Filled.AspectRatio, ZoomModes[zoomIdx].abbreviation)
+    }
+
     fun seekBy(sec: Int) {
         val p = engine?.player ?: livePlayer
         val d = p.duration.takeIf { it > 0 } ?: return
@@ -1412,6 +1443,44 @@ fun PlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .onSizeChanged { scrW = it.width.toFloat(); scrH = it.height.toFloat() }
+            // ── pinch-to-zoom (two fingers) ────────────────────────────
+            // Placed first so that, once two pointers are down, it consumes
+            // the gesture before the single-pointer tap/drag/boost detectors
+            // can act on it. With a single pointer it never consumes, so the
+            // existing gestures are untouched. Gated by the Pinch-zoom setting.
+            .pointerInput(locked, isPipMode, pinchZoomEnabled) {
+                if (!pinchZoomEnabled) return@pointerInput
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var startDist = -1f
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val pressed = event.changes.filter { it.pressed }
+                        if (pressed.isEmpty()) break
+                        if (pressed.size >= 2) {
+                            val dist = (pressed[0].position - pressed[1].position)
+                                .getDistance()
+                            if (startDist < 0f) {
+                                startDist = dist
+                            } else if (startDist > 40f) {
+                                val ratio = dist / startDist
+                                if (ratio > 1.35f) {
+                                    view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+                                    zoomBy(+1)
+                                    startDist = dist
+                                } else if (ratio < 0.74f) {
+                                    view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+                                    zoomBy(-1)
+                                    startDist = dist
+                                }
+                            }
+                            // Two fingers down: swallow the event so seek /
+                            // volume / brightness drags don't also fire.
+                            event.changes.forEach { it.consume() }
+                        }
+                    }
+                }
+            }
             .pointerInput(locked, isPipMode) {
                 detectTapGestures(
                     onTap = {
@@ -1482,7 +1551,11 @@ fun PlayerScreen(
                             "seek" -> {
                                 val d = livePlayer.duration.takeIf { it > 0 }
                                     ?: return@detectDragGestures
-                                val deltaFrac = (x - lastX) / scrW
+                                // Cumulative delta from the gesture start —
+                                // using the per-event increment (lastX) here
+                                // re-anchored every tick and the scrub never
+                                // moved away from the start position.
+                                val deltaFrac = (x - startX) / scrW
                                 val target =
                                     (startPosMs + deltaFrac * d).coerceIn(0f, d.toFloat())
                                 livePlayer.seekTo(target.toLong())
@@ -1592,21 +1665,34 @@ fun PlayerScreen(
         // the rebuilt ExoPlayer after a HW/SW swap. Without this the
         // surface keeps rendering the released (dead) player instance.
         key(livePlayer) {
-            AndroidView(
+            // Forced-aspect modes (16:9 / 4:3) letterbox the surface to the
+            // target ratio and stretch the frame to fill it; the free modes
+            // (FIT / CROP / STR) fill the whole stage.
+            val forcedAspect = ZoomModes[zoomIdx].forcedAspect
+            Box(
                 modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        this.player = livePlayer
-                        useController = false
-                        setShutterBackgroundColor(android.graphics.Color.BLACK)
-                        resizeMode = ZoomModes[zoomIdx].resizeMode
-                    }.also { playerViewRef = it }
-                },
-                update = { pv ->
-                    if (pv.player !== livePlayer) pv.player = livePlayer
-                    pv.resizeMode = ZoomModes[zoomIdx].resizeMode
-                }
-            )
+                contentAlignment = Alignment.Center,
+            ) {
+                AndroidView(
+                    modifier = if (forcedAspect != null) {
+                        Modifier.aspect(forcedAspect)
+                    } else {
+                        Modifier.fillMaxSize()
+                    },
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            this.player = livePlayer
+                            useController = false
+                            setShutterBackgroundColor(android.graphics.Color.BLACK)
+                            resizeMode = ZoomModes[zoomIdx].resizeMode
+                        }.also { playerViewRef = it }
+                    },
+                    update = { pv ->
+                        if (pv.player !== livePlayer) pv.player = livePlayer
+                        pv.resizeMode = ZoomModes[zoomIdx].resizeMode
+                    }
+                )
+            }
         }
 
         // First-frame poster under the player view (drawn AFTER the
@@ -1736,6 +1822,17 @@ fun PlayerScreen(
             }
         }
 
+        // ── buffering spinner (center, undecorated) ─────────────────
+        if (isBuffering && !isPipMode) {
+            CircularProgressIndicator(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(48.dp),
+                color = accent,
+                strokeWidth = 3.dp,
+            )
+        }
+
         // ── lock badge ───────────────────────────────────────────────
         if (locked && !isPipMode) {
             IconButton(
@@ -1750,7 +1847,15 @@ fun PlayerScreen(
         }
 
         // ── controls overlay (hidden entirely while in PiP) ──────────
-        if (controlsVisible && !locked && !isPipMode) {
+        // AnimatedVisibility gives the chrome a short dim/undim fade instead
+        // of a hard pop; the inner Box re-provides the BoxScope the two
+        // anchored columns (top bar / bottom dock) align against.
+        AnimatedVisibility(
+            visible = controlsVisible && !locked && !isPipMode,
+            enter = fadeIn(animationSpec = tween(220)),
+            exit = fadeOut(animationSpec = tween(220)),
+        ) {
+            Box(Modifier.fillMaxSize()) {
             // ── top row + quick row over a gradient scrim ────────────
             Column(
                 modifier = Modifier
@@ -2231,7 +2336,8 @@ fun PlayerScreen(
                 }
             }
         }
-    }
+            }
+        }
 
         // ── A-B repeat chip (top-center while a region is set/looping);
         //    tap to advance the cycle (set B / clear). ─────────────────

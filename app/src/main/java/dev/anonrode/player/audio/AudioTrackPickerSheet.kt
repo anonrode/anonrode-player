@@ -19,7 +19,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,6 +34,7 @@ import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.Player
 import androidx.media3.common.TrackGroup
+import androidx.media3.common.Tracks
 import dev.anonrode.player.core.media.log.AppLog
 
 /**
@@ -49,8 +54,30 @@ fun AudioTrackPickerSheet(
     onSelectTrack: (trackId: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val tracks = remember(player) { buildAudioTrackList(player) }
-    val currentTrackId = remember(player) { currentAudioTrackId(player) }
+    // Bump a version counter whenever the player's track manifest changes so
+    // the list re-derives live. Opening the sheet right after a file loads —
+    // before Media3 has parsed the container — would otherwise show a stale
+    // "no tracks" empty state until the sheet is reopened.
+    var trackVersion by remember { mutableIntStateOf(0) }
+    DisposableEffect(player) {
+        val l = object : Player.Listener {
+            override fun onTracksChanged(tracks: Tracks) {
+                trackVersion++
+            }
+        }
+        player.addListener(l)
+        onDispose {
+            // The engine may have released this player instance (decoder swap)
+            // before the sheet disposes; never let cleanup crash the UI.
+            try {
+                player.removeListener(l)
+            } catch (_: Throwable) {
+                // Already released — nothing to detach.
+            }
+        }
+    }
+    val tracks = remember(player, trackVersion) { buildAudioTrackList(player) }
+    val currentTrackId = remember(player, trackVersion) { currentAudioTrackId(player) }
 
     Column(
         modifier = Modifier

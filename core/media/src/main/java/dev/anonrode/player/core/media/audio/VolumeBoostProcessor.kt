@@ -25,6 +25,15 @@ class VolumeBoostProcessor : AudioProcessor {
     private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputEnded = false
 
+    /**
+     * Reusable output buffer, grown on demand. [queueInput] runs on the audio
+     * render thread roughly every 20 ms, so allocating a fresh direct buffer
+     * each call would churn the GC and risk underruns; Media3 fully drains the
+     * previous output (via [getOutput]) before queueing the next input, so a
+     * single reused buffer is safe.
+     */
+    private var reuseBuffer: ByteBuffer = ByteBuffer.allocateDirect(0).order(ByteOrder.nativeOrder())
+
     override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
         inputFormat =
             if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT) inputAudioFormat
@@ -44,7 +53,13 @@ class VolumeBoostProcessor : AudioProcessor {
             outputBuffer = inputBuffer
             return
         }
-        val out = ByteBuffer.allocateDirect(remaining).order(ByteOrder.nativeOrder())
+        val out = if (reuseBuffer.capacity() < remaining) {
+            ByteBuffer.allocateDirect(remaining).order(ByteOrder.nativeOrder())
+                .also { reuseBuffer = it }
+        } else {
+            reuseBuffer
+        }
+        out.clear()
         val src = inputBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
         while (src.hasRemaining()) {
             val v = src.short * g

@@ -13,7 +13,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Rational
 import android.view.WindowManager
-import android.widget.Toast
 import androidx.mediarouter.media.MediaRouter
 import androidx.mediarouter.media.MediaRouter.RouteInfo
 import androidx.activity.ComponentActivity
@@ -39,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
@@ -171,6 +171,13 @@ class PlayerActivity : ComponentActivity() {
     /** True while the in-player calibration banner is showing. */
     private var isCalibrating by mutableStateOf(false)
 
+    /**
+     * Human-readable playback error. Non-null shows the recoverable
+     * Retry/Close dialog instead of leaving a frozen/black frame. Set from
+     * [Player.Listener.onPlayerError] and from the [openVideo] failure path.
+     */
+    private var playbackError by mutableStateOf<String?>(null)
+
     /** True while [dev.anonrode.player.feature.player.PlaybackEngine.rebuild]
      *  is rebuilding the ExoPlayer around a new renderers factory. Mirrored
      *  into the HW chip in PlayerScreen to disable the button + show "…". */
@@ -282,6 +289,20 @@ class PlayerActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) updatePipAutoEnter(isPlaying)
         }
 
+        override fun onPlayerError(error: PlaybackException) {
+            // Surface a recoverable dialog instead of freezing on the last
+            // frame. The render loop keeps ticking harmlessly; Retry re-runs
+            // openVideo which re-prepares the player from scratch.
+            AppLog.e(
+                "PLAYER",
+                "playback error " + error.errorCodeName + ": " +
+                    (error.cause?.message ?: error.message ?: "unknown"),
+                error,
+            )
+            switching = false
+            playbackError = friendlyPlaybackError(error)
+        }
+
         override fun onTracksChanged(tracks: Tracks) {
             // One-shot restore of the persisted audio-track choice: a
             // TrackSelectionOverride needs the real MediaTrackGroup, which
@@ -312,12 +333,6 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, "android.permission.POST_NOTIFICATIONS") !=
-            PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
-        }
 
         val uriStr = intent.getStringExtra(EXTRA_URI)
         if (uriStr == null) {
@@ -410,10 +425,11 @@ class PlayerActivity : ComponentActivity() {
                             onBack = { finish() },
                             initialSpeed = restoredSpeed,
                             onSpeedChanged = { speed ->
-                                // Persist per-video playback speed (Room, media_state)
-                                // plus the global play_speed preference.
+                                // Persist per-video playback speed (Room, media_state).
+                                // The global pref is intentionally NOT written here:
+                                // in-player speed changes are per-video; the settings
+                                // screen owns defaultPlaybackSpeed / global speed.
                                 sessionSpeed = speed
-                                PlayerPrefs.saveGlobalSpeed(this@PlayerActivity, speed)
                                 val targetUri = currentUriStr
                                 if (targetUri != null) {
                                     lifecycleScope.launch(Dispatchers.IO) {
@@ -472,6 +488,7 @@ class PlayerActivity : ComponentActivity() {
                             swipeToSeekEnabled = settings.swipeToSeek,
                             volumeGestureEnabled = settings.volumeGesture,
                             brightnessGestureEnabled = settings.brightnessGesture,
+                            pinchZoomEnabled = settings.pinchZoom,
                             autoHideControlsMs = settings.autoHideControlsMs,
                             initialSleepTimerMinutes = settings.sleepTimerMinutes,
                             abStartMs = abStartMs,
@@ -645,6 +662,27 @@ class PlayerActivity : ComponentActivity() {
                         }
                     }
                 }
+                // ── Recoverable playback error (Retry / Close) ──────────
+                // Shown for a Media3 onPlayerError or an openVideo failure.
+                // Retry re-runs the open pipeline for the same URI; Close
+                // backs out to the library instead of leaving a frozen frame.
+                val errMsg = playbackError
+                if (errMsg != null) {
+                    AlertDialog(
+                        onDismissRequest = { playbackError = null },
+                        title = { Text("Can't play this video") },
+                        text = { Text(errMsg) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                playbackError = null
+                                currentUriStr?.let { u -> openVideo(u, title) }
+                            }) { Text("Retry") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { finish() }) { Text("Close") }
+                        },
+                    )
+                }
             }
         }
 
@@ -699,7 +737,10 @@ class PlayerActivity : ComponentActivity() {
                 AppLog.d("PLAY", "opening " + uriStr)
                 val state = app.stateStore.get(uriStr)
                 // Per-video zoom: stored value = idx + 1 (1.0 = unset = FIT).
-                val zoomIdx = ((state?.videoScale ?: 1f) - 1f).toInt().coerceIn(0, 2)
+                // Clamp to the PlayerScreen ZoomModes range (FIT, CROP, STR,
+                // 16:9, 4:3 → indices 0..4) so a stale/large value can't
+                // index out of bounds.
+                val zoomIdx = ((state?.videoScale ?: 1f) - 1f).toInt().coerceIn(0, 4)
                 // Subtitle source: the picker's persisted choice wins;
                 // empty choice = legacy auto-pick of the best sidecar.
                 val choice = state?.subtitleChoice.orEmpty()
@@ -738,9 +779,11 @@ class PlayerActivity : ComponentActivity() {
                 }
 
                 // Speed persistence: apply this video's saved speed, then the
-                // global play_speed preference, then the session speed.
+                // user's default playback speed (settings), then the global
+                // last-used play_speed preference, then the session speed.
                 // (this@PlayerActivity: inside launch{} `this` is the scope)
                 val speed = app.stateStore.savedPlaybackSpeed(uriStr)
+                    ?: currentSettings.defaultPlaybackSpeed.takeIf { it > 0f }
                     ?: PlayerPrefs.globalSpeed(this@PlayerActivity)
                     ?: sessionSpeed
                 if (gen != openGeneration) return@launch
@@ -748,13 +791,17 @@ class PlayerActivity : ComponentActivity() {
 
                 // Episode queue: an explicit multi-select list (library) wins;
                 // otherwise every MediaStore video sharing this folder, sorted
-                // by season/episode number, index resolved to uriStr.
+                // by season/episode number, index resolved to uriStr. One
+                // library snapshot (MediaScanner is TTL-cached) is fetched and
+                // reused for both queue paths instead of re-scanning per call.
                 val queueUris = explicitQueueUris
+                val snapshot = app.scanner.scan().videos
+                val currentVideo = snapshot.firstOrNull { it.uri == uriStr }
                 val queue = if (queueUris != null && queueUris.size > 1) {
-                    EpisodeQueue.fromExplicitUris(app.scanner, queueUris, uriStr)
-                        ?: EpisodeQueue.build(app.scanner, uriStr)
+                    EpisodeQueue.fromExplicitVideos(snapshot, queueUris, uriStr)
+                        ?: currentVideo?.let { EpisodeQueue.fromVideos(snapshot, it) }
                 } else {
-                    EpisodeQueue.build(app.scanner, uriStr)
+                    currentVideo?.let { EpisodeQueue.fromVideos(snapshot, it) }
                 }
 
                 // Stale-open guard: re-check right before the commit AND on
@@ -797,7 +844,10 @@ class PlayerActivity : ComponentActivity() {
                 switching = false
                 AppLog.e("PLAY", "FAILED to start playback", e)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@PlayerActivity, "Failed to play video", Toast.LENGTH_LONG).show()
+                    // Recoverable dialog (Retry re-runs openVideo) instead of
+                    // a transient Toast over a black, unresponsive frame.
+                    playbackError = "Couldn't start playback. " +
+                        "The file may be missing, corrupt, or unsupported."
                 }
             }
         }
@@ -813,6 +863,10 @@ class PlayerActivity : ComponentActivity() {
         val engine = app.engine
         resumePromptMs = null
         pendingAudioTrackIdx = pending.audioTrackIdx
+        // Point-of-need: the foreground playback service (and thus its
+        // notification) starts inside engine.play() below, so ask for the
+        // notification permission here rather than cold in onCreate.
+        ensureNotificationPermission()
         lifecycleScope.launch {
             // Persistent decoder priority (Settings): three real engine
             // profiles — HW+SW (device wins, FFmpeg fallback), APP SW
@@ -843,6 +897,22 @@ class PlayerActivity : ComponentActivity() {
             restartRenderLoop(pending.cues)
             episodeQueue = pending.queue
             switching = false
+        }
+    }
+
+    /**
+     * POST_NOTIFICATIONS, asked once per activity instance at the moment the
+     * foreground playback service (and its notification) actually starts —
+     * not cold in [onCreate]. On API < 33 the permission doesn't exist, so
+     * this is a no-op.
+     */
+    private var notificationPermissionAsked = false
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33 || notificationPermissionAsked) return
+        notificationPermissionAsked = true
+        if (ContextCompat.checkSelfPermission(this, "android.permission.POST_NOTIFICATIONS") !=
+            PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
         }
     }
 
@@ -883,6 +953,35 @@ class PlayerActivity : ComponentActivity() {
         val s = ms / 1000
         return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
         else "%d:%02d".format(s / 60, s % 60)
+    }
+
+    /**
+     * Map a Media3 [PlaybackException] onto a short, human-readable message
+     * for the recoverable error dialog. Groups the many ERROR_CODE_* values
+     * into the few things a user can actually act on.
+     */
+    private fun friendlyPlaybackError(error: PlaybackException): String = when (error.errorCode) {
+        PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ->
+            "The file can't be found. It may have been moved, renamed, or deleted."
+        PlaybackException.ERROR_CODE_IO_NO_PERMISSION ->
+            "No permission to read this file."
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED,
+        PlaybackException.ERROR_CODE_TIMEOUT ->
+            "Network problem while loading this video."
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+        PlaybackException.ERROR_CODE_DECODING_FAILED,
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ->
+            "This video's format or codec isn't supported on this device. " +
+                "Try switching the decoder (HW/SW) from the player."
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED ->
+            "Couldn't start audio output for this video."
+        else -> "Playback failed (" + error.errorCodeName + ")."
     }
 
     /**

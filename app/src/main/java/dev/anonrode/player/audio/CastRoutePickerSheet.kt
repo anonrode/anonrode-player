@@ -78,6 +78,12 @@ fun CastRoutePickerSheet(
 
     var routes by remember { mutableStateOf(refreshRoutes()) }
     var selectedRouteId by remember { mutableStateOf(mediaRouter.selectedRoute?.id) }
+    // The router ALWAYS has a selected route (the phone speaker by default),
+    // so "routed" can't be derived from a non-null id — it means "selected
+    // AND not the built-in default output".
+    var selectedIsDefault by remember {
+        mutableStateOf(mediaRouter.selectedRoute?.isDefault ?: true)
+    }
 
     DisposableEffect(mediaRouter) {
         val callback = object : MediaRouter.Callback() {
@@ -94,10 +100,12 @@ fun CastRoutePickerSheet(
             override fun onRouteSelected(router: MediaRouter, route: RouteInfo) {
                 AppLog.d("CAST", "route selected: " + route.name)
                 selectedRouteId = route.id
+                selectedIsDefault = route.isDefault
             }
             override fun onRouteUnselected(router: MediaRouter, route: RouteInfo) {
                 AppLog.d("CAST", "route unselected: " + route.name)
                 selectedRouteId = router.selectedRoute?.id
+                selectedIsDefault = router.selectedRoute?.isDefault ?: true
             }
         }
         mediaRouter.addCallback(selector, callback, MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY)
@@ -120,8 +128,8 @@ fun CastRoutePickerSheet(
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f))
-            Text(if (selectedRouteId != null) "ROUTED" else "PHONE",
-                color = if (selectedRouteId != null) accent else Color(0xFF5B6070),
+            Text(if (!selectedIsDefault) "ROUTED" else "PHONE",
+                color = if (!selectedIsDefault) accent else Color(0xFF5B6070),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold)
         }

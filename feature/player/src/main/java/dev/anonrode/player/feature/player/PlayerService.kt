@@ -92,6 +92,9 @@ class PlayerService : MediaSessionService() {
         }
         val player = engine.player
         if (!player.playWhenReady || player.mediaItemCount == 0 || player.playbackState == ExoPlayer.STATE_ENDED) {
+            // The user swiped the app away: persist progress now so a process
+            // kill can't lose everything since the last 5s autosave tick.
+            engine.savePositionNow()
             stopSelf()
         }
     }
@@ -104,11 +107,14 @@ class PlayerService : MediaSessionService() {
         rebuiltHook?.let { PlayerServiceHolder.engine?.removeRebuiltHook(it) }
         rebuiltHook = null
         PlayerServiceHolder.engine?.savePositionNow()
-        // Best-effort: if the media session's player was already released
-        // by PlaybackEngine.rebuild, its release() would throw — so guard
-        // by only releasing the player the session was most recently bound
-        // to and that hasn't been torn down yet.
-        mediaSession?.release()
+        // Best-effort release. If the media session's player was already torn
+        // down by PlaybackEngine.rebuild, release() can throw — never let
+        // service teardown crash on the way out.
+        try {
+            mediaSession?.release()
+        } catch (e: Exception) {
+            AppLog.e("SERVICE", "media session release failed", e)
+        }
         mediaSession = null
         super.onDestroy()
     }

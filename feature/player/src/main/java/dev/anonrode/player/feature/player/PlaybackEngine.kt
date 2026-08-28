@@ -121,8 +121,24 @@ class PlaybackEngine(
      * [rebuild] can swap it out; all accessors read the field fresh so a
      * decoder swap is transparent to callers that just hold an engine ref.
      */
-    @Volatile var player: ExoPlayer = buildPlayer(context.applicationContext, decoderMode)
+    @Volatile var player: ExoPlayer = buildInitialPlayer(context.applicationContext)
         private set
+
+    /**
+     * First player built at engine construction. Falls back to pure platform
+     * decoders if the default (FFmpeg-backed) renderer factory can't be built
+     * (e.g. native libs unavailable on this ABI), so a missing lib can't break
+     * app startup. Called from the [player] initializer — only touches fields
+     * declared above it ([decoderMode], [syncProcessor], [boostProcessor]).
+     */
+    private fun buildInitialPlayer(ctx: Context): ExoPlayer = try {
+        buildPlayer(ctx, decoderMode)
+    } catch (t: Throwable) {
+        AppLog.e("ENGINE", "initial buildPlayer failed for mode=" + decoderMode +
+            "; falling back to device-only", t)
+        decoderMode = MODE_DEVICE_ONLY
+        buildPlayer(ctx, MODE_DEVICE_ONLY)
+    }
 
     /** Add a listener that survives [rebuild] — re-attached automatically. */
     fun addListener(listener: Player.Listener) {
@@ -331,10 +347,16 @@ class PlaybackEngine(
         // controls), the media notification, and the 5s position autosave.
         // Media3's MediaSessionService takes over startForeground once the
         // player is actually playing. Re-starting a running service is a
-        // cheap no-op, so this is safe on every play().
-        ContextCompat.startForegroundService(
-            appContext, Intent(appContext, PlayerService::class.java)
-        )
+        // cheap no-op, so this is safe on every play(). Wrapped so a service
+        // start failure (background-start restriction, SecurityException)
+        // degrades to "no notification/autosave" instead of killing playback.
+        try {
+            ContextCompat.startForegroundService(
+                appContext, Intent(appContext, PlayerService::class.java)
+            )
+        } catch (e: Exception) {
+            AppLog.e("ENGINE", "foreground service start failed; continuing without it", e)
+        }
         player.play()
         wasPlaying = true
     }
@@ -380,7 +402,19 @@ class PlaybackEngine(
         player.release()
 
         decoderMode = mode
-        val newPlayer = buildPlayer(ctx, mode)
+        val newPlayer = try {
+            buildPlayer(ctx, mode)
+        } catch (t: Throwable) {
+            // A failed renderer build (e.g. the FFmpeg native libs being
+            // unavailable on this ABI) must not leave the engine without a
+            // player. Fall back to pure platform decoders; if even that
+            // fails, rethrow so the caller's catch surfaces the error.
+            AppLog.e("ENGINE", "buildPlayer failed for mode=" + mode +
+                "; falling back to device-only", t)
+            decoderMode = MODE_DEVICE_ONLY
+            if (mode == MODE_DEVICE_ONLY) throw t
+            buildPlayer(ctx, MODE_DEVICE_ONLY)
+        }
         player = newPlayer
 
         // Re-attach every registered listener to the new player. We hold
