@@ -678,7 +678,8 @@ fun SettingsScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 18.dp, top = 26.dp, bottom = 8.dp),
+                        .padding(horizontal = 18.dp)
+                        .padding(top = 26.dp, bottom = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
