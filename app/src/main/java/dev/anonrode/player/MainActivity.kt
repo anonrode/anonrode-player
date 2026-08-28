@@ -1,6 +1,9 @@
 package dev.anonrode.player
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -8,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
@@ -15,21 +19,29 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dev.anonrode.player.core.media.log.AppLog
@@ -94,6 +106,28 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = AnonrodeApp.get(this)
+        // Startup self-diagnosis: if the previous run crashed (or this one's
+        // Application init failed), show the captured report instead of the
+        // normal UI — it renders even when the startup path itself is broken.
+        val crash = CrashReporter.readLastCrash(this)
+        if (crash != null || app.startupBroken) {
+            val report = crash ?: "Startup failed before a report could be written."
+            val canRecover = !app.startupBroken
+            setContent {
+                CrashReportDialog(
+                    report = report,
+                    onDismiss = {
+                        if (canRecover) {
+                            CrashReporter.clearLastCrash(this@MainActivity)
+                            recreate()
+                        } else {
+                            finishAffinity()
+                        }
+                    },
+                )
+            }
+            return
+        }
         AppLog.d("MAIN", "activity create, hasVideoPermission=" + hasVideoPermission())
 
         setContent {
@@ -176,6 +210,50 @@ fun PermissionGate(modifier: Modifier = Modifier, onRequest: () -> Unit) {
             "If you previously picked \"Partial access\", switch to full access for all folders to appear.",
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(top = 16.dp),
+        )
+    }
+}
+
+/**
+ * Full-screen crash report shown instead of the normal UI after a startup
+ * crash. Deliberately dependency-free (plain dark Material theme, no skin
+ * prefs) so it renders even when the startup path itself is broken.
+ */
+@Composable
+private fun CrashReportDialog(report: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    MaterialTheme(colorScheme = darkColorScheme()) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Anonrode crashed") },
+            text = {
+                Column {
+                    Text(
+                        "Copy this report and send it to the dev:",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    SelectionContainer {
+                        Text(
+                            report,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.verticalScroll(rememberScrollState()),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val cm = context
+                        .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("crash report", report))
+                    Toast.makeText(context, "Report copied to clipboard", Toast.LENGTH_SHORT)
+                        .show()
+                }) { Text("Copy") }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("Dismiss") }
+            },
         )
     }
 }

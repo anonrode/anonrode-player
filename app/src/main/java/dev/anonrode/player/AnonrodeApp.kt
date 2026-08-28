@@ -22,8 +22,34 @@ class AnonrodeApp : Application() {
     lateinit var engine: PlaybackEngine
         private set
 
+    /** True when [onCreate] init threw; MainActivity shows the crash
+     *  report dialog instead of touching the half-built DI container. */
+    var startupBroken = false
+        private set
+
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        // First thing in the process — before ContentProviders (WorkManager's
+        // androidx.startup init) run — so even the earliest crash is captured.
+        CrashReporter.install(this)
+    }
+
     override fun onCreate() {
         super.onCreate()
+        try {
+            initApp()
+        } catch (t: Throwable) {
+            // Don't die silently: record the failure and let MainActivity
+            // show the report dialog (startupBroken gates off the DI refs).
+            startupBroken = true
+            try {
+                CrashReporter.writeReport(this, "main", t)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun initApp() {
         AppLog.init(this)
         AppLog.d("APP", "app starting, sdk=" + android.os.Build.VERSION.SDK_INT)
         // Coil: register the video-frame decoder so library thumbnails
