@@ -184,7 +184,7 @@ class PlaybackEngine(
 
     /** Audio sink shared by every decoder profile: sync analyzer first,
      *  then the volume-boost gain stage. */
-    private fun buildAudioSink(
+    private fun buildSharedAudioSink(
         context: Context,
         enableFloatOutput: Boolean,
         enableAudioTrackPlaybackParams: Boolean,
@@ -207,7 +207,7 @@ class PlaybackEngine(
                         context: Context,
                         enableFloatOutput: Boolean,
                         enableAudioTrackPlaybackParams: Boolean,
-                    ): AudioSink = buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+                    ): AudioSink = buildSharedAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
                 }.apply {
                     setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
                 }
@@ -220,7 +220,7 @@ class PlaybackEngine(
                         context: Context,
                         enableFloatOutput: Boolean,
                         enableAudioTrackPlaybackParams: Boolean,
-                    ): AudioSink = buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+                    ): AudioSink = buildSharedAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
                 }.apply {
                     // The MODE_ constants are declared on DefaultRenderersFactory;
                     // Kotlin won't resolve them through the nextlib subclass.
