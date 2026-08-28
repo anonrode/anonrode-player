@@ -10,7 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ANONRODE_KEYSTORE_BASE64: ${{ secrets.ANONRODE_KEYSTORE_BASE64 }}
-      ANONRODE_KEYSTORE_PATH: ${{ runner.temp }}/anonrode.keystore.p12
       ANONRODE_KEY_ALIAS: ${{ secrets.ANONRODE_KEY_ALIAS }}
       ANONRODE_STORE_PASSWORD: ${{ secrets.ANONRODE_STORE_PASSWORD }}
       ANONRODE_KEY_PASSWORD: ${{ secrets.ANONRODE_KEY_PASSWORD }}
@@ -20,10 +19,11 @@ jobs:
       - name: Decode signing keystore
         run: |
           if [ -n "$ANONRODE_KEYSTORE_BASE64" ]; then
-            echo "$ANONRODE_KEYSTORE_BASE64" | base64 -d > "$ANONRODE_KEYSTORE_PATH"
+            echo "$ANONRODE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/anonrode.keystore.p12"
+            echo "ANONRODE_KEYSTORE_PATH=$RUNNER_TEMP/anonrode.keystore.p12" >> "$GITHUB_ENV"
             echo "Keystore decoded for shared signing."
           else
-            echo "No keystore secret — falling back to transient debug signing."
+            echo "No keystore secret - falling back to transient debug signing."
           fi
 
       - name: Set up JDK 17
