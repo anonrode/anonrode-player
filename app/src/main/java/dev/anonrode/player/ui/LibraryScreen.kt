@@ -3,6 +3,7 @@ package dev.anonrode.player.ui
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,12 +21,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -36,6 +43,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,33 +55,42 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import coil3.compose.AsyncImage
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
 import dev.anonrode.player.PlayerActivity
 import dev.anonrode.player.core.model.Series
 import dev.anonrode.player.core.model.Video
 import dev.anonrode.player.core.ui.theme.rememberSkinPalette
+import java.util.Locale
 
 // ── Anonrode brand palette (legacy) ─────────────────────────────────────
 // Kept for any non-themed callers; new code should use rememberSkinPalette()
@@ -86,6 +104,8 @@ private val BrandTextSecondary = Color(0xFFF0F2F8).copy(alpha = 0.45f)
 private val ProgressBrush = Brush.horizontalGradient(listOf(Color(0xFF6C63FF), Color(0xFF00D4AA)))
 
 private typealias InProgressItem = dev.anonrode.player.feature.library.LibraryViewModel.InProgress
+private typealias EpisodeItem = dev.anonrode.player.feature.library.LibraryViewModel.EpisodeItem
+private typealias FolderSortMode = dev.anonrode.player.feature.library.FolderSort
 
 /** Bottom navigation tabs. Matches the FOLDERS/HOME/Series/Settings
  *  mockup: Home (library root), Series (jumps to the folders list),
@@ -105,8 +125,9 @@ private val bottomTabs = listOf(
 private fun posterHue(title: String): Float = Math.floorMod(title.hashCode(), 360).toFloat()
 
 /**
- * Library home screen: continue-watching rail, series grid and full video
- * list, framed by a Material 3 top bar and bottom navigation.
+ * Library home screen: brand row + search, continue-watching rail, FOLDERS
+ * list with sorting, in-screen folder drill-down (episode list) and live
+ * library search, framed by a bottom navigation (Home / Series / Settings).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,35 +149,40 @@ fun LibraryScreen(
     val libSecondary = palette.textDim
 
     // ── Multi-select play queue ───────────────────────────────────────
-    // Long-press a video row to enter selection mode; taps then toggle
+    // Long-press an episode row to enter selection mode; taps then toggle
     // rows in/out of `selected`, whose order defines the playback queue.
     var selecting by remember { mutableStateOf(false) }
     val selected = remember { mutableStateListOf<String>() }
     val context = LocalContext.current
 
-    // Bottom-nav selection state: 0=Home (root), 1=Series (jump to
-    // folders), 2=Settings. The Series tab only makes sense when there
-    // are folders to show, so the tap on it scrolls the LazyColumn to
-    // the folders section header.
-    var navIndex by rememberSaveable { mutableIntStateOf(0) }
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // ── Navigation state ──────────────────────────────────────────────
+    // openFolderPath: which folder's episode list is on screen (drill-down).
+    // searchActive: the faux search field is expanded to a real text field.
+    // Both survive process death; a library rescan re-resolves the folder
+    // against the fresh snapshot, so drill-down/search survive rescans too.
+    var openFolderPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var searchActive by rememberSaveable { mutableStateOf(false) }
 
-    fun jumpToFolders() {
-        navIndex = 1
-        // The folders header sits at a known offset from the top: the
-        // optional selection bar (+1), the optional continue header
-        // (+1), the continue row (+1) — so 0..3 leading items before
-        // the folders-header. If there are no folders, we still scroll
-        // to the top so the user sees the same place the design's
-        // "Series" tab would.
-        val firstIndex = when {
-            selecting -> 1
-            state.inProgress.isEmpty() -> 0
-            else -> 2
-        }
-        val foldersHeader = firstIndex + 1
-        listState.animateScrollToItem(foldersHeader.coerceAtLeast(0))
+    // Bottom-nav selection state: 0=Home (root), 1=Series (jump to
+    // folders), 2=Settings.
+    var navIndex by rememberSaveable { mutableIntStateOf(0) }
+    val listState = rememberLazyListState()
+
+    // Deferred scroll requests: bottom-nav jumps must wait until the browse
+    // LazyColumn is (re)composed with `listState` attached — e.g. the Series
+    // tab clears the search query first, which swaps the list content in the
+    // same frame, so scrolling immediately would hit the outgoing list.
+    var scrollRequest by remember { mutableIntStateOf(0) }
+    var scrollIndex by remember { mutableIntStateOf(0) }
+    LaunchedEffect(scrollRequest) {
+        if (scrollRequest > 0) listState.animateScrollToItem(scrollIndex)
     }
+
+    val openFolder: Series? =
+        openFolderPath?.let { p -> state.series.firstOrNull { it.folderPath == p } }
+    val folderEpisodes: List<EpisodeItem> = openFolder?.let { f ->
+        state.episodesByFolder[f.folderPath] ?: f.videos.map { EpisodeItem(it, 0f, false, null) }
+    } ?: emptyList()
 
     fun exitSelectionMode() {
         selecting = false
@@ -167,37 +193,83 @@ fun LibraryScreen(
         if (!selected.remove(uri)) selected.add(uri)
     }
 
-    fun playSelectedQueue() {
-        val firstUri = selected.firstOrNull() ?: return
-        val firstTitle = state.videos.firstOrNull { it.uri == firstUri }?.title
-            ?: state.series.flatMap { it.videos }.firstOrNull { it.uri == firstUri }?.title
-            ?: firstUri
-        // Same launch as the single-video tap (MainActivity.play → plain
-        // Intent, no flags), plus the ordered queue extra. Keys match
-        // PlayerActivity.EXTRA_URI / EXTRA_TITLE / EXTRA_QUEUE_URIS.
+    fun enterSelection(uri: String) {
+        selecting = true
+        if (uri !in selected) selected.add(uri)
+    }
+
+    /** Launch the player with an explicit ordered queue (play-all,
+     *  play-from-here, multi-select). Keys match PlayerActivity's extras. */
+    fun playQueue(videos: List<Video>) {
+        val first = videos.firstOrNull() ?: return
         context.startActivity(
             Intent(context, PlayerActivity::class.java).apply {
-                putExtra("uri", firstUri)
-                putExtra("title", firstTitle)
-                putStringArrayListExtra("queue_uris", ArrayList(selected))
+                putExtra(PlayerActivity.EXTRA_URI, first.uri)
+                putExtra(PlayerActivity.EXTRA_TITLE, first.title)
+                putStringArrayListExtra(
+                    PlayerActivity.EXTRA_QUEUE_URIS,
+                    ArrayList(videos.map { it.uri }),
+                )
             }
         )
+    }
+
+    /** Queue this episode and every episode after it (display order). */
+    fun playFromHere(episodes: List<EpisodeItem>, video: Video) {
+        val idx = episodes.indexOfFirst { it.video.uri == video.uri }
+        val queue = (if (idx >= 0) episodes.subList(idx, episodes.size) else episodes)
+            .map { it.video }
+        playQueue(queue)
+    }
+
+    fun playAllFolder(folder: Series) {
+        playQueue(state.episodesByFolder[folder.folderPath]?.map { it.video } ?: folder.videos)
+    }
+
+    // The videos the current selection draws from, in screen order.
+    val selectionPool: List<Video> = when {
+        openFolder != null -> folderEpisodes.map { it.video }
+        state.query.isNotBlank() -> state.searchHits.map { it.video }
+        else -> state.videos
+    }
+
+    fun playSelectedQueue() {
+        val byUri = selectionPool.associateBy { it.uri }
+        val queue = selected.mapNotNull { byUri[it] }
+        if (queue.isNotEmpty()) playQueue(queue)
         exitSelectionMode()
     }
 
-    BackHandler(enabled = selecting) { exitSelectionMode() }
+    fun scrollTo(index: Int) {
+        scrollIndex = index
+        scrollRequest++
+    }
+
+    // The folders header sits right after the optional selection bar (+1)
+    // and the optional continue-watching header + row (+2).
+    fun jumpToFolders() {
+        val leading = (if (selecting) 1 else 0) + (if (state.inProgress.isEmpty()) 0 else 2)
+        scrollTo(leading)
+    }
+
+    BackHandler(enabled = selecting || searchActive || openFolder != null) {
+        when {
+            selecting -> exitSelectionMode()
+            searchActive -> {
+                searchActive = false
+                vm.setQuery("")
+            }
+            else -> openFolderPath = null
+        }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = libBg,
         topBar = {
             // Brand + search row, per the design HTML (.lib .brand /
-            // .lib .search). Replaces Material 3 TopAppBar because the
-            // design's "ANONRODE PLAYER" mark with an italic-accent
-            // suffix and a search field doesn't map to a TopAppBar
-            // shape. We still keep a Settings shortcut on the right
-            // because the design's screenshots don't show one but the
-            // app needs a way out of the library for now.
+            // .lib .search); replaced by the folder back-bar (.backbar)
+            // while a folder is open.
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -205,30 +277,52 @@ fun LibraryScreen(
                     .statusBarsPadding()
                     .padding(horizontal = 18.dp, vertical = 8.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "ANONRODE ",
-                        color = libOnSurface,
-                        fontWeight = FontWeight.Black,
-                        style = MaterialTheme.typography.titleLarge,
+                if (openFolder != null) {
+                    val total = fmtTotalDuration(folderEpisodes.sumOf { it.video.durationMs })
+                    val countLabel =
+                        if (openFolder.totalEpisodes == 1) "1 video"
+                        else "${openFolder.totalEpisodes} videos"
+                    FolderBackBar(
+                        name = openFolder.name,
+                        subtitle = if (total.isEmpty()) countLabel else "$countLabel · $total",
+                        onBack = { openFolderPath = null },
+                        onPlayAll = { playAllFolder(openFolder) },
                     )
-                    Text(
-                        "PLAYER",
-                        color = libAccent,
-                        fontWeight = FontWeight.Black,
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                        style = MaterialTheme.typography.titleLarge,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(
-                            Icons.Filled.Settings,
-                            contentDescription = "Settings",
-                            tint = libOnSurface,
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "ANONRODE ",
+                            color = libOnSurface,
+                            fontWeight = FontWeight.Black,
+                            style = MaterialTheme.typography.titleLarge,
                         )
+                        Text(
+                            "PLAYER",
+                            color = libAccent,
+                            fontWeight = FontWeight.Black,
+                            fontStyle = FontStyle.Italic,
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(
+                                Icons.Filled.Settings,
+                                contentDescription = "Settings",
+                                tint = libOnSurface,
+                            )
+                        }
                     }
+                    BrandSearchField(
+                        active = searchActive,
+                        query = state.query,
+                        libSurface = libSurface,
+                        libSecondary = libSecondary,
+                        libAccent = libAccent,
+                        libText = libOnSurface,
+                        onActivate = { searchActive = true },
+                        onQueryChange = { vm.setQuery(it) },
+                    )
                 }
-                BrandSearchField(libSurface = libSurface, libSecondary = libSecondary, libAccent = libAccent)
             }
         },
         bottomBar = {
@@ -237,10 +331,24 @@ fun LibraryScreen(
                 accent = libAccent,
                 selectedIndex = navIndex,
                 onSelect = { idx ->
-                    navIndex = idx
+                    exitSelectionMode()
+                    searchActive = false
                     when (idx) {
-                        0 -> listState.animateScrollToItem(0)
-                        1 -> jumpToFolders()
+                        0 -> {
+                            navIndex = 0
+                            openFolderPath = null
+                            vm.setQuery("")
+                            scrollTo(0)
+                        }
+                        1 -> {
+                            navIndex = 1
+                            openFolderPath = null
+                            vm.setQuery("")
+                            jumpToFolders()
+                        }
+                        // Settings is a separate screen; don't latch the
+                        // tab, so the library keeps its Home/Series highlight
+                        // when the user comes back.
                         2 -> onOpenSettings()
                     }
                 },
@@ -258,62 +366,160 @@ fun LibraryScreen(
             return@Scaffold
         }
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            state = listState,
-            contentPadding = PaddingValues(bottom = 16.dp),
-        ) {
-            // ── Selection action bar (multi-select mode) ─────────────
-            if (selecting) {
-                item(key = "selection-bar") {
-                    SelectionActionBar(
-                        count = selected.size,
-                        canPlay = selected.isNotEmpty(),
-                        onPlay = { playSelectedQueue() },
-                        onCancel = { exitSelectionMode() },
-                    )
+        if (openFolder != null) {
+            // ── Folder drill-down: episode list for one folder ────────
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
+                if (selecting) {
+                    item(key = "selection-bar") {
+                        SelectionActionBar(
+                            count = selected.size,
+                            canPlay = selected.isNotEmpty(),
+                            onPlay = { playSelectedQueue() },
+                            onCancel = { exitSelectionMode() },
+                        )
+                    }
                 }
-            }
-
-            // ── Continue watching ────────────────────────────────────
-            if (state.inProgress.isNotEmpty()) {
-                item(key = "header-continue") { SectionLabel("CONTINUE WATCHING") }
-                item(key = "continue-row") {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 18.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        items(state.inProgress, key = { it.video.uri }) { item ->
-                            ContinueCard(item, onClick = { onOpenVideo(item.video) })
-                        }
+                if (folderEpisodes.isEmpty()) {
+                    item(key = "folder-empty") {
+                        EmptyState(
+                            Icons.Filled.Folder,
+                            "No videos in this folder",
+                            "The library may still be scanning — come back in a moment.",
+                        )
+                    }
+                } else {
+                    items(folderEpisodes, key = { "ep-" + it.video.uri }) { ep ->
+                        EpisodeRow(
+                            video = ep.video,
+                            subtitle = episodeSubtitle(ep),
+                            fraction = ep.fraction,
+                            selecting = selecting,
+                            isSelected = ep.video.uri in selected,
+                            onClick = {
+                                if (selecting) toggleSelected(ep.video.uri) else onOpenVideo(ep.video)
+                            },
+                            onLongClick = {
+                                if (selecting) toggleSelected(ep.video.uri) else enterSelection(ep.video.uri)
+                            },
+                            onPlayFromHere = { playFromHere(folderEpisodes, ep.video) },
+                        )
                     }
                 }
             }
-
-            // ── Folders (was: SERIES poster grid) ───────────────────
-            if (state.series.isNotEmpty()) {
-                item(key = "folders-header") {
-                    FolderSectionHeader(count = state.series.size)
+        } else if (state.query.isNotBlank()) {
+            // ── Search results (live filter over the cached snapshot) ─
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
+                if (selecting) {
+                    item(key = "selection-bar") {
+                        SelectionActionBar(
+                            count = selected.size,
+                            canPlay = selected.isNotEmpty(),
+                            onPlay = { playSelectedQueue() },
+                            onCancel = { exitSelectionMode() },
+                        )
+                    }
                 }
-                items(state.series, key = { "folder-" + it.folderPath }) { s ->
-                    FolderRow(
-                        s,
-                        onClick = { s.videos.firstOrNull()?.let(onOpenVideo) },
-                    )
+                if (state.searchHits.isEmpty()) {
+                    item(key = "search-empty") {
+                        EmptyState(
+                            Icons.Filled.Search,
+                            "No matches",
+                            "Nothing in your library matches “${state.query.trim()}”.",
+                        )
+                    }
+                } else {
+                    item(key = "search-header") {
+                        SectionLabel("RESULTS · ${state.searchHits.size}")
+                    }
+                    items(state.searchHits, key = { "hit-" + it.video.uri }) { hit ->
+                        val folderEps = state.episodesByFolder[hit.video.parentPath]
+                        EpisodeRow(
+                            video = hit.video,
+                            subtitle = if (hit.finished) hit.folderName + " · Watched" else hit.folderName,
+                            fraction = hit.fraction,
+                            selecting = selecting,
+                            isSelected = hit.video.uri in selected,
+                            onClick = {
+                                if (selecting) toggleSelected(hit.video.uri) else onOpenVideo(hit.video)
+                            },
+                            onLongClick = {
+                                if (selecting) toggleSelected(hit.video.uri) else enterSelection(hit.video.uri)
+                            },
+                            onPlayFromHere = folderEps?.let { eps ->
+                                { playFromHere(eps, hit.video) }
+                            },
+                        )
+                    }
                 }
             }
+        } else {
+            // ── Browse root: continue watching + folders ──────────────
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                state = listState,
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
+                // Selection action bar (multi-select mode)
+                if (selecting) {
+                    item(key = "selection-bar") {
+                        SelectionActionBar(
+                            count = selected.size,
+                            canPlay = selected.isNotEmpty(),
+                            onPlay = { playSelectedQueue() },
+                            onCancel = { exitSelectionMode() },
+                        )
+                    }
+                }
 
-            // No-videos state: design's lib never shows an "ALL VIDEOS"
-            // // flat list — the FOLDERS list IS the library — so we keep
-            // // an empty hint only when both are empty.
-            if (state.videos.isEmpty() && state.series.isEmpty()) {
-                item(key = "videos-empty") {
-                    Text(
-                        "No videos found on this device.",
-                        color = libSecondary,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
-                    )
+                // Continue watching
+                if (state.inProgress.isNotEmpty()) {
+                    item(key = "header-continue") { SectionLabel("CONTINUE WATCHING") }
+                    item(key = "continue-row") {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 18.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            items(state.inProgress, key = { it.video.uri }) { item ->
+                                ContinueCard(item, onClick = { onOpenVideo(item.video) })
+                            }
+                        }
+                    }
+                }
+
+                // Folders
+                if (state.series.isNotEmpty()) {
+                    item(key = "folders-header") {
+                        FolderSectionHeader(
+                            count = state.series.size,
+                            sort = state.sort,
+                            onSortSelected = { vm.setSort(it) },
+                        )
+                    }
+                    items(state.series, key = { "folder-" + it.folderPath }) { s ->
+                        FolderRow(
+                            s,
+                            onClick = { openFolderPath = s.folderPath },
+                            onPlayAll = { playAllFolder(s) },
+                        )
+                    }
+                }
+
+                // Empty library — the FOLDERS list IS the library, so an
+                // empty hint only shows when there is nothing at all.
+                if (state.videos.isEmpty() && state.series.isEmpty()) {
+                    item(key = "videos-empty") {
+                        EmptyState(
+                            Icons.Filled.VideoLibrary,
+                            "No videos found",
+                            "Video files on this device will show up here.",
+                        )
+                    }
                 }
             }
         }
@@ -360,11 +566,16 @@ private fun SectionLabel(text: String) {
     )
 }
 
-/** FOLDERS section header with the "· N" count and a sort affordance
+/** FOLDERS section header with the "· N" count and a working sort menu
  *  on the right (`.sect` in the design). */
 @Composable
-private fun FolderSectionHeader(count: Int) {
+private fun FolderSectionHeader(
+    count: Int,
+    sort: FolderSortMode,
+    onSortSelected: (FolderSortMode) -> Unit,
+) {
     val palette = rememberSkinPalette()
+    var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -384,23 +595,48 @@ private fun FolderSectionHeader(count: Int) {
             color = palette.textDim,
         )
         Spacer(Modifier.weight(1f))
-        Text(
-            "sort ▾",
-            style = MaterialTheme.typography.labelSmall,
-            color = palette.accent,
-        )
+        Box {
+            Text(
+                "sort ▾",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.accent,
+                modifier = Modifier
+                    .clickable { menuOpen = true }
+                    .padding(vertical = 4.dp),
+            )
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                FolderSortMode.entries.forEach { mode ->
+                    DropdownMenuItem(
+                        text = { Text(mode.label) },
+                        leadingIcon = {
+                            if (mode == sort) {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = palette.accent,
+                                )
+                            }
+                        },
+                        onClick = {
+                            menuOpen = false
+                            onSortSelected(mode)
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 
 /**
  * One row in the FOLDERS list (design: `.coll`). 44×44 folder tile on
- * the left, name + "N videos" stacked, kebab dots on the right. The
- * row uses the same vertical padding as the design's `.coll` so the
- * list density matches.
+ * the left, name + "N videos" stacked, kebab dots on the right. Tap opens
+ * the folder's episode list; the kebab offers "Play all".
  */
 @Composable
-private fun FolderRow(s: Series, onClick: () -> Unit) {
+private fun FolderRow(s: Series, onClick: () -> Unit, onPlayAll: () -> Unit) {
     val palette = rememberSkinPalette()
+    var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -451,46 +687,294 @@ private fun FolderRow(s: Series, onClick: () -> Unit) {
                 color = palette.textDim,
             )
         }
-        // Kebab dots — design's `.coll .dots` (3 vertical dots in the
-        // mockup, but horizontal matches the Material 3 idiom; visually
-        // either reads as "more").
-        Text(
-            "⋮",
-            color = palette.iconDim,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = 6.dp),
-        )
+        // Kebab dots — design's `.coll .dots` — with folder actions.
+        Box {
+            Text(
+                "⋮",
+                color = palette.iconDim,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier
+                    .clickable { menuOpen = true }
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+            )
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Play all") },
+                    onClick = {
+                        menuOpen = false
+                        onPlayAll()
+                    },
+                )
+            }
+        }
     }
 }
 
-/** Faux search field — the design's `.lib .search` is a read-only row
- *  with a magnifier icon and placeholder text. */
+/** Folder drill-down top bar (design's `.backbar`): back arrow, folder
+ *  name + stats, and a Play-all button. */
+@Composable
+private fun FolderBackBar(
+    name: String,
+    subtitle: String,
+    onBack: () -> Unit,
+    onPlayAll: () -> Unit,
+) {
+    val palette = rememberSkinPalette()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = palette.text,
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle.isNotEmpty()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textDim,
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Button(
+            onClick = onPlayAll,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = palette.accent,
+                contentColor = palette.tabOn,
+            ),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text("Play all")
+        }
+    }
+}
+
+/**
+ * One episode row (design's `.eps-row`): 96×54 thumbnail with a duration
+ * badge and watched-progress bar, title + subtitle, kebab menu with
+ * Play / Play-from-here. Long-press enters multi-select.
+ */
+@Composable
+private fun EpisodeRow(
+    video: Video,
+    subtitle: String,
+    fraction: Float,
+    selecting: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onPlayFromHere: (() -> Unit)?,
+) {
+    val palette = rememberSkinPalette()
+    var menuOpen by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (isSelected) palette.accent.copy(alpha = 0.10f) else Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 96.dp, height = 54.dp)
+                .clip(RoundedCornerShape(8.dp)),
+        ) {
+            PosterArt(
+                video.title,
+                modifier = Modifier.fillMaxSize(),
+                cornerRadius = 0.dp,
+                videoUri = video.uri,
+            )
+            if (video.durationMs > 0) {
+                Text(
+                    fmtDuration(video.durationMs),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 5.dp, bottom = 6.dp)
+                        .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(3.dp))
+                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                )
+            }
+            if (fraction > 0f) {
+                GradientProgressBar(
+                    fraction,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth(),
+                )
+            }
+            if (selecting) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(4.dp)
+                        .size(18.dp)
+                        .background(
+                            if (isSelected) palette.accent else Color.Black.copy(alpha = 0.55f),
+                            CircleShape,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (isSelected) {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = null,
+                            tint = palette.tabOn,
+                            modifier = Modifier.size(12.dp),
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                video.title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle.isNotEmpty()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(
+                    Icons.Filled.MoreVert,
+                    contentDescription = "Episode options",
+                    tint = palette.iconDim,
+                )
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Play") },
+                    onClick = {
+                        menuOpen = false
+                        onClick()
+                    },
+                )
+                if (onPlayFromHere != null) {
+                    DropdownMenuItem(
+                        text = { Text("Play from here") },
+                        onClick = {
+                            menuOpen = false
+                            onPlayFromHere()
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Search field — the design's `.lib .search`. Inactive it is the faux
+ *  placeholder row; a tap expands it into a real text field that filters
+ *  the library live via [onQueryChange]. */
 @Composable
 private fun BrandSearchField(
+    active: Boolean,
+    query: String,
     libSurface: Color,
     libSecondary: Color,
     libAccent: Color,
+    libText: Color,
+    onActivate: () -> Unit,
+    onQueryChange: (String) -> Unit,
 ) {
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(active) {
+        if (active) focusRequester.requestFocus() else keyboard?.hide()
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 10.dp)
             .background(libSurface, RoundedCornerShape(12.dp))
+            .then(if (!active) Modifier.clickable(onClick = onActivate) else Modifier)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             Icons.Filled.Search,
             contentDescription = null,
-            tint = libSecondary,
+            tint = if (active) libAccent else libSecondary,
             modifier = Modifier.size(16.dp),
         )
         Spacer(Modifier.width(8.dp))
-        Text(
-            "Search episodes / series…",
-            style = MaterialTheme.typography.bodySmall,
-            color = libSecondary,
-        )
+        if (active) {
+            Box(modifier = Modifier.weight(1f)) {
+                if (query.isEmpty()) {
+                    Text(
+                        "Search episodes / series…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = libSecondary,
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = libText),
+                    cursorBrush = SolidColor(libAccent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                )
+            }
+            if (query.isNotEmpty()) {
+                IconButton(
+                    onClick = { onQueryChange("") },
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Clear search",
+                        tint = libSecondary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+        } else {
+            Text(
+                "Search episodes / series…",
+                style = MaterialTheme.typography.bodySmall,
+                color = libSecondary,
+            )
+        }
     }
 }
 
@@ -644,4 +1128,84 @@ private fun SelectionActionBar(
             Icon(Icons.Filled.Close, contentDescription = "Cancel selection", tint = palette.textDim)
         }
     }
+}
+
+/** Intentional-looking empty state: dim icon circle + title + hint. */
+@Composable
+private fun EmptyState(icon: ImageVector, title: String, hint: String) {
+    val palette = rememberSkinPalette()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .background(palette.surface, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = palette.iconDim, modifier = Modifier.size(24.dp))
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(
+            title,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = palette.text,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            hint,
+            style = MaterialTheme.typography.bodySmall,
+            color = palette.textDim,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+// ── Small local formatters ───────────────────────────────────────────────
+
+/** m:ss below one hour, h:mm:ss above. "" for unknown durations. */
+private fun fmtDuration(ms: Long): String {
+    if (ms <= 0) return ""
+    val totalSec = ms / 1000
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    return if (h > 0) "$h:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}"
+    else "$m:${s.toString().padStart(2, '0')}"
+}
+
+/** "1h 24m" / "43 min" style total for folder stats. */
+private fun fmtTotalDuration(ms: Long): String {
+    val totalMin = ms / 60000
+    val h = totalMin / 60
+    val m = totalMin % 60
+    return when {
+        h > 0 -> "${h}h ${m}m"
+        totalMin > 0 -> "${totalMin} min"
+        else -> ""
+    }
+}
+
+/** Human file size; "" when unknown. */
+private fun fmtSize(bytes: Long): String = when {
+    bytes <= 0 -> ""
+    bytes < 1024L * 1024 -> "${bytes / 1024} KB"
+    bytes < 1024L * 1024 * 1024 ->
+        String.format(Locale.US, "%.0f MB", bytes / (1024.0 * 1024.0))
+    else -> String.format(Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+}
+
+/** Episode row subtitle: resume position / watched flag + file size. */
+private fun episodeSubtitle(ep: EpisodeItem): String {
+    val status = when {
+        ep.finished -> "Watched"
+        ep.resumeLabel != null -> ep.resumeLabel
+        else -> null
+    }
+    val size = fmtSize(ep.video.sizeBytes).ifEmpty { null }
+    return listOfNotNull(status, size).joinToString(" · ")
 }

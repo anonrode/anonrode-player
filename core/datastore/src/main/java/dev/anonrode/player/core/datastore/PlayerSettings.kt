@@ -40,6 +40,13 @@ data class PlayerSettings(
     val dynamicColor: Boolean = true,
     val amoledBlack: Boolean = false,
     val fastSeekThresholdSec: Long = 120L,
+    /**
+     * Global default playback speed applied when a video has no per-video
+     * speed of its own (1.0 = normal). Kept in sync with the legacy
+     * "play_speed" SharedPreferences key by the settings screen so the
+     * player picks it up through its existing global-speed fallback.
+     */
+    val defaultPlaybackSpeed: Float = 1.0f,
 )
 
 enum class DecoderPriority { PREFER_DEVICE, PREFER_APP, DEVICE_ONLY }

@@ -107,12 +107,13 @@ data class SkinPalette(
     companion object {
         fun forSkin(skin: Skin): SkinPalette = when (skin) {
             // ── MX GREEN ───────────────────────────────────────────
+            // Colours mirror docs/ui-app-final.html body[data-pal="mx"].
             Skin.MX -> SkinPalette(
                 accent = Color(0xFF00E676),
                 accentDeep = Color(0xFF0B8A4A),
                 accentSoft = Color(0x1400E676),
                 accentLine = Color(0x7300E676),
-                background = Color(0xFF0D0D12),
+                background = Color(0xFF0F0F13),
                 surface = Color(0xFF18181E),
                 surfaceLine = Color(0xFF26262E),
                 rowBg = Color(0xFF17171D),

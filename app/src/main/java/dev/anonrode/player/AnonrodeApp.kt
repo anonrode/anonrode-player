@@ -27,6 +27,17 @@ class AnonrodeApp : Application() {
     var startupBroken = false
         private set
 
+    /**
+     * True once [initApp] completed fully. Checked from MainActivity before
+     * touching the DI refs — belt-and-braces next to [startupBroken] for a
+     * half-initialized container. (isInitialized is only legal on lateinit
+     * properties from inside their declaring class, hence this accessor.)
+     */
+    val isReady: Boolean
+        get() = ::scanner.isInitialized &&
+            ::stateStore.isInitialized &&
+            ::engine.isInitialized
+
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)
         // First thing in the process — before ContentProviders (WorkManager's
