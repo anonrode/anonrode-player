@@ -30,7 +30,7 @@ object CrashReporter {
 
     private const val DIR = "crash"
     private const val FILE = "last_crash.txt"
-    private const val PUBLIC_DIR = Environment.DIRECTORY_DOWNLOADS + "/AnonPlayer"
+    private val PUBLIC_DIR = Environment.DIRECTORY_DOWNLOADS + "/AnonPlayer"
 
     fun install(context: Context) {
         val appContext = context.applicationContext
