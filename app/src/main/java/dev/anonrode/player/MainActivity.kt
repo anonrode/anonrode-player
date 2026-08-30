@@ -11,6 +11,7 @@ import android.os.Environment
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,7 +41,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,10 +54,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import dev.anonrode.player.core.datastore.playerSettingsDataStore
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.ui.theme.AnonrodeTheme
+import dev.anonrode.player.core.ui.theme.rememberSkinPalette
+import dev.anonrode.player.ui.AppBottomNav
+import dev.anonrode.player.ui.AppTabRoutes
 import dev.anonrode.player.ui.LibraryScreen
+import dev.anonrode.player.ui.LibraryStartDestination
 import dev.anonrode.player.ui.SettingsScreen
 
 class MainActivity : ComponentActivity() {
@@ -66,8 +75,13 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
             AppLog.d("PERM", "permission result: " + grants)
             if (grants.values.any { it }) {
+                // Drive the in-composition gate instead of recreating the
+                // activity. Previously a full recreate() here meant the
+                // library + scanner cold-started (~1.5s blank screen on
+                // the first Grant tap on Infinix X669); flipping this
+                // state composes the LibraryScreen on the next frame.
                 permissionGranted = true
-                recreate() // granted → rebuild and rescan the library
+                hasVideoPermissionState = true
             }
         }
 
@@ -88,6 +102,16 @@ class MainActivity : ComponentActivity() {
      * activity-result flow), rebuild instead of stranding them on the gate.
      */
     private var permissionGranted = false
+
+    /**
+     * Compose-side mirror of the video permission gate. Initialised from
+     * [hasVideoPermission] in [onCreate] and flipped by the permission
+     * callback / [onResume] when access is granted externally. Reading this
+     * state — not the [ContextCompat] check — is what re-renders the
+     * LibraryScreen, so a permission grant avoids the full activity
+     * destroy/recreate cold path.
+     */
+    private var hasVideoPermissionState by mutableStateOf(false)
 
     /**
      * Sidecar subtitle files (.srt/.ass…) are non-media: on Android 11+
@@ -141,10 +165,11 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         refreshAllFilesGranted()
         // Permission granted while we were away (system settings path):
-        // rebuild so the library appears without another tap.
+        // flip the in-composition gate so the library appears without
+        // another tap — no full activity recreate, no cold rescan.
         if (!permissionGranted && hasVideoPermission()) {
             permissionGranted = true
-            recreate()
+            hasVideoPermissionState = true
         }
     }
 
@@ -169,7 +194,11 @@ class MainActivity : ComponentActivity() {
                     onDismiss = {
                         if (canRecover) {
                             CrashReporter.clearLastCrash(this@MainActivity)
-                            recreate()
+                            // canRecover implies DI is ready — flip the
+                            // in-composition gate instead of recreating
+                            // so the normal UI mounts without a cold
+                            // re-init pass.
+                            hasVideoPermissionState = hasVideoPermission()
                         } else {
                             CrashReporter.restartApp(this@MainActivity)
                         }
@@ -179,47 +208,31 @@ class MainActivity : ComponentActivity() {
             return
         }
         AppLog.d("MAIN", "activity create, hasVideoPermission=" + hasVideoPermission())
+        // Seed the compose-side permission gate from the actual check; the
+        // launcher / onResume path flips it again when the grant arrives
+        // after composition.
+        hasVideoPermissionState = hasVideoPermission()
 
         setContent {
             AnonrodeTheme {
-                // Saveable so a configuration change (rotation, dark-mode
-                // switch) doesn't drop the user out of whichever screen
-                // they were on.
-                var settingsOpen by rememberSaveable { mutableStateOf(false) }
-                if (settingsOpen) {
-                    SettingsScreen(onBack = { settingsOpen = false })
-                } else if (hasVideoPermission()) {
-                    // LibraryScreen draws its own top bar and bottom navigation.
-                    Box(Modifier.fillMaxSize()) {
-                        LibraryScreen(
-                            viewModelFactory = LibraryVmFactory(
-                                app.scanner,
-                                app.stateStore,
-                                app.playerSettingsDataStore,
-                            ),
-                            onOpenVideo = { video -> play(video.uri, video.title) },
-                            onOpenSettings = { settingsOpen = true },
-                        )
-                        if (!allFilesGranted) {
-                            Surface(
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .fillMaxWidth(),
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                            ) {
-                                Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                                    Text(
-                                        "Enable all-files access to find subtitle files " +
-                                            "(.srt/.ass) next to your videos.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                    TextButton(onClick = { openAllFilesSettings() }) {
-                                        Text("Open settings")
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // Gate on the compose-side mirror so a permission grant
+                // recomposes into the LibraryScreen without a full
+                // activity recreate.
+                if (hasVideoPermissionState) {
+                    // NavHost owns the three top-level destinations
+                    // (Home, Series, Settings); the bottom navigation
+                    // bar lives outside it but is bound to the same
+                    // NavController so the tab highlight stays in sync.
+                    MainNav(
+                        factory = LibraryVmFactory(
+                            app.scanner,
+                            app.stateStore,
+                            app.playerSettingsDataStore,
+                        ),
+                        onOpenVideo = { video -> play(video.uri, video.title) },
+                        allFilesGranted = allFilesGranted,
+                        onOpenAllFilesSettings = { openAllFilesSettings() },
+                    )
                 } else {
                     PermissionGate(
                         onRequest = { permissionLauncher.launch(requiredPermissions()) },
@@ -242,6 +255,134 @@ class MainActivity : ComponentActivity() {
             // Never white-screen on a launch failure — surface it instead.
             AppLog.e("MAIN", "failed to launch player", e)
             Toast.makeText(this, "Could not open video", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+/**
+ * Top-level navigation graph for MainActivity. Hosts a `NavHost` with
+ * three destinations (Home, Series, Settings) and a `bottomBar` that
+ * owns the tabs. The library destinations (Home, Series) share the
+ * same `LibraryViewModel` factory so the in-screen scroll/search/
+ * drill-down state survives the Home ↔ Series hop; only the initial
+ * scroll target differs (Series auto-scrolls to the FOLDERS section).
+ *
+ * System back behaviour:
+ *   * On any of the three top-level tabs → finishes the activity (default
+ *     behaviour, no back-stack entry to pop).
+ *   * The LibraryScreen owns its own BackHandler for drill-down / search
+ *     / selection — those don't surface as back-stack entries either.
+ *   * When the player returns from PlayerActivity, the NavController's
+ *     saved state is restored, so the user lands on the same tab + same
+ *     scroll position they left.
+ */
+@Composable
+private fun MainNav(
+    factory: androidx.lifecycle.ViewModelProvider.Factory,
+    onOpenVideo: (dev.anonrode.player.core.model.Video) -> Unit,
+    allFilesGranted: Boolean,
+    onOpenAllFilesSettings: () -> Unit,
+) {
+    val navController = rememberNavController()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
+    val palette = rememberSkinPalette()
+
+    // System back: pop the NavController stack when possible (e.g. from
+    // Settings → Home, where Settings is above Home in the back-stack
+    // because we navigated to it without clearing Home). When the user
+    // is already on a start destination, let the OS finish the
+    // activity as usual. The LibraryScreen has its own BackHandler
+    // for in-screen state (drill-down, search, selection); that handler
+    // is registered first and consumes the back gesture before this one
+    // sees it — see `BackHandler(enabled = selecting || searchActive ||
+    // openFolder != null)` in LibraryScreen.
+    val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    BackHandler(enabled = true) {
+        if (!navController.popBackStack()) {
+            activity?.finishAfterTransition()
+        }
+    }
+
+    androidx.compose.material3.Scaffold(
+        bottomBar = {
+            AppBottomNav(
+                palette = palette,
+                currentRoute = currentRoute,
+                onSelect = { idx ->
+                    val target = AppTabRoutes[idx]
+                    if (target != currentRoute) {
+                        navController.navigate(target) {
+                            // Standard single-top + state-preserving
+                            // tab navigation pattern.
+                            popUpTo(navController.graph.startDestinationId) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            NavHost(
+                navController = navController,
+                startDestination = AppTabRoutes[0], // "home"
+            ) {
+                composable(AppTabRoutes[0]) { // home
+                    LibraryScreen(
+                        viewModelFactory = factory,
+                        onOpenVideo = onOpenVideo,
+                        startDestination = LibraryStartDestination.Home,
+                    )
+                }
+                composable(AppTabRoutes[1]) { // series
+                    LibraryScreen(
+                        viewModelFactory = factory,
+                        onOpenVideo = onOpenVideo,
+                        startDestination = LibraryStartDestination.Series,
+                    )
+                }
+                composable(AppTabRoutes[2]) { // settings
+                    SettingsScreen(onBack = {
+                        // Settings tab: send the user back to Home (the
+                        // primary destination). Keeps back behaviour
+                        // symmetric with the original
+                        // "settingsOpen=false → Home" flow.
+                        navController.navigate(AppTabRoutes[0]) {
+                            popUpTo(navController.graph.startDestinationId) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    })
+                }
+            }
+            // Soft "enable all-files" banner overlays the active
+            // destination (does not own a NavHost slot — it's a
+            // toast-style reminder, not a screen).
+            if (!allFilesGranted) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                        Text(
+                            "Enable all-files access to find subtitle files " +
+                                "(.srt/.ass) next to your videos.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        TextButton(onClick = onOpenAllFilesSettings) {
+                            Text("Open settings")
+                        }
+                    }
+                }
+            }
         }
     }
 }

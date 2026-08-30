@@ -32,4 +32,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.onnxruntime.android)
     implementation(libs.androidx.work.runtime.ktx)
+
+    // v0.6.2 sub-sync UX pass: SubtitleMatcher unit tests. JUnit4 is
+    // pulled inline (not declared in libs.versions.toml) so this module
+    // does not depend on Agent 3's libs catalog update.
+    testImplementation("junit:junit:${libs.versions.junit4.get()}")
 }

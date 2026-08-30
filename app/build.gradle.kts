@@ -111,6 +111,8 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.iconsExtended)
     implementation(libs.androidx.mediarouter)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.profileinstaller)
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
     implementation(libs.kotlinx.coroutines.android)

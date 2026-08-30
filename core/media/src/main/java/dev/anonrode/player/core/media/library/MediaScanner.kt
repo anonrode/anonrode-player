@@ -13,13 +13,24 @@ import dev.anonrode.player.core.model.EpisodePattern
 import dev.anonrode.player.core.model.NaturalOrder
 import dev.anonrode.player.core.model.Series
 import dev.anonrode.player.core.model.Video
+import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 /**
  * Video library source of truth: MediaStore + a debounced ContentObserver.
@@ -36,6 +47,15 @@ import kotlinx.coroutines.Dispatchers
  * memory, not the provider. The playback open path goes further: it reads
  * [cachedSnapshot] (never scans) and falls back to [scan] only when no
  * snapshot exists yet.
+ *
+ * Cold start (v0.6.2 incremental pass): the scanner also persists its last
+ * known-good snapshot to disk as JSON in `filesDir/library_snapshot.json`.
+ * That file is loaded synchronously in [loadFromDisk] (called from
+ * `AnonrodeApp.initApp` BEFORE setContent) and seeds the in-memory cache.
+ * Result: the first emission of [observeLibrary] is the disk snapshot — the
+ * library appears within one frame even when MediaStore is still being
+ * scanned. The MediaStore scan then runs in the background, emits a delta,
+ * and the LazyColumn updates incrementally.
  *
  * Robustness: hidden directories (any path segment starting with '.') and
  * pending files are skipped, rows are deduplicated by path, display titles
@@ -101,6 +121,29 @@ class MediaScanner(private val context: Context) {
         }
     }
 
+    /**
+     * Application-scoped IO scope for fire-and-forget persistence. The
+     * scanner lives for the process, so this scope lives for the process.
+     * Writes are scheduled here; reads stay synchronous on the calling
+     * thread.
+     */
+    private val persistScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Mutex around the disk write — if two scans finish in quick succession
+     * we still want a single serialised file write, not a torn JSON. Reads
+     * are NOT behind this mutex: cold start wants the file NOW.
+     */
+    private val writeMutex = Mutex()
+
+    /**
+     * One-shot guard for the on-disk first read. After the constructor runs
+     * [loadFromDisk] (called from `AnonrodeApp.initApp`) the volatile cache
+     * is already populated. If the constructor is invoked again (e.g. tests
+     * that re-create the Application) the second call is a no-op.
+     */
+    private val diskLoadAttempted = AtomicBoolean(false)
+
     init {
         try {
             resolver.registerContentObserver(
@@ -113,24 +156,103 @@ class MediaScanner(private val context: Context) {
         }
     }
 
-    /** Reactive library: re-queries on every MediaStore change (debounced). */
-    fun observeLibrary(): Flow<LibrarySnapshot> = callbackFlow {
-        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) {
-                trySend(Unit)
-            }
-        }
-        resolver.registerContentObserver(
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, observer
-        )
-        trySend(Unit)
-        awaitClose { resolver.unregisterContentObserver(observer) }
+    /**
+     * Load the on-disk library snapshot synchronously and seed the volatile
+     * cache. Called from `AnonrodeApp.initApp` BEFORE setContent runs so the
+     * first [observeLibrary] emission (the disk snapshot) lands within the
+     * first frame of MainActivity. Safe to call multiple times: only the
+     * first call reads the file; subsequent calls are no-ops.
+     *
+     * The file is read with `ignoreUnknownKeys = true` for forward
+     * compatibility — old shapes still load cleanly after the DTO gains
+     * fields.
+     */
+    fun loadFromDisk() {
+        if (!diskLoadAttempted.compareAndSet(false, true)) return
+        val file = context.filesDir.resolve(SNAPSHOT_FILE_NAME)
+        val snap = readSnapshotFile(file) ?: return
+        // Seed the cache WITHOUT going through scan() so we don't touch
+        // dirty (still true) or cacheAt (left at 0 so the TTL backstop
+        // fires the first MediaStore scan quickly).
+        cache = snap
+        AppLog.d("SCAN", "loaded disk snapshot: ${snap.videos.size} videos, ${snap.series.size} series")
     }
-        .debounce(250)
-        .map { scan(force = true) }
-        // flowOn only affects upstream operators, so it must come AFTER map
-        // for scan() to run off the collector's (main) thread.
-        .flowOn(Dispatchers.IO)
+
+    /**
+     * Reactive library: emits the disk-cached snapshot immediately (if any)
+     * on subscribe, then re-queries on every MediaStore change (debounced).
+     * Each emission after the first is a [LibraryDelta] when a previous
+     * snapshot exists so consumers can update incrementally.
+     *
+     * The first emission is the disk snapshot, which may be hours stale.
+     * The MediaStore scan runs in the background and emits the
+     * authoritative result shortly after; until then, the [ScanSource] tag
+     * is DISK so the UI can show a subtle "refreshing…" affordance if it
+     * wants to. By default the UI treats both sources the same.
+     */
+    fun observeLibrary(): Flow<LibraryEvent> {
+        // Stream 1: MediaStore-driven refreshes. Debounced so a burst of
+        // change events (the indexer committing a new file produces several
+        // in a few ms) collapses to one scan.
+        val mediaStoreChanges = callbackFlow {
+            val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+                override fun onChange(selfChange: Boolean) {
+                    trySend(Unit)
+                }
+            }
+            resolver.registerContentObserver(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, observer
+            )
+            trySend(Unit)
+            awaitClose { resolver.unregisterContentObserver(observer) }
+        }
+            .debounce(250)
+            .map { computeNextEvent() }
+
+        // Stream 2: cold-start disk snapshot, sent exactly once per
+        // collector. We bypass debounce so the first frame after
+        // composition has data, even before MediaStore has been touched.
+        val diskSnapshot = callbackFlow {
+            val initial = cache
+            if (initial != null) {
+                trySend(LibraryEvent.SnapshotLoaded(initial, ScanSource.DISK))
+            }
+            close()
+        }
+
+        return kotlinx.coroutines.flow.merge(diskSnapshot, mediaStoreChanges)
+            // Only emit when the new state actually changes. We compare by
+            // URI set + a content hash so an unchanged MediaStore rescan
+            // does NOT invalidate the LazyColumn.
+            .distinctUntilChanged { a, b ->
+                a.snapshot.identityKey() == b.snapshot.identityKey()
+            }
+            .flowOn(Dispatchers.IO)
+    }
+
+    /**
+     * Build the next [LibraryEvent]. Computes the diff against the current
+     * cache and emits a [LibraryDelta] when both old and new snapshots
+     * exist; the very first MediaStore pass still emits a full SnapshotLoaded
+     * so downstream code can use a single code path.
+     */
+    private fun computeNextEvent(): LibraryEvent {
+        val previous = cache
+        val fresh = scanInternal(force = true)
+        if (previous == null || previous.videos.isEmpty()) {
+            return LibraryEvent.SnapshotLoaded(fresh, ScanSource.MEDIASTORE)
+        }
+        val delta = LibraryDelta.diff(previous, fresh)
+        // A delta with both no additions AND no removals is still a
+        // SnapshotLoaded for the "modified only" case (LazyColumn rerenders
+        // the few changed rows by key). This keeps the consumer logic flat:
+        // one code path, one update.
+        return if (delta.added.isEmpty() && delta.removed.isEmpty()) {
+            LibraryEvent.SnapshotLoaded(fresh, ScanSource.MEDIASTORE)
+        } else {
+            LibraryEvent.SnapshotDelta(delta, fresh)
+        }
+    }
 
     /**
      * Library snapshot, served from the in-memory cache whenever it is still
@@ -140,6 +262,15 @@ class MediaScanner(private val context: Context) {
      * one fresh result.
      */
     fun scan(force: Boolean = false): LibrarySnapshot {
+        return scanInternal(force)
+    }
+
+    /**
+     * Internal: the real scan. Returns the in-memory cache when it is still
+     * valid (not dirty, within TTL), otherwise rebuilds from MediaStore and
+     * persists the result to disk in the background.
+     */
+    private fun scanInternal(force: Boolean): LibrarySnapshot {
         if (!force) {
             val c = cache
             if (c != null && !dirty && System.currentTimeMillis() - cacheAt < CACHE_TTL_MS) return c
@@ -162,6 +293,10 @@ class MediaScanner(private val context: Context) {
             val fresh = LibrarySnapshot(videos, groupIntoSeries(videos))
             cache = fresh
             cacheAt = System.currentTimeMillis()
+            // Persist the fresh result on the IO scope. Fire-and-forget: a
+            // write failure is non-fatal (we still have the in-memory cache
+            // for this process) but is logged.
+            schedulePersist(fresh)
             return fresh
         }
     }
@@ -173,6 +308,9 @@ class MediaScanner(private val context: Context) {
      * open hot path) prefer this over [scan] to skip the MediaStore
      * round-trip entirely; [scan] remains the fallback for the no-snapshot
      * case.
+     *
+     * After [loadFromDisk] the cache is populated without a scan, so this
+     * returns the on-disk library on the very first call.
      */
     fun cachedSnapshot(): LibrarySnapshot? = cache
 
@@ -372,6 +510,59 @@ class MediaScanner(private val context: Context) {
         return if (idx > 0) path.substring(0, idx) else path
     }
 
+    /**
+     * Persist the fresh snapshot to disk on the IO scope. The write is
+     * serialised behind [writeMutex] so two scans finishing in quick
+     * succession still produce one consistent file. Failure is logged and
+     * swallowed: the in-memory cache is the source of truth for the running
+     * process; disk is only a cold-start accelerator for the next run.
+     */
+    private fun schedulePersist(snap: LibrarySnapshot) {
+        val file = context.filesDir.resolve(SNAPSHOT_FILE_NAME)
+        persistScope.launch {
+            writeMutex.withLock {
+                try {
+                    val dto = PersistedLibrarySnapshot.from(snap)
+                    val json = JSON.encodeToString(PersistedLibrarySnapshot.serializer(), dto)
+                    // Write atomically: write to a temp file, then rename.
+                    // A torn read on the next cold start would decode to an
+                    // empty list (we treat decode failure as "no cache").
+                    val tmp = File(file.parentFile, SNAPSHOT_FILE_NAME + ".tmp")
+                    tmp.writeText(json)
+                    if (!tmp.renameTo(file)) {
+                        // Fallback for filesystems that don't allow rename
+                        // over an existing target.
+                        file.writeText(json)
+                        tmp.delete()
+                    }
+                } catch (t: Throwable) {
+                    AppLog.e("SCAN", "failed to persist snapshot", t)
+                }
+            }
+        }
+    }
+
+    /**
+     * Read the on-disk snapshot synchronously. Returns null when the file
+     * is missing, unreadable, or decodes to a malformed value. Corrupt
+     * files are deleted so the next persist starts clean.
+     */
+    private fun readSnapshotFile(file: File): LibrarySnapshot? {
+        if (!file.exists() || file.length() == 0L) return null
+        return try {
+            val text = file.readText()
+            if (text.isBlank()) return null
+            val dto = JSON.decodeFromString(PersistedLibrarySnapshot.serializer(), text)
+            dto.toSnapshot()
+        } catch (t: Throwable) {
+            AppLog.e("SCAN", "discarding corrupt disk snapshot", t)
+            // Best-effort delete so we don't keep failing on every cold
+            // start. The next MediaStore scan will write a fresh file.
+            try { file.delete() } catch (_: Throwable) {}
+            null
+        }
+    }
+
     companion object {
         /**
          * Backstop refresh age for the cached snapshot. Observer events do
@@ -379,10 +570,144 @@ class MediaScanner(private val context: Context) {
          * the first scan ran before the video permission was granted).
          */
         private const val CACHE_TTL_MS = 30_000L
+
+        /**
+         * On-disk snapshot file. ~100KB for 1k videos (just metadata —
+         * no thumbnails). Replaced atomically: see [schedulePersist].
+         */
+        const val SNAPSHOT_FILE_NAME = "library_snapshot.json"
+
+        private val JSON = Json {
+            ignoreUnknownKeys = true
+            // Reasonable defaults for a metadata-only file with no booleans
+            // or polymorphic types: pretty-print is fine for ~100KB.
+        }
     }
 }
 
+/**
+ * The in-memory snapshot, served to UI and the open-video hot path.
+ * Plain data class; no serialisation concerns leak into UI code.
+ */
 data class LibrarySnapshot(
     val videos: List<Video>,
     val series: List<Series>,
-)
+) {
+    /**
+     * Cheap identity key for `distinctUntilChanged` on the flow. Two
+     * snapshots with the same URI set size AND the same (URI, size, mtime)
+     * pairs produce the same key — that's exactly when the LazyColumn
+     * doesn't need to rerun. Content hash collisions are not catastrophic
+     * (worst case: a wasted recomposition), so a non-cryptographic hash is
+     * appropriate here.
+     */
+    fun identityKey(): Long {
+        var h = 1125899906842597L // large prime
+        h = 31 * h + videos.size
+        for (v in videos) {
+            h = 31 * h + v.uri.hashCode()
+            h = 31 * h + v.sizeBytes.hashCode()
+            h = 31 * h + v.lastModifiedMs.hashCode()
+        }
+        return h
+    }
+}
+
+/**
+ * On-disk representation. Kept structurally identical to [LibrarySnapshot]
+ * today, but a separate type so we can evolve the file format (add a
+ * persisted scan timestamp, library version, etc.) without touching the
+ * in-memory model. The DTO is the only thing that knows about the file
+ * format; [LibrarySnapshot] is the only thing the UI knows about.
+ */
+@Serializable
+private data class PersistedLibrarySnapshot(
+    val version: Int = CURRENT_VERSION,
+    val videos: List<Video>,
+    val series: List<Series>,
+) {
+    fun toSnapshot(): LibrarySnapshot = LibrarySnapshot(videos, series)
+
+    companion object {
+        const val CURRENT_VERSION = 1
+        fun from(snap: LibrarySnapshot) = PersistedLibrarySnapshot(
+            version = CURRENT_VERSION,
+            videos = snap.videos,
+            series = snap.series,
+        )
+    }
+}
+
+/**
+ * Where a [LibraryEvent] came from. Surfaced in the API so the UI can
+ * show a "refreshing…" affordance for MediaStore events when the visible
+ * data is the (possibly stale) disk snapshot.
+ */
+enum class ScanSource { DISK, MEDIASTORE }
+
+/**
+ * A change in the library. The view model renders the same either way —
+ * `SnapshotLoaded` is the simpler case (the first event on cold start or
+ * the first MediaStore pass when there was no disk cache), `SnapshotDelta`
+ * carries the per-URI additions / removals / modifications so the
+ * LazyColumn can patch itself in place.
+ */
+sealed interface LibraryEvent {
+    val snapshot: LibrarySnapshot
+
+    /** Whole new snapshot — use it directly. */
+    data class SnapshotLoaded(
+        override val snapshot: LibrarySnapshot,
+        val source: ScanSource,
+    ) : LibraryEvent
+
+    /** Partial update against a previous snapshot. [snapshot] is the new
+     *  authoritative state; the lists are the per-URI delta against the
+     *  previous emission. */
+    data class SnapshotDelta(
+        val delta: LibraryDelta,
+        override val snapshot: LibrarySnapshot,
+    ) : LibraryEvent
+}
+
+/**
+ * Set-difference of two library snapshots, keyed by [Video.uri]. Cheap to
+ * compute (HashSet union/intersect); consumed by the LazyColumn keying
+ * logic so a 1k-addition update does not re-render the existing 19k rows.
+ */
+data class LibraryDelta(
+    /** Brand-new videos (URI in [new] but not [old]). */
+    val added: List<Video>,
+    /** Removed videos (URI in [old] but not [new]). */
+    val removed: List<Video>,
+    /**
+     * Videos whose (size, mtime) changed but URI is stable. The new instance
+     * is the authoritative one — Compose's key-based LazyColumn re-renders
+     * just these rows.
+     */
+    val modified: List<Video>,
+) {
+    companion object {
+        fun diff(old: LibrarySnapshot, new: LibrarySnapshot): LibraryDelta {
+            if (old.videos.isEmpty()) {
+                return LibraryDelta(added = new.videos, removed = emptyList(), modified = emptyList())
+            }
+            val oldByUri = old.videos.associateBy { it.uri }
+            val newByUri = new.videos.associateBy { it.uri }
+            val added = ArrayList<Video>()
+            val modified = ArrayList<Video>()
+            for ((uri, v) in newByUri) {
+                val o = oldByUri[uri]
+                if (o == null) added.add(v)
+                else if (o.sizeBytes != v.sizeBytes || o.lastModifiedMs != v.lastModifiedMs) {
+                    modified.add(v)
+                }
+            }
+            val removed = ArrayList<Video>()
+            for ((uri, v) in oldByUri) {
+                if (uri !in newByUri) removed.add(v)
+            }
+            return LibraryDelta(added, removed, modified)
+        }
+    }
+}

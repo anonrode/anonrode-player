@@ -54,6 +54,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -158,31 +159,31 @@ fun SettingsScreen(
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 32.dp),
+            contentPadding = PaddingValues(bottom = Dimens.gapXxl),
         ) {
             // ── header ───────────────────────────────────────────
             item("header") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 8.dp, end = 18.dp, top = 14.dp, bottom = 6.dp),
+                        .padding(start = Dimens.gapSm, end = Dimens.gapLg, top = Dimens.gapMd, bottom = Dimens.gapSm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     SettingsBackButton(palette = palette, onClick = onBack)
-                    Spacer(Modifier.width(4.dp))
+                    Spacer(Modifier.width(Dimens.gapXs))
                     Text(
                         "Settings",
                         color = palette.text,
-                        fontSize = 20.sp,
+                        style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
                             .weight(1f)
-                            .padding(start = 6.dp),
+                            .padding(start = Dimens.gapSm),
                     )
                     Text(
                         activeSkin.displayName,
                         color = palette.accent,
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
@@ -362,7 +363,7 @@ fun SettingsScreen(
                     trailing = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             ValueText(palette = palette, text = subtitleColorLabel(settings.subtitleColor))
-                            Spacer(Modifier.width(6.dp))
+                            Spacer(Modifier.width(Dimens.gapSm))
                             Box(
                                 modifier = Modifier
                                     .size(10.dp)
@@ -593,7 +594,7 @@ fun SettingsScreen(
                     trailing = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             ValueText(palette = palette, text = activeSkin.displayName)
-                            Spacer(Modifier.width(6.dp))
+                            Spacer(Modifier.width(Dimens.gapSm))
                             Box(
                                 modifier = Modifier
                                     .size(10.dp)
@@ -678,30 +679,30 @@ fun SettingsScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 18.dp)
-                        .padding(top = 26.dp, bottom = 8.dp),
+                        .padding(horizontal = Dimens.gapLg)
+                        .padding(top = Dimens.gapXl, bottom = Dimens.gapSm),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
                         "ANONRODE PLAYER",
                         color = palette.textDim,
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                     )
                     if (version.isNotEmpty()) {
                         Text(
                             version,
                             color = palette.textDim,
-                            fontSize = 10.sp,
-                            modifier = Modifier.padding(top = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(top = Dimens.gapXs),
                         )
                     }
                     Text(
                         "Local-only playback · nothing leaves your device",
                         color = palette.textDim,
-                        fontSize = 10.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(top = 2.dp),
+                        modifier = Modifier.padding(top = Dimens.gapXs),
                     )
                 }
             }
@@ -824,7 +825,7 @@ fun SettingsScreen(
                             .background(subtitleColorValue(value))
                             .border(1.dp, palette.rowLine, CircleShape),
                     )
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(Dimens.gapMd))
                 },
                 onSelect = { value ->
                     persist { it.copy(subtitleColor = value) }
@@ -972,13 +973,13 @@ private fun <T> RadioDialog(
             shape = RoundedCornerShape(16.dp),
             color = palette.surface,
         ) {
-            Column(modifier = Modifier.padding(vertical = 14.dp)) {
+            Column(modifier = Modifier.padding(vertical = Dimens.gapLg)) {
                 Text(
                     title,
                     color = palette.text,
-                    fontSize = 15.sp,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = Dimens.gapXl, vertical = Dimens.gapSm),
                 )
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     options.forEach { option ->
@@ -987,22 +988,22 @@ private fun <T> RadioDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onSelect(option.value) }
-                                .padding(horizontal = 20.dp, vertical = 11.dp),
+                                .padding(horizontal = Dimens.gapXl, vertical = Dimens.gapMd),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     option.label,
                                     color = if (selected) palette.accent else palette.text,
-                                    fontSize = 13.5.sp,
+                                    style = MaterialTheme.typography.bodyLarge,
                                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                                 )
                                 if (option.detail != null) {
                                     Text(
                                         option.detail,
                                         color = palette.textDim,
-                                        fontSize = 11.sp,
-                                        modifier = Modifier.padding(top = 1.dp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(top = Dimens.gapXs),
                                     )
                                 }
                             }
@@ -1034,13 +1035,13 @@ private fun ThemeDialog(
             shape = RoundedCornerShape(16.dp),
             color = palette.surface,
         ) {
-            Column(modifier = Modifier.padding(vertical = 14.dp)) {
+            Column(modifier = Modifier.padding(vertical = Dimens.gapLg)) {
                 Text(
                     "Theme",
                     color = palette.text,
-                    fontSize = 15.sp,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = Dimens.gapXl, vertical = Dimens.gapSm),
                 )
                 Skin.entries.forEach { skin ->
                     val skinPalette = SkinPalette.forSkin(skin)
@@ -1049,7 +1050,7 @@ private fun ThemeDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onSelect(skin) }
-                            .padding(horizontal = 20.dp, vertical = 11.dp),
+                            .padding(horizontal = Dimens.gapXl, vertical = Dimens.gapMd),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(
@@ -1067,11 +1068,11 @@ private fun ThemeDialog(
                                     .background(skinPalette.accent),
                             )
                         }
-                        Spacer(Modifier.width(12.dp))
+                        Spacer(Modifier.width(Dimens.gapMd))
                         Text(
                             skin.displayName,
                             color = if (selected) palette.accent else palette.text,
-                            fontSize = 13.5.sp,
+                            style = MaterialTheme.typography.bodyLarge,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             modifier = Modifier.weight(1f),
                         )
@@ -1081,7 +1082,7 @@ private fun ThemeDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 20.dp, end = 12.dp, top = 8.dp),
+                        .padding(start = Dimens.gapXl, end = Dimens.gapMd, top = Dimens.gapSm),
                     horizontalArrangement = Arrangement.End,
                 ) {
                     TextButton(onClick = onDismiss) {
@@ -1109,23 +1110,23 @@ private fun ConfirmDialog(
             shape = RoundedCornerShape(16.dp),
             color = palette.surface,
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
+            Column(modifier = Modifier.padding(Dimens.gapXl)) {
                 Text(
                     title,
                     color = palette.text,
-                    fontSize = 15.sp,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Dimens.gapSm))
                 Text(
                     message,
                     color = palette.textDim,
-                    fontSize = 12.sp,
+                    style = MaterialTheme.typography.bodyMedium,
                 )
-                Spacer(Modifier.height(18.dp))
+                Spacer(Modifier.height(Dimens.gapLg))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    horizontalArrangement = Arrangement.spacedBy(Dimens.gapSm, Alignment.End),
                 ) {
                     TextButton(onClick = onDismiss) {
                         Text("Cancel", color = palette.textDim)
@@ -1150,10 +1151,13 @@ private fun SectionHeader(palette: SkinPalette, title: String) {
     Text(
         title.uppercase(),
         color = palette.accent,
-        fontSize = 10.5.sp,
+        // labelSmall is the closest standard role for the tight uppercase
+        // section eyebrow; the extra letter spacing reads as a chapter
+        // heading, not as body text.
+        style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.Bold,
         letterSpacing = 1.3.sp,
-        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 7.dp),
+        modifier = Modifier.padding(start = Dimens.gapXl, end = Dimens.gapXl, top = Dimens.gapLg, bottom = Dimens.gapSm),
     )
 }
 
@@ -1169,7 +1173,7 @@ private fun SettingsRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 4.dp)
+            .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapXs)
     ) {
         Row(
             modifier = Modifier
@@ -1178,7 +1182,7 @@ private fun SettingsRow(
                 .background(palette.rowBg)
                 .border(1.dp, palette.rowLine, RoundedCornerShape(12.dp))
                 .clickable(onClick = onClick)
-                .padding(horizontal = 14.dp, vertical = 13.dp),
+                .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapMd),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
@@ -1191,12 +1195,12 @@ private fun SettingsRow(
                     modifier = Modifier.size(20.dp),
                 )
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(Dimens.gapMd))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     title,
                     color = palette.text,
-                    fontSize = 14.sp,
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1205,13 +1209,13 @@ private fun SettingsRow(
                     Text(
                         subtitle,
                         color = palette.textDim,
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.bodySmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(Dimens.gapMd))
             trailing()
         }
     }

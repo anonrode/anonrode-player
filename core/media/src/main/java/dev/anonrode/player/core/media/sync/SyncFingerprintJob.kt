@@ -51,17 +51,21 @@ class SyncFingerprintJob(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         // Re-check the live setting on EVERY attempt: a job enqueued while
-        // auto-sync was on keeps retrying across process restarts, and the
-        // user may have switched it off since. Without this check the
-        // full-file decode runs forever against the user's explicit choice.
-        // Returning success() terminates the retry chain for good.
+        // the sub-sync toggle was on keeps retrying across process
+        // restarts, and the user may have switched it off since. Without
+        // this check the full-file decode runs forever against the user's
+        // explicit choice. Returning success() terminates the retry
+        // chain for good. v0.6.2: the gate is the user-facing toggle
+        // [PlayerSettings.subtitleAutoSyncEnabled] (default OFF), NOT the
+        // legacy [PlayerSettings.autoSyncEnabled] — the legacy gate now
+        // only governs the MKV-embedded fast path (see PlayerActivity).
         val syncEnabled = try {
-            applicationContext.playerSettingsDataStore.data.first().autoSyncEnabled
+            applicationContext.playerSettingsDataStore.data.first().subtitleAutoSyncEnabled
         } catch (e: Exception) {
-            true
+            false
         }
         if (!syncEnabled) {
-            AppLog.d("SYNC_JOB", "auto-sync disabled in settings — dropping fingerprint job")
+            AppLog.d("SYNC_JOB", "sub-sync toggle off — dropping fingerprint job")
             return@withContext Result.success()
         }
 

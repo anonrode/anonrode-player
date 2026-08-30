@@ -16,6 +16,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import dev.anonrode.player.core.media.audio.VolumeBoostProcessor
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.sync.AudioSyncProcessor
+import dev.anonrode.player.core.media.sync.SyncFingerprint
 import dev.anonrode.player.core.media.sync.SyncListener
 import dev.anonrode.player.core.model.SubtitleCue
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
@@ -121,6 +122,21 @@ class PlaybackEngine(
     }
 
     /**
+     * Live re-lock gate for the audio sync processor (v0.6.2 sub-sync UX
+     * pass). Mirrors
+     * [dev.anonrode.player.core.datastore.PlayerSettings.subtitleAutoSyncEnabled]
+     * into the processor so the user toggle from the player chrome can
+     * enable/disable the live re-lock at runtime. False = processor
+     * stays dormant (no evaluations, no lock publishing). True =
+     * normal re-lock behaviour. Safe to call from any thread — the
+     * underlying flag is volatile.
+     */
+    fun setSubSyncEnabled(enabled: Boolean) {
+        syncProcessor.setEnabled(enabled)
+        AppLog.d("ENGINE", "sub sync enabled=$enabled")
+    }
+
+    /**
      * Listeners that follow the player across rebuilds. External callers
      * register through [addListener]; on every [rebuild] we detach them
      * from the old player and re-attach to the new one. Main-thread only
@@ -132,16 +148,66 @@ class PlaybackEngine(
      * The current [ExoPlayer] instance. Backing a `val` with a `var` so
      * [rebuild] can swap it out; all accessors read the field fresh so a
      * decoder swap is transparent to callers that just hold an engine ref.
+     *
+     * Initialized lazily on first access — see [buildInitialPlayer]. The
+     * constructor MUST stay cheap: AnonrodeApp.onCreate constructs this on
+     * the main thread before any UI exists, and an ExoPlayer build pulls
+     * in DefaultTrackSelector, the FFmpeg renderer factory (or its
+     * device-only fallback), the audio sink (with our two custom audio
+     * processors), and the first MediaCodec probe. Doing that on Main is
+     * an ANR risk on cold start. The lazy delegate below defers the build
+     * to the first call to [player] — which happens on the main thread in
+     * the activity's onCreate path, still synchronously before playback
+     * starts, so the playback hot path is unchanged.
      */
-    @Volatile var player: ExoPlayer = buildInitialPlayer(context.applicationContext)
-        private set
+    @Volatile
+    private var playerInstance: ExoPlayer? = null
 
     /**
-     * First player built at engine construction. Falls back to pure platform
-     * decoders if the default (FFmpeg-backed) renderer factory can't be built
-     * (e.g. native libs unavailable on this ABI), so a missing lib can't break
-     * app startup. Called from the [player] initializer — only touches fields
-     * declared above it ([decoderMode], [syncProcessor], [boostProcessor]).
+     * The active [ExoPlayer]. Builds the first one on first access (lazy
+     * — see the field kdoc above). After a [rebuild] this returns the
+     * freshly-built instance. Callers must be on the main thread once the
+     * player is in use (Media3's own constraint).
+     */
+    var player: ExoPlayer
+        get() {
+            val existing = playerInstance
+            if (existing != null) return existing
+            return synchronized(this) {
+                val again = playerInstance
+                if (again != null) again
+                else buildInitialPlayer(appContext).also { playerInstance = it }
+            }
+        }
+        private set(value) {
+            playerInstance = value
+        }
+
+    /**
+     * Constructor-time budget. This MUST stay cheap — see [player].
+     * What runs here:
+     *  - [scope] (SupervisorJob on Dispatchers.Default, cheap)
+     *  - [appContext] (applicationContext lookup, cheap)
+     *  - primitive field initializers (currentUri, manualDelayMs, …)
+     *  - [syncProcessor] / [boostProcessor] (constructors only; no IO)
+     *  - lazy [player] (first access builds ExoPlayer; later hits return
+     *    the same instance)
+     *
+     * What must NOT run here: MediaStore reads, DataStore reads, Room
+     * queries, ExoPlayer.build() outside the lazy delegate, file IO.
+     */
+    init {
+        // Intentionally empty: the field initializers above already do the
+        // minimum. [player] is built lazily; nothing else belongs in the
+        // constructor.
+    }
+
+    /**
+     * First player built on first access to [player]. Falls back to pure
+     * platform decoders if the default (FFmpeg-backed) renderer factory
+     * can't be built (e.g. native libs unavailable on this ABI), so a
+     * missing lib can't break app startup. Only touches fields declared
+     * above it ([decoderMode], [syncProcessor], [boostProcessor]).
      */
     private fun buildInitialPlayer(ctx: Context): ExoPlayer = try {
         buildPlayer(ctx, decoderMode)
@@ -182,10 +248,15 @@ class PlaybackEngine(
     val isHw: Boolean get() = decoderMode != MODE_PREFER_APP
 
     /**
-     * Speed the host wants applied to the rebuilt player. The host sets
-     * this immediately before [rebuild] (the Compose host reads its own
-     * restored speed on every onSpeedChanged), so the freshly-created
-     * ExoPlayer comes up at the same rate the user picked.
+     * Speed the host intends to apply after a [rebuild]. The host sets
+     * this immediately before [rebuild] so the value is captured at the
+     * moment of the swap. The engine itself does NOT read this — playback
+     * speed is single-source-owned by the Compose host
+     * (PlayerScreen.LaunchedEffect(initialSpeed, livePlayer) →
+     * setPlaybackSpeed), which fires on the new [Player] instance as soon
+     * as the rebuild returns and Compose recomposes. The field is kept as
+     * a public API for backward compatibility with host call sites that
+     * still write to it before invoking [rebuild].
      */
     @Volatile var pendingSpeedOnRebuild: Float = 1f
 
@@ -424,13 +495,35 @@ class PlaybackEngine(
             ") pos=" + pos + "ms state=" + playState + " item=" + (item?.mediaId ?: "null"))
 
         // Tear down on the main thread, in the same order Media3's docs
-        // recommend: stop, clear, release. We skip the explicit position
-        // save here because the host (PlayerActivity) re-saves on every
-        // periodic tick; a rebuild is rare and we don't want a blocked IO
-        // hop on the main thread inside the engine.
-        player.stop()
-        player.clearMediaItems()
-        player.release()
+        // recommend: detach listeners (so callbacks can't fire into a
+        // half-released instance), stop, clear, release. We skip the
+        // explicit position save here because the host (PlayerActivity)
+        // re-saves on every periodic tick; a rebuild is rare and we don't
+        // want a blocked IO hop on the main thread inside the engine.
+        val oldPlayer = player
+        // Copy the listener list once: re-attaching below needs the same
+        // instances, but we want them off the old player BEFORE release()
+        // so a late callback (e.g. onPlaybackStateChanged fired by the
+        // stop() above) can't land on a listener that will be re-added to
+        // the new player and double-fire.
+        val listenersToReattach: List<Player.Listener> = synchronized(replayListeners) {
+            replayListeners.toList()
+        }
+        listenersToReattach.forEach { oldPlayer.removeListener(it) }
+        try {
+            oldPlayer.stop()
+            oldPlayer.clearMediaItems()
+        } catch (t: Throwable) {
+            // The MediaSession may already have released the player
+            // reference; a half-dead ExoPlayer throws on stop(). Log and
+            // continue — release() below is the authoritative teardown.
+            AppLog.e("ENGINE", "old player stop/clear failed during rebuild", t)
+        }
+        try {
+            oldPlayer.release()
+        } catch (t: Throwable) {
+            AppLog.e("ENGINE", "old player release failed during rebuild", t)
+        }
 
         decoderMode = mode
         val newPlayer = try {
@@ -448,13 +541,12 @@ class PlaybackEngine(
         }
         player = newPlayer
 
-        // Re-attach every registered listener to the new player. We hold
-        // the same lock used by add/removeListener so a concurrent
+        // Re-attach every registered listener to the new player. The
+        // list was snapshotted BEFORE the old player was released
+        // (above) so we don't re-add to a dead instance. We hold the
+        // same lock used by add/removeListener so a concurrent
         // registration can't double-add.
-        val toReplay: List<Player.Listener> = synchronized(replayListeners) {
-            replayListeners.toList()
-        }
-        toReplay.forEach { newPlayer.addListener(it) }
+        listenersToReattach.forEach { newPlayer.addListener(it) }
 
         if (item != null) {
             // Same order as [play]: setMediaItem → seekTo → prepare, so the
@@ -476,11 +568,13 @@ class PlaybackEngine(
             } else {
                 wasPlaying = false
             }
-            // Re-apply the live speed so a decoder swap doesn't reset the
-            // user's chosen 1.25x to 1.0x. Speed is owned by the host and
-            // re-fed via the rebuilt hook below.
-            val hookSpeed = pendingSpeedOnRebuild
-            if (hookSpeed > 0f) newPlayer.setPlaybackSpeed(hookSpeed)
+            // Speed re-application is owned by the Compose host
+            // (PlayerScreen.LaunchedEffect(initialSpeed, livePlayer) ->
+            // setPlaybackSpeed). The engine no longer touches
+            // playbackParameters here so the speed-write is single-source.
+            // pendingSpeedOnRebuild is kept as a host-facing write API
+            // (PlayerActivity still sets it before calling rebuild) but
+            // is intentionally not consumed inside the engine.
         }
 
         val sid = if (newPlayer.audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
@@ -539,6 +633,23 @@ class PlaybackEngine(
         wasPlaying = false
     }
 
+    /**
+     * Cancel the background subtitle-sync fingerprint job for [videoUri], if
+     * one is in flight. Call from the host when the user is permanently
+     * done with a video (e.g. PlayerActivity.onDestroy after a back press)
+     * so a long-running ffmpeg decode pass doesn't keep retrying against a
+     * media item the user has abandoned.
+     *
+     * The job is unique-per-URI with [androidx.work.ExistingWorkPolicy.KEEP],
+     * so WorkManager will keep retrying it on its own schedule even if the
+     * engine's own coroutine scope is cancelled. This method hands the
+     * cancel to [dev.anonrode.player.core.media.sync.SyncFingerprint], the
+     * single owner of the WorkManager request name for that URI.
+     */
+    fun cancelSyncFingerprintJob(videoUri: String) {
+        SyncFingerprint.cancel(appContext, videoUri)
+    }
+
     fun release() {
         // Save synchronously BEFORE teardown: any async save launched here
         // would be cancelled by scope.cancel() below before its DB write
@@ -548,7 +659,22 @@ class PlaybackEngine(
                 onPositionSave(snap.uri, snap.positionMs, snap.durationMs, snap.finished)
             }
         }
-        player.release()
+        // Detach every registered listener BEFORE release: callbacks that
+        // fire from the impending release() would otherwise be dispatched
+        // into a soon-to-be-dead player. Mirrors the listener cleanup in
+        // rebuildMode so the teardown order is consistent across both
+        // paths.
+        synchronized(replayListeners) {
+            val snap = replayListeners.toList()
+            val toRelease = playerInstance
+            if (toRelease != null) snap.forEach { toRelease.removeListener(it) }
+        }
+        try {
+            player.release()
+        } catch (t: Throwable) {
+            AppLog.e("ENGINE", "player release failed in engine.release()", t)
+        }
+        playerInstance = null
         scope.cancel()
     }
 }

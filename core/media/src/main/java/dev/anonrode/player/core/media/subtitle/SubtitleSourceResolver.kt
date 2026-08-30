@@ -18,11 +18,21 @@ import java.io.InputStream
  * (auto-sync) can never disagree about what "the selected subtitle" is.
  *
  * Choice grammar (persisted in MediaStateEntity.subtitleChoice):
- *   ""                 → AUTO: best sidecar file next to the video
+ *   ""                 → AUTO: see [resolveAutoCues] (embedded-fast-path /
+ *                        best-sidecar fallback)
  *   "none"             → subtitles off
  *   "embedded:<index>" → in-container text track (MediaExtractor index)
  *   "sidecar:<name>"   → sibling file by display name
  *   "online:<name>"    → downloaded file in [SubtitleDownloadStore]
+ *
+ * MKV EMBEDDED FAST-PATH (v0.6.2 sub-sync UX pass): when no persisted
+ * choice exists and the container exposes any text sub track, that
+ * track is preferred over sidecars — MKV embedded wins by default,
+ * sync is NOT scheduled against an embedded track unless the user
+ * opts in explicitly (the SyncFingerprintJob's `opt-in` flag is the
+ * entry-point that lives in the resolved cues path; see SyncFingerprint.
+ * schedule in PlayerActivity for the gate). A persisted preference of
+ * any kind (embedded:N, sidecar:name, online:name) always wins.
  *
  * Sidecar enumeration (Android 11+/13+ reality): non-media files such as
  * .srt are NOT visible through MediaStore.Files under READ_MEDIA_VIDEO,
@@ -53,9 +63,7 @@ object SubtitleSourceResolver {
     ): List<SubtitleCue> {
         if (choice == "none") return emptyList()
         if (choice.isEmpty()) {
-            val sidecar = videoPath?.let { pickAutoSidecar(context, it) } ?: return emptyList()
-            AppLog.d(TAG, "auto sidecar: ${sidecar.name}")
-            return parseSidecar(context, sidecar)
+            return resolveAutoCues(context, videoUri, videoPath)
         }
         val kind = choice.substringBefore(':')
         val value = choice.substringAfter(':', "")
@@ -82,6 +90,36 @@ object SubtitleSourceResolver {
             }
             else -> emptyList()
         }
+    }
+
+    /**
+     * AUTO pick for the empty-choice path. Two-stage:
+     *   1. If the container exposes any text subtitle track, the first
+     *      one wins (MKV embedded fast-path). The sync fingerprint job
+     *      will refuse to schedule against this path unless the caller
+     *      explicitly opts in — embedded timing is already container-
+     *      aligned, so fingerprinting would just churn CPU.
+     *   2. Otherwise: the canonical score-based sidecar pick
+     *      ([pickAutoSidecar]).
+     *
+     * The "embedded preferred" rule applies ONLY when no persisted
+     * preference exists; once the user picks anything — even an embedded
+     * track index — that persists and the auto path is no longer used
+     * until they reset it back to "".
+     */
+    fun resolveAutoCues(
+        context: Context,
+        videoUri: String,
+        videoPath: String?,
+    ): List<SubtitleCue> {
+        val embedded = listEmbedded(context, videoUri, videoPath)
+        if (embedded.isNotEmpty()) {
+            AppLog.d(TAG, "auto embedded: track ${embedded.first().index}")
+            return extractEmbedded(context, videoUri, videoPath, embedded.first().index)
+        }
+        val sidecar = videoPath?.let { pickAutoSidecar(context, it) } ?: return emptyList()
+        AppLog.d(TAG, "auto sidecar: ${sidecar.name}")
+        return parseSidecar(context, sidecar)
     }
 
     // ── enumeration (picker feeds) ────────────────────────────────────

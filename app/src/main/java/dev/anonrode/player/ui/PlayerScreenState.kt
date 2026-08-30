@@ -1,6 +1,7 @@
 package dev.anonrode.player.ui
 
 import android.view.View
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -23,7 +24,15 @@ import androidx.media3.ui.PlayerView
 /**
  * Core transport state: controls visibility, play/buffer/lock flags, zoom,
  * the seekbar drag position and the first-frame poster.
+ *
+ * Marked [Stable] because Compose can rely on the holder identity (the
+ * remember{} in PlayerScreen) and on every contained [androidx.compose.runtime.MutableState]
+ * being created exactly once with that holder, making `equals` effectively
+ * referential. The compiler skips the parameter-equality check on parameters
+ * of type PlayerUiState across recompositions, which is the difference
+ * between PlayerControlsOverlay getting skipped vs. recomposed every tick.
  */
+@Stable
 @UnstableApi
 internal class PlayerUiState(initialIsPlaying: Boolean) {
     val controlsVisible = mutableStateOf(true)
@@ -79,7 +88,12 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
  * recompositions — a fresh Runnable per composition made
  * view.removeCallbacks() miss the previously posted instance, letting a
  * stale timeout hide the HUD / clear the toast early.
+ *
+ * Marked [Stable] so Compose treats the holder reference as a stable
+ * parameter — the GestureHudPill / PlayerOverlayToast call sites skip
+ * recomposition unless the contained MutableState objects actually change.
  */
+@Stable
 internal class HudUiState {
     val icon = mutableStateOf<ImageVector?>(null)
     val text = mutableStateOf("")
@@ -116,7 +130,12 @@ internal class HudUiState {
 /**
  * Sleep timer: wall-clock expiry so re-arming mid-countdown simply moves
  * the deadline. Null endMs = no countdown armed.
+ *
+ * Marked [Stable] — the PlayerOverflowMenu / SleepTimerEffect both see a
+ * stable holder; only its contained MutableState objects can change, so
+ * the sleep dropdown doesn't recompose when unrelated UI state changes.
  */
+@Stable
 internal class SleepTimerUiState {
     val endMs = mutableStateOf<Long?>(null)
 
@@ -162,7 +181,14 @@ internal class SleepTimerUiState {
 /**
  * Gesture scratch state (drag mode anchors, stage size) plus the subtitle
  * cue placement (box center as stage fractions) and drag state.
+ *
+ * Marked [Stable]. Pointer-input blocks in PlayerScreenGestures.kt capture
+ * the holder via [PlayerScreenActions.gestures]; with a stable identity the
+ * captured lambdas re-read scratch state via `gestures.foo.floatValue`
+ * without forcing a relaunch. (Constructor stability matters here too —
+ * the gesture holders are held inside the now-remembered actions object.)
  */
+@Stable
 internal class GestureUiState {
     val scrW = mutableFloatStateOf(1000f)
     val scrH = mutableFloatStateOf(1000f)
@@ -194,7 +220,12 @@ internal class GestureUiState {
  * Quick-row + overflow feature state. Each backs a button with at least one
  * observable side-effect on tap (toast / overlay / log line) so the user
  * can tell the click registered.
+ *
+ * Marked [Stable] — the PlayerQuickRow reads chips (equalizerOn, castRouteName,
+ * etc.) directly off this holder; stability means a chip flipping doesn't
+ * recompose its unrelated neighbours.
  */
+@Stable
 internal class QuickRowUiState(initialHwDecoder: Boolean) {
     val equalizerOn = mutableStateOf(false)
 
@@ -205,6 +236,16 @@ internal class QuickRowUiState(initialHwDecoder: Boolean) {
 
     /** True = locked to portrait, false = sensor/landscape. */
     val portraitForced = mutableStateOf(false)
+
+    /**
+     * Three-state rotation mode (sensor / landscape / portrait). Set by
+     * the right-rail rotate button (cycle on tap, jump on long-press).
+     * When the user is in [RotateMode.PORTRAIT] this stays in sync with
+     * [portraitForced]; [RotateMode.LANDSCAPE] is the new state the
+     * redesigned rail introduces.
+     */
+    val rotateMode = mutableStateOf(RotateMode.SENSOR)
+
     val showSyncPopover = mutableStateOf(false)
 
     /** The currently active audio track label, for the audio-track popover. */

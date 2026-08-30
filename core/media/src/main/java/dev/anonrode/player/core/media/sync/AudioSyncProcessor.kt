@@ -45,6 +45,17 @@ class AudioSyncProcessor(
     @Volatile private var channelCount = 0
     @Volatile private var inputIsFloat = false
     @Volatile private var active = false
+    /**
+     * Live-re-lock gate (v0.6.2 sub-sync UX pass). Default true (legacy
+     * behaviour). The host mirrors
+     * [dev.anonrode.player.core.datastore.PlayerSettings.subtitleAutoSyncEnabled]
+     * into this flag via [setEnabled]. When false: [setCues] refuses to
+     * re-arm the attempt budget, [evaluate] refuses to publish a lock,
+     * and [accumulateBin] refuses to schedule evaluations. The audio
+     * render-thread hot path stays allocation-free — the flag is a
+     * single volatile read at decision points, never per sample.
+     */
+    @Volatile private var enabled = true
     private var inputEnded = false
     private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
 
@@ -118,11 +129,40 @@ class AudioSyncProcessor(
             // A fresh subtitle track is a fresh matching problem: re-arm the
             // attempt budget so a track attached after a previous give-up
             // still gets its chance (a seek/episode switch would re-arm via
-            // the position reset anyway).
-            failedEvals = 0
-            gaveUp = false
+            // the position reset anyway). Gated on [enabled] so the user
+            // toggle's OFF state keeps the processor dormant even after a
+            // track switch.
+            if (enabled) {
+                failedEvals = 0
+                gaveUp = false
+            } else {
+                // Stay dormant — but DO clear a stale lock so a future flip
+                // back to ON begins from a clean slate, not a previously
+                // locked state.
+                locked = false
+            }
         }
-        AppLog.d("SYNC", "setCues: ${cues.size} cues")
+        AppLog.d("SYNC", "setCues: ${cues.size} cues enabled=$enabled")
+    }
+
+    /**
+     * Live-re-lock gate (v0.6.2 sub-sync UX pass). The host mirrors
+     * [dev.anonrode.player.core.datastore.PlayerSettings.subtitleAutoSyncEnabled]
+     * into this flag on every settings change. When [enabled] is false:
+     *   - [setCues] does not re-arm the attempt budget (processor stays dormant)
+     *   - [accumulateBin] skips the worker submission
+     *   - [evaluate] refuses to publish a lock
+     * When flipped back to true mid-playback, the next seek (or fresh
+     * setCues) re-arms the budget naturally.
+     */
+    fun setEnabled(enabled: Boolean) {
+        this.enabled = enabled
+        if (!enabled) {
+            // Forced give-up so we stop spending CPU on a user-disabled
+            // feature; a later re-arm via setCues(true) clears gaveUp.
+            gaveUp = true
+        }
+        AppLog.d("SYNC", "setEnabled=$enabled")
     }
 
     // Written from the main thread, consumed by the audio thread.
@@ -359,7 +399,11 @@ class AudioSyncProcessor(
         } else if (posMs - lastEvalPos >= EVAL_INTERVAL_MS) {
             lastEvalPos = posMs
             val minBins = (SpeechCorrelator.MIN_AUDIO_SECONDS / SpeechCorrelator.ALIGN_BIN).toInt()
-            if (binCount >= minBins && cues.isNotEmpty() && !gaveUp) {
+            // Gate #1 (v0.6.2 sub-sync UX pass): if the user disabled the
+            // live re-lock, never schedule an evaluation. The audio render
+            // thread still bins — so flipping the toggle back ON mid-play
+            // doesn't have to rebuild the feature window.
+            if (binCount >= minBins && cues.isNotEmpty() && !gaveUp && enabled) {
                 scheduleEvaluate(posMs)
             }
         }
@@ -388,6 +432,10 @@ class AudioSyncProcessor(
     /** Runs on the sync-eval worker thread — never on the audio render thread. */
     private fun evaluate(req: SyncAnalysisWorker.Request) {
         if (req.generation != generation || locked) return
+        // Gate #2 (v0.6.2 sub-sync UX pass): the user disabled live re-lock
+        // mid-evaluation — drop the result instead of publishing a lock the
+        // user no longer wants.
+        if (!enabled) return
         val result = SpeechCorrelator.findOffset(
             req.bins, req.binCount, req.cues,
             baseSeconds = req.baseSeconds,

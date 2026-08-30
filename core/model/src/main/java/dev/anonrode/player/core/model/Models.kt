@@ -1,9 +1,12 @@
 package dev.anonrode.player.core.model
 
+import kotlinx.serialization.Serializable
+
 /**
  * A video file in the library. Identity is the content URI (stable across
  * storage re-mounts, unlike file paths).
  */
+@Serializable
 data class Video(
     val uri: String,
     val path: String,
@@ -28,6 +31,7 @@ data class Video(
 }
 
 /** One "series" — a folder auto-grouped by the library scanner. */
+@Serializable
 data class Series(
     val name: String,
     val folderPath: String,

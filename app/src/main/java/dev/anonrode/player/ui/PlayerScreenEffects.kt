@@ -49,14 +49,17 @@ internal fun ZoomApplyEffect(zoomIdx: Int, ui: PlayerUiState) {
     }
 }
 
-/** Rotation lock: sensor landscape while engaged, full sensor otherwise. */
+/** Rotation lock: maps the 3-state [RotateMode] to the activity's
+ *  requested orientation. Sensor → full sensor; landscape → sensor
+ *  landscape; portrait → portrait. On dispose always restores full
+ *  sensor so the next screen entry starts in free rotation. */
 @Composable
-internal fun RotationLockEffect(activity: Activity?, rotationLocked: Boolean) {
-    DisposableEffect(rotationLocked) {
-        activity?.requestedOrientation = if (rotationLocked) {
-            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        } else {
-            ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+internal fun RotationLockEffect(activity: Activity?, mode: RotateMode) {
+    DisposableEffect(mode) {
+        activity?.requestedOrientation = when (mode) {
+            RotateMode.SENSOR -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+            RotateMode.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            RotateMode.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
         onDispose {
             // Leaving the screen always restores free rotation.
@@ -216,7 +219,14 @@ internal fun SubtitlePositionRestoreEffect(
     gestures: GestureUiState,
 ) {
     LaunchedEffect(mediaId) {
-        val saved = PlayerPrefs.subtitlePosition(context, mediaId)
+        // SP read + parse is a disk + JSON-adjacent cost; the first call
+        // after process death can take tens of ms on a budget device, so
+        // do it off the main thread. The floatValue writes are Compose
+        // snapshot writes — safe from any thread (they enqueue onto the
+        // main looper internally).
+        val saved = withContext(Dispatchers.IO) {
+            PlayerPrefs.subtitlePosition(context, mediaId)
+        }
         gestures.subX.floatValue = saved?.first ?: SUB_DEFAULT_X
         gestures.subY.floatValue = saved?.second ?: SUB_DEFAULT_Y
     }
@@ -247,7 +257,13 @@ internal fun SubtitlePositionPresetEffect(
             SubtitlePosition.MID -> 0.50f
             SubtitlePosition.LOW -> SUB_DEFAULT_Y
         }
-        PlayerPrefs.saveSubtitlePosition(context, mediaId, gestures.subX.floatValue, gestures.subY.floatValue)
+        // SP write (MRU prune, two key puts) — off the main thread so a
+        // drag of the position preset doesn't jank the next frame.
+        withContext(Dispatchers.IO) {
+            PlayerPrefs.saveSubtitlePosition(
+                context, mediaId, gestures.subX.floatValue, gestures.subY.floatValue,
+            )
+        }
     }
 }
 

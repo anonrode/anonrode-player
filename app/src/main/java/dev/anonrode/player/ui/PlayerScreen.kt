@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -94,6 +95,16 @@ fun PlayerScreen(
     onStartCalibration: () -> Unit = {},
     /** Apply a manual ±0.1s nudge to the subtitle offset. */
     onNudgeSubtitle: (Long) -> Unit = { _ -> },
+    /**
+     * v0.6.2 sub-sync UX pass: persist the user-facing sync toggle
+     * (DataStore + fingerprint job gate). The toggle's icon flips
+     * instantly via [quick.subSyncEnabled]; this callback is for
+     * persistence and the gate side-effects (cancel pending jobs when
+     * turning OFF; schedule one when turning ON).
+     */
+    onSetSubSyncEnabled: (Boolean) -> Unit = {},
+    /** Long-press on the sync toggle: "Resync now". */
+    onResyncNow: () -> Unit = {},
     /**
      * Request a real HW/SW decoder swap. The host rebuilds the ExoPlayer
      * via [dev.anonrode.player.feature.player.PlaybackEngine.rebuild] and
@@ -214,36 +225,78 @@ fun PlayerScreen(
         mutableIntStateOf(speeds.indexOfFirst { abs(it - initialSpeed) < 0.05f }.takeIf { it >= 0 } ?: 2)
     }
 
-    // Action surface — deliberately NOT remembered: snapshots the fresh
-    // livePlayer / parameters on every recomposition, exactly like the
-    // pre-split local functions, while the holders above stay stable.
-    val actions = PlayerScreenActions(
-        context = context,
-        view = view,
-        audioManager = audioManager,
-        activity = activity,
-        engine = engine,
-        livePlayer = livePlayer,
-        captureScope = rememberCoroutineScope(),
-        ui = ui,
-        hud = hud,
-        sleep = sleep,
-        gestures = gestures,
-        quick = quick,
-        speedIdx = speedIdx,
-        speeds = speeds,
-        seekIncrementSec = seekIncrementSec,
-        fastSeekThresholdSec = fastSeekThresholdSec,
-        isRebuildingDecoder = isRebuildingDecoder,
-        title = title,
-        onSpeedChanged = onSpeedChanged,
-        onZoomChanged = onZoomChanged,
-        onToggleEqualizer = onToggleEqualizer,
-        onOpenCastPicker = onOpenCastPicker,
-        onOpenAudioTrackPicker = onOpenAudioTrackPicker,
-        onRebuildDecoder = onRebuildDecoder,
-        onNudgeSubtitle = onNudgeSubtitle,
-    )
+    // Shared "more" state — both the top-bar "more" and the right-rail
+    // "more" buttons open the same overflow sheet. One state, two call
+    // sites; the sheet reads the same flag.
+    val overflowOpen = remember { mutableStateOf(false) }
+
+    // Sync toggle slot. Agent 5 supplies the actual composable; for now
+    // we provide a placeholder so the rail can be rendered without an
+    // undefined-symbol error. Agent 5's wiring replaces this lambda in
+    // its own commit; the lambda's signature must stay stable.
+    val syncSlot: SyncSlot = remember { { mod, ac ->
+        androidx.compose.foundation.layout.Box(
+            modifier = mod,
+            contentAlignment = Alignment.Center,
+        ) { /* agent-5 fills */ }
+    } }
+
+    // Rotation mode (3-state: sensor / landscape / portrait). Stored on
+    // QuickRowUiState so the button's tap cycle + long-press menu both
+    // see the same value. The activity orientation is reapplied by
+    // RotationLockEffect below whenever this changes.
+    val rotateMode = quick.rotateMode
+
+    // Action surface — INTENTIONALLY REMEMBERED on (livePlayer, engine, ui,
+    // hud, sleep, gestures, quick, captureScope). The holder fields above are
+    // stable across recompositions, so wrapping PlayerScreenActions in
+    // remember(...) keeps a single stable instance per livePlayer swap. The
+    // four pointerInput blocks in PlayerScreenGestures.kt capture this same
+    // actions reference; with a stable actions identity they do NOT relaunch
+    // on every PlayerControlsOverlay recomposition (8–100 ms render-loop tick),
+    // which is what was making gestures feel janky during seek/drag.
+    //
+    // Freshness guarantee: PlayerScreenActions captures `livePlayer` by
+    // reference and method bodies read `ui.foo.value` / `hud.showHud(...)` etc.
+    // through the holder, so a gesture invocation always sees the latest
+    // MutableState snapshot — the same live-read semantics the pre-split
+    // local functions had. The keys cover everything that should force a
+    // fresh actions instance (decoder swap → new player, lost engine, new
+    // holders from a remount). When those keys stay stable, actions stays
+    // stable; pointerInput blocks see no relaunch; gestures stay smooth.
+    val captureScope = rememberCoroutineScope()
+    val actions = remember(livePlayer, engine, ui, hud, sleep, gestures, quick, captureScope) {
+        PlayerScreenActions(
+            context = context,
+            view = view,
+            audioManager = audioManager,
+            activity = activity,
+            engine = engine,
+            livePlayer = livePlayer,
+            captureScope = captureScope,
+            ui = ui,
+            hud = hud,
+            sleep = sleep,
+            gestures = gestures,
+            quick = quick,
+            speedIdx = speedIdx,
+            speeds = speeds,
+            seekIncrementSec = seekIncrementSec,
+            fastSeekThresholdSec = fastSeekThresholdSec,
+            isRebuildingDecoder = isRebuildingDecoder,
+            title = title,
+            onSpeedChanged = onSpeedChanged,
+            onZoomChanged = onZoomChanged,
+            onToggleEqualizer = onToggleEqualizer,
+            onOpenCastPicker = onOpenCastPicker,
+            onOpenAudioTrackPicker = onOpenAudioTrackPicker,
+            onRebuildDecoder = onRebuildDecoder,
+            onNudgeSubtitle = onNudgeSubtitle,
+            onEnterPip = onEnterPip,
+            onSetSubSyncEnabled = { onSetSubSyncEnabled(it) },
+            onResyncNow = { onResyncNow() },
+        )
+    }
 
     // ── side-effects: same keys and order as before the split ──
     ZoomRestoreEffect(initialZoomIdx, ui)
@@ -252,8 +305,16 @@ fun PlayerScreen(
     LaunchedEffect(initialSpeed, livePlayer) {
         livePlayer.setPlaybackSpeed(initialSpeed)
     }
+    // v0.6.2 sub-sync UX pass: mirror the live DataStore toggle into the
+    // Compose state the bottom-bar reads from. The host writes through
+    // [onSetSubSyncEnabled] on tap; this collector ensures a process
+    // restart (or an external DataStore edit from Settings) is picked up
+    // immediately, without waiting for the next tap.
+    LaunchedEffect(settings.subtitleAutoSyncEnabled) {
+        quick.subSyncEnabled.value = settings.subtitleAutoSyncEnabled
+    }
     ZoomApplyEffect(ui.zoomIdx.intValue, ui)
-    RotationLockEffect(activity, ui.rotationLocked.value)
+    RotationLockEffect(activity, quick.rotateMode.value)
     SleepTimerEffect(sleep) { engine?.player ?: livePlayer }
     PlayerEventListenerEffect(
         player = livePlayer,
@@ -356,21 +417,6 @@ fun PlayerScreen(
             visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
             title = title,
             accent = accent,
-            showCC = ui.showCC.value,
-            hwDecoder = quick.hwDecoder.value,
-            isRebuildingDecoder = isRebuildingDecoder,
-            menuOpen = ui.menuOpen.value,
-            zoomAbbreviation = ZoomModes[ui.zoomIdx.intValue].abbreviation,
-            portraitForced = quick.portraitForced.value,
-            abStartMs = abStartMs,
-            abEndMs = abEndMs,
-            volumeBoostPct = volumeBoostPct,
-            sleep = sleep,
-            equalizerOn = quick.equalizerOn.value,
-            headphonesOn = quick.headphonesOn.value,
-            castRouteName = castRouteName,
-            showSyncPopover = quick.showSyncPopover.value,
-            speedLabelText = speedLabel(speeds[speedIdx.intValue]),
             currentPositionMs = livePlayer.currentPosition,
             positionSec = positionSec,
             durationSec = durationSec,
@@ -384,12 +430,75 @@ fun PlayerScreen(
             onBack = onBack,
             onPlayPrevious = onPlayPrevious,
             onPlayNext = onPlayNext,
-            onEnterPip = onEnterPip,
-            onOpenSubtitlePicker = onOpenSubtitlePicker,
-            onOpenSettings = onOpenSettings,
-            onAbRepeatTap = onAbRepeatTap,
-            onVolumeBoostCycle = onVolumeBoostCycle,
-            onOpenEqPanel = onOpenEqPanel,
+            onMore = { overflowOpen.value = true },
+        )
+
+        // ── right-edge vertical action rail (CC / audio / sync slot /
+        //    rotate / more). Sibling of the controls overlay so the
+        //    rail can be tuned independently of the top+bottom bars.
+        //    Auto-hides with the chrome (same condition as the overlay),
+        //    so when the user taps once to show controls, the rail
+        //    appears too — but the seek bar underneath stays.
+        androidx.compose.animation.AnimatedVisibility(
+            visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
+            enter = androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(220)),
+            exit = androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(220)),
+        ) {
+            PlayerScreenActionRail(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 8.dp),
+                accent = accent,
+                showCC = ui.showCC.value,
+                hasSubtitle = cueText != null,
+                rotateMode = rotateMode.value,
+                onCycleRotate = { actions.cycleRotateMode() },
+                onSetRotate = { actions.setRotateMode(it) },
+                onSubtitleToggle = { actions.toggleShowCC() },
+                onAudioTrack = { actions.pickAudioTrack() },
+                onMore = { overflowOpen.value = true },
+                syncSlot = syncSlot,
+            )
+        }
+
+        // ── overflow sheet (bottom). Single destination for both
+        //    "more" buttons (top bar + rail). Renders the 11-tile
+        //    grid (Aspect, Zoom, AB-repeat, Sleep, Audio, Speed, EQ,
+        //    Cast, Headphones, Speaker, Capture frame) plus the PiP
+        //    tile. The sheet is opaque enough to read independently
+        //    of the underlying video frame.
+        PlayerOverflowSheet(
+            visible = overflowOpen.value,
+            state = OverflowState(
+                zoomAbbreviation = ZoomModes[ui.zoomIdx.intValue].abbreviation,
+                showCC = ui.showCC.value,
+                abStartMs = abStartMs,
+                abEndMs = abEndMs,
+                sleep = sleep,
+                speedLabelText = speedLabel(speeds[speedIdx.intValue]),
+                equalizerOn = quick.equalizerOn.value,
+                headphonesOn = quick.headphonesOn.value,
+                castRouteName = castRouteName,
+            ),
+            onDismiss = { overflowOpen.value = false },
+            onAspect = { actions.cycleZoom() },
+            onZoom = { actions.cycleZoom() },
+            onAbRepeat = onAbRepeatTap,
+            onSleep = {
+                // Cycles Off → end-of-episode. The detail list lives in
+                // the legacy menu — this entry-point is the rail /
+                // overflow tap.
+                val next = if (sleep.active) SleepOptions.first()
+                else SleepOptions.last()
+                actions.selectSleep(next)
+            },
+            onAudioTrack = { actions.pickAudioTrack() },
+            onSpeed = { actions.cycleSpeed() },
+            onEqualizer = { actions.toggleEqualizer() },
+            onCast = { actions.openCastPicker() },
+            onHeadphones = { actions.toggleHeadphones() },
+            onSpeaker = { actions.openAudioOutputPicker() },
+            onCaptureFrame = { actions.captureFrame() },
         )
 
         // ── A-B repeat chip (tap advances the cycle: set B / clear) ──
@@ -408,7 +517,11 @@ fun PlayerScreen(
             durationSec - positionSec <= NEXT_BUTTON_WINDOW_SEC && nextCountdownSec < 0
         ) {
             UpNextPill(
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 110.dp),
+                // Sits above the new two-row bottom block
+                // (seekbar + transport, ~140dp). Previous layout used
+                // 130dp — bumped to 140dp so the pill clears the new
+                // 72dp BIG play button without colliding with it.
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 140.dp),
                 upNextTitle = upNextTitle,
                 accent = accent,
                 onClick = onPlayNext,
@@ -438,7 +551,9 @@ fun PlayerScreen(
             SyncPopover(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 220.dp)
+                    // Sits above the new two-row bottom block
+                    // (seekbar + transport, ~140dp) with clearance.
+                    .padding(bottom = 210.dp)
                     .widthIn(max = 360.dp)
                     .padding(horizontal = 14.dp),
                 offsetMs = liveOffsetMs,

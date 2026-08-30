@@ -14,7 +14,26 @@ import kotlinx.serialization.json.Json
 data class PlayerSettings(
     val decoderPriority: DecoderPriority = DecoderPriority.PREFER_DEVICE,
     val resumeBehavior: ResumeBehavior = ResumeBehavior.ALWAYS_ASK,
+    /**
+     * Legacy auto-sync gate: enabled = the background subtitle fingerprint
+     * job may run on a video with no persisted lock. Kept ON by default for
+     * backward compatibility — users who relied on v0.6.1 keep the same
+     * behavior. The new user-facing sub-sync UX toggle is the SEPARATE
+     * [subtitleAutoSyncEnabled] below, default OFF.
+     */
     val autoSyncEnabled: Boolean = true,
+    /**
+     * Sub-sync UX toggle (v0.6.2): when ON, the user has opted into the
+     * full sub-sync experience and:
+     *   - the sync fingerprint job is scheduled for any video that lacks
+     *     a high-recall lock;
+     *   - the live AudioSyncProcessor re-lock is enabled during playback.
+     * Default is OFF — sync runs only when the user explicitly wants it,
+     * matching the v0.6.1 contract. The bottom-row sync toggle in the
+     * player chrome writes through to this field; PersistOnce the toggle
+     * is ON it stays ON for every video until the user flips it back.
+     */
+    val subtitleAutoSyncEnabled: Boolean = false,
     val autoAdvance: Boolean = true,
     val keepScreenOn: Boolean = true,
     val backgroundPlayback: Boolean = true,

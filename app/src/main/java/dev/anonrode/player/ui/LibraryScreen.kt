@@ -19,9 +19,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -89,6 +89,7 @@ import coil3.compose.AsyncImage
 import dev.anonrode.player.PlayerActivity
 import dev.anonrode.player.core.model.Series
 import dev.anonrode.player.core.model.Video
+import dev.anonrode.player.core.ui.theme.SkinPalette
 import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 import java.util.Locale
 
@@ -106,6 +107,11 @@ private val ProgressBrush = Brush.horizontalGradient(listOf(Color(0xFF6C63FF), C
 private typealias InProgressItem = dev.anonrode.player.feature.library.LibraryViewModel.InProgress
 private typealias EpisodeItem = dev.anonrode.player.feature.library.LibraryViewModel.EpisodeItem
 private typealias FolderSortMode = dev.anonrode.player.feature.library.FolderSort
+
+/** Top-level destinations the app exposes in its bottom navigation.
+ *  Home and Series are both views of the library (root browse + folders),
+ *  Settings is its own screen — see MainActivity's NavHost. */
+enum class LibraryStartDestination { Home, Series }
 
 /** Bottom navigation tabs. Matches the FOLDERS/HOME/Series/Settings
  *  mockup: Home (library root), Series (jumps to the folders list),
@@ -127,16 +133,24 @@ private fun posterHue(title: String): Float = Math.floorMod(title.hashCode(), 36
 /**
  * Library home screen: brand row + search, continue-watching rail, FOLDERS
  * list with sorting, in-screen folder drill-down (episode list) and live
- * library search, framed by a bottom navigation (Home / Series / Settings).
+ * library search. Bottom navigation (Home / Series / Settings) lives in
+ * MainActivity now — this composable only renders the content area.
+ *
+ * [startDestination] controls the initial scroll: Home = scroll-to-top
+ * (matches the old "navIndex = 0" behaviour), Series = scroll to the
+ * folders section (matches the old "navIndex = 1 → jumpToFolders()").
+ * Both destinations still share the same `LibraryViewModel`, so drill-down
+ * state (open folder, search query, scroll, selection) survives the
+ * Home ↔ Series hop.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     viewModelFactory: androidx.lifecycle.ViewModelProvider.Factory,
     onOpenVideo: (Video) -> Unit,
-    onOpenSettings: () -> Unit = {},
     modifier: Modifier = Modifier,
     loading: Boolean = false,
+    startDestination: LibraryStartDestination = LibraryStartDestination.Home,
 ) {
     val vm: dev.anonrode.player.feature.library.LibraryViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel(factory = viewModelFactory)
@@ -163,19 +177,40 @@ fun LibraryScreen(
     var openFolderPath by rememberSaveable { mutableStateOf<String?>(null) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
 
-    // Bottom-nav selection state: 0=Home (root), 1=Series (jump to
-    // folders), 2=Settings.
-    var navIndex by rememberSaveable { mutableIntStateOf(0) }
-    val listState = rememberLazyListState()
+    // Bottom-nav selection state used to live here as `navIndex`. Now
+    // it belongs to the NavController in MainActivity, so the only scroll
+    // offset we own is the LazyColumn itself. rememberSaveable so
+    // configuration changes (rotation, theme switch, dark/light) and
+    // process-recreate restore the scroll offset — LazyListState.Saver is
+    // the official Compose saver, no custom Saver needed.
+    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
 
-    // Deferred scroll requests: bottom-nav jumps must wait until the browse
-    // LazyColumn is (re)composed with `listState` attached — e.g. the Series
-    // tab clears the search query first, which swaps the list content in the
-    // same frame, so scrolling immediately would hit the outgoing list.
+    // Deferred scroll requests: destination-change jumps must wait until
+    // the browse LazyColumn is (re)composed with `listState` attached —
+    // e.g. switching to Series clears the search query first, which swaps
+    // the list content in the same frame, so scrolling immediately would
+    // hit the outgoing list.
     var scrollRequest by remember { mutableIntStateOf(0) }
     var scrollIndex by remember { mutableIntStateOf(0) }
     LaunchedEffect(scrollRequest) {
         if (scrollRequest > 0) listState.animateScrollToItem(scrollIndex)
+    }
+
+    // Apply the initial scroll for whichever destination this composable
+    // was launched into. Keyed on the destination enum + the loaded
+    // series so we re-evaluate when the library finishes rescanning and
+    // the folder index changes.
+    LaunchedEffect(startDestination, state.series.size) {
+        if (scrollRequest > 0) return@LaunchedEffect
+        when (startDestination) {
+            LibraryStartDestination.Home -> scrollTo(0)
+            // For Series, defer until the folder list is actually
+            // available — otherwise jumpToFolders() scrolls to 0 which
+            // is indistinguishable from Home and the user lands in the
+            // wrong place. The rescan re-fires this effect.
+            LibraryStartDestination.Series ->
+                if (state.series.isNotEmpty()) jumpToFolders()
+        }
     }
 
     val openFolder: Series? =
@@ -275,7 +310,7 @@ fun LibraryScreen(
                     .fillMaxWidth()
                     .background(libBg)
                     .statusBarsPadding()
-                    .padding(horizontal = 18.dp, vertical = 8.dp),
+                    .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapSm),
             ) {
                 if (openFolder != null) {
                     val total = fmtTotalDuration(folderEpisodes.sumOf { it.video.durationMs })
@@ -283,6 +318,7 @@ fun LibraryScreen(
                         if (openFolder.totalEpisodes == 1) "1 video"
                         else "${openFolder.totalEpisodes} videos"
                     FolderBackBar(
+                        palette = palette,
                         name = openFolder.name,
                         subtitle = if (total.isEmpty()) countLabel else "$countLabel · $total",
                         onBack = { openFolderPath = null },
@@ -303,63 +339,25 @@ fun LibraryScreen(
                             fontStyle = FontStyle.Italic,
                             style = MaterialTheme.typography.titleLarge,
                         )
-                        Spacer(Modifier.weight(1f))
-                        IconButton(onClick = onOpenSettings) {
-                            Icon(
-                                Icons.Filled.Settings,
-                                contentDescription = "Settings",
-                                tint = libOnSurface,
-                            )
-                        }
+                        // Settings lives in the bottom nav now, so the
+                        // gear icon is gone from the brand row.
                     }
                     BrandSearchField(
+                        palette = palette,
                         active = searchActive,
                         query = state.query,
-                        libSurface = libSurface,
-                        libSecondary = libSecondary,
-                        libAccent = libAccent,
-                        libText = libOnSurface,
                         onActivate = { searchActive = true },
                         onQueryChange = { vm.setQuery(it) },
                     )
                 }
             }
         },
-        bottomBar = {
-            LibraryBottomNav(
-                libSurface = libSurface,
-                accent = libAccent,
-                selectedIndex = navIndex,
-                onSelect = { idx ->
-                    exitSelectionMode()
-                    searchActive = false
-                    when (idx) {
-                        0 -> {
-                            navIndex = 0
-                            openFolderPath = null
-                            vm.setQuery("")
-                            scrollTo(0)
-                        }
-                        1 -> {
-                            navIndex = 1
-                            openFolderPath = null
-                            vm.setQuery("")
-                            jumpToFolders()
-                        }
-                        // Settings is a separate screen; don't latch the
-                        // tab, so the library keeps its Home/Series highlight
-                        // when the user comes back.
-                        2 -> onOpenSettings()
-                    }
-                },
-            )
-        },
     ) { padding ->
         if (loading || state.loading) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = libAccent)
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(Dimens.gapMd))
                     Text("Scanning library…", color = libSecondary, style = MaterialTheme.typography.bodyMedium)
                 }
             }
@@ -370,11 +368,12 @@ fun LibraryScreen(
             // ── Folder drill-down: episode list for one folder ────────
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(bottom = 16.dp),
+                contentPadding = PaddingValues(bottom = Dimens.gapLg),
             ) {
                 if (selecting) {
                     item(key = "selection-bar") {
                         SelectionActionBar(
+                            palette = palette,
                             count = selected.size,
                             canPlay = selected.isNotEmpty(),
                             onPlay = { playSelectedQueue() },
@@ -385,6 +384,7 @@ fun LibraryScreen(
                 if (folderEpisodes.isEmpty()) {
                     item(key = "folder-empty") {
                         EmptyState(
+                            palette,
                             Icons.Filled.Folder,
                             "No videos in this folder",
                             "The library may still be scanning — come back in a moment.",
@@ -393,6 +393,7 @@ fun LibraryScreen(
                 } else {
                     items(folderEpisodes, key = { "ep-" + it.video.uri }) { ep ->
                         EpisodeRow(
+                            palette = palette,
                             video = ep.video,
                             subtitle = episodeSubtitle(ep),
                             fraction = ep.fraction,
@@ -413,11 +414,12 @@ fun LibraryScreen(
             // ── Search results (live filter over the cached snapshot) ─
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(bottom = 16.dp),
+                contentPadding = PaddingValues(bottom = Dimens.gapLg),
             ) {
                 if (selecting) {
                     item(key = "selection-bar") {
                         SelectionActionBar(
+                            palette = palette,
                             count = selected.size,
                             canPlay = selected.isNotEmpty(),
                             onPlay = { playSelectedQueue() },
@@ -428,6 +430,7 @@ fun LibraryScreen(
                 if (state.searchHits.isEmpty()) {
                     item(key = "search-empty") {
                         EmptyState(
+                            palette,
                             Icons.Filled.Search,
                             "No matches",
                             "Nothing in your library matches “${state.query.trim()}”.",
@@ -435,11 +438,12 @@ fun LibraryScreen(
                     }
                 } else {
                     item(key = "search-header") {
-                        SectionLabel("RESULTS · ${state.searchHits.size}")
+                        SectionLabel(palette, "RESULTS · ${state.searchHits.size}")
                     }
                     items(state.searchHits, key = { "hit-" + it.video.uri }) { hit ->
                         val folderEps = state.episodesByFolder[hit.video.parentPath]
                         EpisodeRow(
+                            palette = palette,
                             video = hit.video,
                             subtitle = if (hit.finished) hit.folderName + " · Watched" else hit.folderName,
                             fraction = hit.fraction,
@@ -463,12 +467,13 @@ fun LibraryScreen(
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 state = listState,
-                contentPadding = PaddingValues(bottom = 16.dp),
+                contentPadding = PaddingValues(bottom = Dimens.gapLg),
             ) {
                 // Selection action bar (multi-select mode)
                 if (selecting) {
                     item(key = "selection-bar") {
                         SelectionActionBar(
+                            palette = palette,
                             count = selected.size,
                             canPlay = selected.isNotEmpty(),
                             onPlay = { playSelectedQueue() },
@@ -479,14 +484,14 @@ fun LibraryScreen(
 
                 // Continue watching
                 if (state.inProgress.isNotEmpty()) {
-                    item(key = "header-continue") { SectionLabel("CONTINUE WATCHING") }
+                    item(key = "header-continue") { SectionLabel(palette, "CONTINUE WATCHING") }
                     item(key = "continue-row") {
                         LazyRow(
-                            contentPadding = PaddingValues(horizontal = 18.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(horizontal = Dimens.gapLg),
+                            horizontalArrangement = Arrangement.spacedBy(Dimens.gapMd),
                         ) {
                             items(state.inProgress, key = { it.video.uri }) { item ->
-                                ContinueCard(item, onClick = { onOpenVideo(item.video) })
+                                ContinueCard(palette, item, onClick = { onOpenVideo(item.video) })
                             }
                         }
                     }
@@ -496,6 +501,7 @@ fun LibraryScreen(
                 if (state.series.isNotEmpty()) {
                     item(key = "folders-header") {
                         FolderSectionHeader(
+                            palette = palette,
                             count = state.series.size,
                             sort = state.sort,
                             onSortSelected = { vm.setSort(it) },
@@ -503,7 +509,8 @@ fun LibraryScreen(
                     }
                     items(state.series, key = { "folder-" + it.folderPath }) { s ->
                         FolderRow(
-                            s,
+                            palette = palette,
+                            s = s,
                             onClick = { openFolderPath = s.folderPath },
                             onPlayAll = { playAllFolder(s) },
                         )
@@ -515,6 +522,7 @@ fun LibraryScreen(
                 if (state.videos.isEmpty() && state.series.isEmpty()) {
                     item(key = "videos-empty") {
                         EmptyState(
+                            palette,
                             Icons.Filled.VideoLibrary,
                             "No videos found",
                             "Video files on this device will show up here.",
@@ -526,24 +534,38 @@ fun LibraryScreen(
     }
 }
 
+/**
+ * App-wide bottom navigation rendered by MainActivity's Scaffold. The
+ * tabs reflect the NavController's current destination so the highlight
+ * is always in sync with the active composable.
+ *
+ *   index 0  →  Home    (library root)
+ *   index 1  →  Series  (library with folders list at top)
+ *   index 2  →  Settings
+ *
+ * The route name is the tab label's lowercased form ("home", "series",
+ * "settings"); the constant [TAB_ROUTES] is the source of truth.
+ */
+val AppTabRoutes = listOf("home", "series", "settings")
+
 @Composable
-private fun LibraryBottomNav(
-    libSurface: Color,
-    accent: Color,
-    selectedIndex: Int,
+fun AppBottomNav(
+    palette: SkinPalette,
+    currentRoute: String?,
     onSelect: (Int) -> Unit,
 ) {
-    NavigationBar(containerColor = libSurface) {
+    NavigationBar(containerColor = palette.surface) {
         bottomTabs.forEachIndexed { index, tab ->
+            val route = AppTabRoutes[index]
             NavigationBarItem(
-                selected = selectedIndex == index,
+                selected = currentRoute == route,
                 onClick = { onSelect(index) },
                 icon = { Icon(tab.icon, contentDescription = tab.label) },
                 label = { Text(tab.label) },
                 colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = accent,
+                    selectedIconColor = palette.accent,
                     selectedTextColor = BrandTextPrimary,
-                    indicatorColor = accent.copy(alpha = 0.18f),
+                    indicatorColor = palette.accent.copy(alpha = 0.18f),
                     unselectedIconColor = BrandTextSecondary,
                     unselectedTextColor = BrandTextSecondary,
                 ),
@@ -554,15 +576,14 @@ private fun LibraryBottomNav(
 
 /** Small caps section label, matching `.continue-t` in the design. */
 @Composable
-private fun SectionLabel(text: String) {
-    val palette = rememberSkinPalette()
+private fun SectionLabel(palette: SkinPalette, text: String) {
     Text(
         text,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
         color = palette.textDim,
         letterSpacing = 0.6.sp,
-        modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 8.dp),
+        modifier = Modifier.padding(start = Dimens.gapLg, end = Dimens.gapLg, top = Dimens.gapLg, bottom = Dimens.gapSm),
     )
 }
 
@@ -570,16 +591,16 @@ private fun SectionLabel(text: String) {
  *  on the right (`.sect` in the design). */
 @Composable
 private fun FolderSectionHeader(
+    palette: SkinPalette,
     count: Int,
     sort: FolderSortMode,
     onSortSelected: (FolderSortMode) -> Unit,
 ) {
-    val palette = rememberSkinPalette()
     var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 18.dp, end = 18.dp, top = 20.dp, bottom = 4.dp),
+            .padding(start = Dimens.gapLg, end = Dimens.gapLg, top = Dimens.gapXl, bottom = Dimens.gapXs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -588,7 +609,7 @@ private fun FolderSectionHeader(
             fontWeight = FontWeight.Bold,
             color = palette.text,
         )
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(Dimens.gapSm))
         Text(
             "· $count",
             style = MaterialTheme.typography.bodySmall,
@@ -602,7 +623,7 @@ private fun FolderSectionHeader(
                 color = palette.accent,
                 modifier = Modifier
                     .clickable { menuOpen = true }
-                    .padding(vertical = 4.dp),
+                    .padding(vertical = Dimens.gapXs),
             )
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 FolderSortMode.entries.forEach { mode ->
@@ -634,14 +655,13 @@ private fun FolderSectionHeader(
  * the folder's episode list; the kebab offers "Play all".
  */
 @Composable
-private fun FolderRow(s: Series, onClick: () -> Unit, onPlayAll: () -> Unit) {
-    val palette = rememberSkinPalette()
+private fun FolderRow(palette: SkinPalette, s: Series, onClick: () -> Unit, onPlayAll: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 10.dp),
+            .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapMd),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Folder icon tile — matches .coll .ic in the design.
@@ -666,7 +686,7 @@ private fun FolderRow(s: Series, onClick: () -> Unit, onPlayAll: () -> Unit) {
                 modifier = Modifier.size(20.dp),
             )
         }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(Dimens.gapMd))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 s.name,
@@ -688,6 +708,9 @@ private fun FolderRow(s: Series, onClick: () -> Unit, onPlayAll: () -> Unit) {
             )
         }
         // Kebab dots — design's `.coll .dots` — with folder actions.
+        // titleMedium size is intentional for the single-glyph "⋮" so it
+        // reads as a button affordance, not as body text — no standard
+        // role fits a 1-glyph button glyph.
         Box {
             Text(
                 "⋮",
@@ -695,7 +718,7 @@ private fun FolderRow(s: Series, onClick: () -> Unit, onPlayAll: () -> Unit) {
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier
                     .clickable { menuOpen = true }
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                    .padding(horizontal = Dimens.gapSm, vertical = Dimens.gapXs),
             )
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
@@ -714,12 +737,12 @@ private fun FolderRow(s: Series, onClick: () -> Unit, onPlayAll: () -> Unit) {
  *  name + stats, and a Play-all button. */
 @Composable
 private fun FolderBackBar(
+    palette: SkinPalette,
     name: String,
     subtitle: String,
     onBack: () -> Unit,
     onPlayAll: () -> Unit,
 ) {
-    val palette = rememberSkinPalette()
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -748,21 +771,21 @@ private fun FolderBackBar(
                 )
             }
         }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(Dimens.gapSm))
         Button(
             onClick = onPlayAll,
             colors = ButtonDefaults.buttonColors(
                 containerColor = palette.accent,
                 contentColor = palette.tabOn,
             ),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            contentPadding = PaddingValues(horizontal = Dimens.gapMd, vertical = Dimens.gapSm),
         ) {
             Icon(
                 Icons.Filled.PlayArrow,
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
             )
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(Dimens.gapXs))
             Text("Play all")
         }
     }
@@ -775,6 +798,7 @@ private fun FolderBackBar(
  */
 @Composable
 private fun EpisodeRow(
+    palette: SkinPalette,
     video: Video,
     subtitle: String,
     fraction: Float,
@@ -784,14 +808,13 @@ private fun EpisodeRow(
     onLongClick: () -> Unit,
     onPlayFromHere: (() -> Unit)?,
 ) {
-    val palette = rememberSkinPalette()
     var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(if (isSelected) palette.accent.copy(alpha = 0.10f) else Color.Transparent)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 18.dp, vertical = 8.dp),
+            .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapSm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -806,15 +829,19 @@ private fun EpisodeRow(
                 videoUri = video.uri,
             )
             if (video.durationMs > 0) {
+                // 9.5sp is an intentional micro-label: tighter than
+                // labelSmall (11sp) so the duration badge sits visually
+                // *inside* the 54dp poster thumbnail without colliding
+                // with the title row. Not a standard M3 role.
                 Text(
                     fmtDuration(video.durationMs),
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
                     color = Color.White,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 5.dp, bottom = 6.dp)
+                        .padding(end = Dimens.gapSm, bottom = Dimens.gapSm)
                         .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(3.dp))
-                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                        .padding(horizontal = Dimens.gapXs, vertical = 2.dp),
                 )
             }
             if (fraction > 0f) {
@@ -829,7 +856,7 @@ private fun EpisodeRow(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(4.dp)
+                        .padding(Dimens.gapXs)
                         .size(18.dp)
                         .background(
                             if (isSelected) palette.accent else Color.Black.copy(alpha = 0.55f),
@@ -848,7 +875,7 @@ private fun EpisodeRow(
                 }
             }
         }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(Dimens.gapMd))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 video.title,
@@ -903,12 +930,9 @@ private fun EpisodeRow(
  *  the library live via [onQueryChange]. */
 @Composable
 private fun BrandSearchField(
+    palette: SkinPalette,
     active: Boolean,
     query: String,
-    libSurface: Color,
-    libSecondary: Color,
-    libAccent: Color,
-    libText: Color,
     onActivate: () -> Unit,
     onQueryChange: (String) -> Unit,
 ) {
@@ -920,34 +944,34 @@ private fun BrandSearchField(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 10.dp)
-            .background(libSurface, RoundedCornerShape(12.dp))
+            .padding(top = Dimens.gapMd)
+            .background(palette.surface, RoundedCornerShape(12.dp))
             .then(if (!active) Modifier.clickable(onClick = onActivate) else Modifier)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = Dimens.gapMd, vertical = Dimens.gapMd),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             Icons.Filled.Search,
             contentDescription = null,
-            tint = if (active) libAccent else libSecondary,
+            tint = if (active) palette.accent else palette.textDim,
             modifier = Modifier.size(16.dp),
         )
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(Dimens.gapSm))
         if (active) {
             Box(modifier = Modifier.weight(1f)) {
                 if (query.isEmpty()) {
                     Text(
                         "Search episodes / series…",
                         style = MaterialTheme.typography.bodySmall,
-                        color = libSecondary,
+                        color = palette.textDim,
                     )
                 }
                 BasicTextField(
                     value = query,
                     onValueChange = onQueryChange,
                     singleLine = true,
-                    textStyle = MaterialTheme.typography.bodySmall.copy(color = libText),
-                    cursorBrush = SolidColor(libAccent),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = palette.text),
+                    cursorBrush = SolidColor(palette.accent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
                     modifier = Modifier
@@ -963,7 +987,7 @@ private fun BrandSearchField(
                     Icon(
                         Icons.Filled.Close,
                         contentDescription = "Clear search",
-                        tint = libSecondary,
+                        tint = palette.textDim,
                         modifier = Modifier.size(14.dp),
                     )
                 }
@@ -972,7 +996,7 @@ private fun BrandSearchField(
             Text(
                 "Search episodes / series…",
                 style = MaterialTheme.typography.bodySmall,
-                color = libSecondary,
+                color = palette.textDim,
             )
         }
     }
@@ -1037,8 +1061,7 @@ private fun GradientProgressBar(fraction: Float, modifier: Modifier = Modifier) 
 }
 
 @Composable
-private fun ContinueCard(item: InProgressItem, onClick: () -> Unit) {
-    val palette = rememberSkinPalette()
+private fun ContinueCard(palette: SkinPalette, item: InProgressItem, onClick: () -> Unit) {
     Card(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
@@ -1062,7 +1085,7 @@ private fun ContinueCard(item: InProgressItem, onClick: () -> Unit) {
                 )
             }
         }
-        Column(modifier = Modifier.padding(10.dp)) {
+        Column(modifier = Modifier.padding(Dimens.gapMd)) {
             Text(
                 item.video.title,
                 maxLines = 1,
@@ -1078,7 +1101,7 @@ private fun ContinueCard(item: InProgressItem, onClick: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.textDim,
             )
-            GradientProgressBar(item.fraction, modifier = Modifier.padding(top = 8.dp))
+            GradientProgressBar(item.fraction, modifier = Modifier.padding(top = Dimens.gapSm))
         }
     }
 }
@@ -1086,18 +1109,18 @@ private fun ContinueCard(item: InProgressItem, onClick: () -> Unit) {
 /** Multi-select action bar: selection count plus play / cancel actions. */
 @Composable
 private fun SelectionActionBar(
+    palette: SkinPalette,
     count: Int,
     canPlay: Boolean,
     onPlay: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    val palette = rememberSkinPalette()
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 18.dp, vertical = 6.dp)
+            .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapSm)
             .background(palette.surface, RoundedCornerShape(16.dp))
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = Dimens.gapMd, vertical = Dimens.gapSm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -1114,14 +1137,14 @@ private fun SelectionActionBar(
                 containerColor = palette.accent,
                 contentColor = BrandTextPrimary,
             ),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            contentPadding = PaddingValues(horizontal = Dimens.gapMd, vertical = Dimens.gapSm),
         ) {
             Icon(
                 Icons.Filled.PlayArrow,
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
             )
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(Dimens.gapXs))
             Text("Play")
         }
         IconButton(onClick = onCancel) {
@@ -1130,38 +1153,50 @@ private fun SelectionActionBar(
     }
 }
 
-/** Intentional-looking empty state: dim icon circle + title + hint. */
+/** Intentional-looking empty state: dim icon disc + headline + body hint.
+ *  Used by the library screen for: empty library, no search matches, and
+ *  the folder drill-down "no videos in this folder" case. Optional [action]
+ *  slot renders a CTA button below the hint. */
 @Composable
-private fun EmptyState(icon: ImageVector, title: String, hint: String) {
-    val palette = rememberSkinPalette()
+private fun EmptyState(
+    palette: SkinPalette,
+    icon: ImageVector,
+    title: String,
+    hint: String,
+    action: (@Composable () -> Unit)? = null,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 32.dp, vertical = 48.dp),
+            .padding(horizontal = Dimens.gapXxl, vertical = Dimens.gapXxxl),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
             modifier = Modifier
-                .size(56.dp)
+                .size(64.dp)
                 .background(palette.surface, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = null, tint = palette.iconDim, modifier = Modifier.size(24.dp))
+            Icon(icon, contentDescription = null, tint = palette.iconDim, modifier = Modifier.size(28.dp))
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(Dimens.gapLg))
         Text(
             title,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.titleMedium,
             color = palette.text,
+            textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Dimens.gapXs))
         Text(
             hint,
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodyMedium,
             color = palette.textDim,
             textAlign = TextAlign.Center,
         )
+        if (action != null) {
+            Spacer(Modifier.height(Dimens.gapLg))
+            action()
+        }
     }
 }
 

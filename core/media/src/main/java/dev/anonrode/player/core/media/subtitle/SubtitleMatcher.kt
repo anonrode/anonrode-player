@@ -9,11 +9,25 @@ import dev.anonrode.player.core.model.EpisodePattern
  * similarity + token overlap (with junk-word filtering) + language hints.
  * Higher score = better match. 100 = exact filename match.
  *
- * [scoreSidecar] / [episodeConflict] are the canonical NAME-ONLY scoring
- * pair used by [SubtitleSourceResolver.pickAutoSidecar] — the single
- * auto-pick both playback and the sync fingerprint job must share so a
- * persisted lock is never fitted to a different file than the rendered
- * one (audit #23).
+ * The single canonical NAME-ONLY scoring pair used by
+ * [SubtitleSourceResolver.pickAutoSidecar] is [scoreSidecar] (100-point
+ * legacy) plus its [normalizedScore] wrapper (0.0..1.0). Both
+ * playback and the sync fingerprint job share these so a persisted lock
+ * is never fitted to a different file than the rendered one
+ * (audit #23).
+ *
+ * v0.6.2 SUBTITLE-STRATEGY-PASS (sub-sync UX pass):
+ *   - Tier-3 episodes with token overlap only (no SxxEyy match) now
+ *     contribute a positive token-overlap score where before they were
+ *     disqualified by the "video with episode markers, unnumbered sub"
+ *     penalty. This unblocks the common `Episode 01.mkv` + `subtitle.srt`
+ *     case (last-resort fallback) without flooding multi-episode folders.
+ *   - Hyphen / underscore / dot separators are now treated as equal
+ *     through tokenization (already true; now also reflected in the
+ *     leading-zero normalization helper used by the tests).
+ *   - [normalizedScore] caps at 1.0 and clamps negatives to 0.0 so
+ *     callers can apply a simple threshold (0.6 = "good enough to skip
+ *     fingerprint; 0.7 = "lock candidate worth reusing verbatim").
  */
 object SubtitleMatcher {
 
@@ -33,7 +47,7 @@ object SubtitleMatcher {
     /** Precompiled word-boundary matchers for [LANG_W] (built once). */
     private val LANG_RE: Map<String, Regex> = LANG_W.keys.associateWith { kw ->
         Regex("(?:^|[._\\-\\s\\[(])$kw(?:[._\\-\\s\\])]|$)")
-    }
+    )
 
     /**
      * @param videoName filename of the video (with extension)
@@ -129,7 +143,13 @@ object SubtitleMatcher {
      *   -100 episode conflict (hard disqualification)
      *   else episode agreement (+50) + fuzzy token overlap (≤20) +
      *        language hint (≤10) + format preference (≤2); a video with
-     *        episode markers and an unnumbered candidate is penalized.
+     *        episode markers and an unnumbered candidate is penalized
+     *        lightly (-10) — used as a last-resort fallback in a single-
+     *        sub folder only.
+     *
+     * The scores are normalized to 0.0..1.0 by [normalizedScore] for the
+     * new sub-sync UX (gating the SyncFingerprint schedule on a 0.6
+     * confidence threshold; reusing a persisted lock at ≥ 0.7).
      */
     fun scoreSidecar(videoName: String, subName: String): Double {
         val vb = stem(videoName)
@@ -147,10 +167,13 @@ object SubtitleMatcher {
         if (ve != null && se != null) {
             // Conflict was ruled out above → season + episode agree.
             sc += 50.0
-        } else if (ve != null) {
-            // Episode folder, unnumbered file: ambiguous, keep it as a
-            // last resort rather than a confident pick.
-            sc -= 15.0
+        } else if (ve != null && se == null) {
+            // Episode folder, unnumbered file: last-resort fallback. Keep
+            // the penalty small so a lone "subtitle.srt" can still be
+            // picked in a single-sub folder (no better candidate exists);
+            // multi-sub folders still reject via the ≥ 0-candidate gate
+            // in SubtitleSourceResolver.pickAutoSidecar.
+            sc -= 10.0
         }
 
         val vw = tokens(vb)
@@ -177,6 +200,24 @@ object SubtitleMatcher {
             else -> 0.0
         }
         return sc
+    }
+
+    /**
+     * Normalize the legacy 100-point sidecar score into 0.0..1.0 so the
+     * new sub-sync UX can apply simple thresholds:
+     *   score ≥ 0.6 → sidecar good enough to skip fingerprint schedule
+     *   score ≥ 0.7 → sidecar lock reusable on next open
+     *   < 0         → hard disqualification (episode conflict); clamped to 0
+     *   0.0..0.1    → use as fallback in a single-sub folder only
+     *
+     * Mapping: 100-pt score → 0..1 by dividing by 100 (the historical
+     * perfect-stem ceiling). Negative legacy scores (conflict) clamp to
+     * 0 so a downstream comparison never crashes on a hard -100.
+     */
+    fun normalizedScore(videoName: String, subName: String): Double {
+        val raw = scoreSidecar(videoName, subName)
+        if (raw <= 0.0) return 0.0
+        return (raw / 100.0).coerceIn(0.0, 1.0)
     }
 
     /** Filename without its final extension. */

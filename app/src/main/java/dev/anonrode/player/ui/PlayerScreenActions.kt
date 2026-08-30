@@ -37,13 +37,16 @@ import kotlinx.coroutines.launch
 
 /**
  * The player screen's action surface — what used to be ~16 local functions
- * inside one giant composable. Recreated on EVERY recomposition of
- * PlayerScreen (deliberately NOT remembered): it snapshots the values that
- * change between compositions ([livePlayer], [isRebuildingDecoder], the
- * host callbacks) exactly like the pre-split local functions did, while the
- * remembered state holders keep stable identities. Gesture/pointer blocks
- * that capture an instance therefore see the same freshness/staleness
- * semantics as before the split.
+ * inside one giant composable. The construction site in PlayerScreen.kt
+ * now wraps this in remember(livePlayer, engine, ui, hud, sleep, gestures,
+ * quick, captureScope), giving the four pointerInput blocks in
+ * PlayerScreenGestures.kt a stable actions reference across control-overlay
+ * recompositions — so they don't relaunch on every 8–100 ms render-loop
+ * tick. Freshness is preserved: this class captures [livePlayer] and the
+ * holder references, and method bodies read `ui.foo.value` / `hud.showHud()`
+ * live off those holders — the same live-read semantics as before. Only the
+ * construction identity changes; field types and method signatures are
+ * untouched (intentionally — see the perf audit).
  */
 @UnstableApi
 internal class PlayerScreenActions(
@@ -72,6 +75,15 @@ internal class PlayerScreenActions(
     private val onOpenAudioTrackPicker: () -> Unit,
     private val onRebuildDecoder: (Boolean) -> Int,
     private val onNudgeSubtitle: (Long) -> Unit,
+    private val onEnterPip: () -> Unit,
+    /**
+     * v0.6.2 sub-sync UX pass: DataStore write for the user-facing sync
+     * toggle. The action also mirrors the new state into [quick.subSyncEnabled]
+     * so the toggle's icon flips instantly (DataStore is async).
+     */
+    private val onSetSubSyncEnabled: (Boolean) -> Unit,
+    /** "Resync now" — long-press on the toggle. */
+    private val onResyncNow: () -> Unit,
 ) {
 
     fun showHud(icon: ImageVector, text: String) =
@@ -188,12 +200,71 @@ internal class PlayerScreenActions(
         showTransientToast(if (quick.portraitForced.value) "Portrait" else "Auto-rotate")
     }
 
+    /** Step the 3-state rotation mode forward (sensor → landscape →
+     *  portrait → sensor). The activity orientation is reapplied by
+     *  RotationLockEffect, which is keyed on this state. */
+    fun cycleRotateMode() {
+        val next = quick.rotateMode.value.next()
+        applyRotateMode(next)
+    }
+
+    /** Jump to a specific rotation mode (called by the long-press menu). */
+    fun setRotateMode(mode: RotateMode) {
+        applyRotateMode(mode)
+    }
+
+    private fun applyRotateMode(mode: RotateMode) {
+        quick.rotateMode.value = mode
+        // Keep the legacy portraitForced boolean in sync so any older
+        // code paths that still read it (gesture handlers, overflow menu
+        // labels) see the right value.
+        quick.portraitForced.value = mode == RotateMode.PORTRAIT
+        AppLog.d("PLAYER", "rotate mode=" + mode)
+        showTransientToast(
+            when (mode) {
+                RotateMode.SENSOR -> "Auto-rotate"
+                RotateMode.LANDSCAPE -> "Landscape locked"
+                RotateMode.PORTRAIT -> "Portrait locked"
+            }
+        )
+    }
+
     fun nudgeSubtitle(deltaMs: Long) {
         onNudgeSubtitle(deltaMs)
         showTransientToast(
             "Subtitle " + (if (deltaMs > 0) "+" else "") +
                 "%.1fs".format(deltaMs / 1000f)
         )
+    }
+
+    /**
+     * v0.6.2 sub-sync UX pass. Mirror the new toggle state into
+     * [quick.subSyncEnabled] (instant icon flip) then persist via the
+     * host callback (DataStore + fingerprint job enqueue / cancel). The
+     * host callback is responsible for side effects (cancel pending
+     * fingerprint jobs when toggling OFF, etc.).
+     */
+    fun setSubSyncEnabled(enabled: Boolean) {
+        quick.subSyncEnabled.value = enabled
+        onSetSubSyncEnabled(enabled)
+        AppLog.d("PLAYER", "sub-sync toggle=$enabled")
+        showTransientToast(if (enabled) "Sub sync on" else "Sub sync off")
+    }
+
+    /**
+     * "Resync now" — fires the host callback that triggers an immediate
+     * fingerprint / calibration pass. Always available, regardless of the
+     * toggle state, so a user can force a calibration without first
+     * flipping the toggle ON.
+     */
+    fun resyncNow() {
+        onResyncNow()
+    }
+
+    /** Enter PiP (host hook). Bottom-bar PiP chip path. */
+    fun enterPip() {
+        view.haptic()
+        onEnterPip()
     }
 
     fun pickAudioTrack() {

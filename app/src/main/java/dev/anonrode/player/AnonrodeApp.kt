@@ -6,11 +6,17 @@ import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.video.VideoFrameDecoder
 import dev.anonrode.player.core.database.MediaDatabase
+import dev.anonrode.player.core.datastore.playerSettingsDataStore
 import dev.anonrode.player.core.media.library.MediaScanner
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.state.MediaStateStore
 import dev.anonrode.player.feature.player.PlaybackEngine
 import dev.anonrode.player.feature.player.PlayerServiceHolder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /** Manual DI container — replaced by the UI redesign later if wanted. */
 class AnonrodeApp : Application() {
@@ -21,6 +27,13 @@ class AnonrodeApp : Application() {
         private set
     lateinit var engine: PlaybackEngine
         private set
+
+    /**
+     * Process-scoped background scope for fire-and-forget startup work
+     * (DataStore pre-warm, etc.) that must not block the main thread but
+     * also must not be cancelled by an activity tear-down.
+     */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** True when [onCreate] init threw; MainActivity shows the crash
      *  report dialog instead of touching the half-built DI container. */
@@ -71,6 +84,14 @@ class AnonrodeApp : Application() {
                 .build()
         }
         scanner = MediaScanner(this)
+        // v0.6.2 incremental pass: seed the in-memory cache from the disk
+        // snapshot BEFORE setContent runs. This is synchronous (a JSON read
+        // of ~100KB on the calling thread) and is the entire reason the
+        // first frame of MainActivity already shows the library rather than
+        // a blank grid waiting for the MediaStore query to finish. The
+        // MediaStore scan still happens in the background via
+        // scanner.observeLibrary(); the disk snapshot is just the head start.
+        scanner.loadFromDisk()
         stateStore = MediaStateStore(MediaDatabase.get(this).mediaStateDao())
 
         engine = PlaybackEngine(
@@ -93,6 +114,19 @@ class AnonrodeApp : Application() {
         )
         PlayerServiceHolder.engine = engine
         PlayerServiceHolder.stateStore = stateStore
+
+        // Pre-warm the PlayerSettings DataStore so PlayerActivity.onCreate's
+        // `data.first()` call (keepScreenOn, autoAdvance) hits the in-memory
+        // cache instead of paying the first-time JSON deserialize on Main.
+        // Failure here is harmless — the next call will retry.
+        appScope.launch {
+            try {
+                playerSettingsDataStore.data.first()
+                AppLog.d("APP", "playerSettingsDataStore pre-warm ok")
+            } catch (t: Throwable) {
+                AppLog.e("APP", "playerSettingsDataStore pre-warm failed", t)
+            }
+        }
     }
 
     companion object {

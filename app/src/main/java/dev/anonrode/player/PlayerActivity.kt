@@ -71,6 +71,7 @@ import kotlin.math.roundToLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -108,6 +109,30 @@ class PlayerActivity : ComponentActivity() {
             .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_LIVE_VIDEO)
             .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_REMOTE_PLAYBACK)
             .build()
+
+        // Bundle keys for onSaveInstanceState / onRestoreInstanceState.
+        // Centralised so a typo can't silently drop a field across the
+        // save/restore round-trip; names are stable across versions.
+        private const val KEY_SETTINGS_OPEN = "pa.settingsOpen"
+        private const val KEY_PIP_MODE = "pa.pipMode"
+        private const val KEY_IS_CALIBRATING = "pa.isCalibrating"
+        private const val KEY_PLAYBACK_ERROR = "pa.playbackError"
+        private const val KEY_IS_REBUILDING_DECODER = "pa.isRebuildingDecoder"
+        private const val KEY_AB_START_MS = "pa.abStartMs"
+        private const val KEY_AB_END_MS = "pa.abEndMs"
+        private const val KEY_NEXT_COUNTDOWN_SEC = "pa.nextCountdownSec"
+        private const val KEY_PENDING_NEXT_URI = "pa.pendingNextUri"
+        private const val KEY_PENDING_NEXT_TITLE = "pa.pendingNextTitle"
+        private const val KEY_HOLD_AUTO_ADVANCE_ONCE = "pa.holdAutoAdvanceOnce"
+        private const val KEY_SUBTITLE_CHOICE = "pa.subtitleChoice"
+        private const val KEY_MANUAL_NUDGE_MS = "pa.manualNudgeMs"
+        private const val KEY_SESSION_SPEED = "pa.sessionSpeed"
+        private const val KEY_SAVED_ZOOM_IDX = "pa.savedZoomIdx"
+        private const val KEY_CURRENT_URI_STR = "pa.currentUriStr"
+        private const val KEY_CURRENT_VIDEO_PATH = "pa.currentVideoPath"
+        private const val KEY_EXPLICIT_QUEUE_URIS = "pa.explicitQueueUris"
+        private const val KEY_PENDING_AUDIO_TRACK_IDX = "pa.pendingAudioTrackIdx"
+        private const val KEY_SWITCHING = "pa.switching"
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -163,6 +188,38 @@ class PlayerActivity : ComponentActivity() {
 
     /** Last cue list handed to [restartRenderLoop]; [onStart] resumes from it. */
     private var lastCues: List<SubtitleCue> = emptyList()
+
+    /**
+     * v0.6.2 sub-sync UX pass: deferred sidecar parse. Video plays first
+     * with empty cues; the sidecar parse is scheduled ~200 ms after
+     * playback starts so the user sees the first frame instantly instead
+     * of waiting on a multi-MB sidecar parse. When the cues land, we
+     * restart the render loop with them — the binary-search findCue
+     * gracefully handles the empty-cues window.
+     */
+    private var deferredSidecarJob: Job? = null
+
+    /**
+     * Threshold (0.0..1.0, normalized via
+     * [dev.anonrode.player.core.media.subtitle.SubtitleMatcher.normalizedScore])
+     * above which an auto-picked sidecar is "good enough" that we skip
+     * scheduling a background fingerprint for the video. The legacy
+     * audit-#23 gate fired only when there was no lock at all; this new
+     * gate additionally covers the case where the sidecar match is
+     * already high-confidence (≥ 0.6) — fingerprinting would just churn
+     * CPU without changing the result.
+     */
+    private val sidecarConfidenceSkipThreshold = 0.6
+
+    /**
+     * Threshold (0.0..1.0) above which an existing persisted lock is
+     * reused verbatim on next open. The SyncOrchestrator publishes the
+     * recall on the persisted lock (see MediaStateStore.updateAutoSync
+     * caller in SyncFingerprintJob); if recall ≥ this value we skip
+     * fingerprinting and reuse. Below this, fingerprint re-runs (when
+     * the user toggle is ON) so a poor prior lock gets refined.
+     */
+    private val persistedLockRecallReuseThreshold = 0.7
 
     /** True while the in-player settings screen is on top of the player. */
     private var settingsOpen by mutableStateOf(false)
@@ -492,6 +549,13 @@ class PlayerActivity : ComponentActivity() {
                             onOpenAudioTrackPicker = { requestOpenAudioTrackPicker() },
                             onOpenSubStyle = { subStyleSheetOpen = true },
                             onOpenSubtitlePicker = { subtitlePickerOpen = true },
+                            // v0.6.2 sub-sync UX pass: sync toggle callbacks.
+                            // The toggle's icon flips instantly via
+                            // PlayerScreenActions; these are the persistence
+                            // and side-effect callbacks (engine gate, fingerprint
+                            // job cancel on OFF, "resync now" force-schedule).
+                            onSetSubSyncEnabled = { enabled -> onSetSubSyncEnabled(enabled) },
+                            onResyncNow = { onResyncNow() },
                             castRouteName = castRouteName,
                             subtitleStyle = subStyle,
                             onSubtitleStyleChanged = { applySubtitleStyle(it) },
@@ -733,6 +797,9 @@ class PlayerActivity : ComponentActivity() {
         openGeneration++
         val gen = openGeneration
         currentUriStr = uriStr
+        // Kick off the MediaStore aspect lookup off the main thread so the
+        // next PiP enter has a cached (w,h) and never blocks on a query.
+        refreshPipAspectAsync(uriStr)
 
         // Fresh UI state for the new media item.
         cueText = null
@@ -754,23 +821,48 @@ class PlayerActivity : ComponentActivity() {
                 // index out of bounds.
                 val zoomIdx = ((state?.videoScale ?: 1f) - 1f).toInt().coerceIn(0, 4)
                 // Subtitle source: the picker's persisted choice wins;
-                // empty choice = legacy auto-pick of the best sidecar.
+                // empty choice = MKV embedded fast-path, else auto-pick.
                 val choice = state?.subtitleChoice.orEmpty()
                 val videoPath = resolveVideoPath(uriStr)
                 // resolveVideoPath blocks (not cancellable) — a newer open
                 // may have landed while it ran; don't publish stale state.
                 if (gen != openGeneration) return@launch
                 currentVideoPath = videoPath
-                val parsed = SubtitleSourceResolver.resolveCues(
-                    applicationContext, uriStr, videoPath, choice,
-                )
+                // v0.6.2 SUB-SYNC UX PASS — DEFERRED SIDECAR PARSE.
+                // The sidecar parse used to block openVideo on Dispatchers.IO
+                // before commit, so a multi-MB sub file delayed first-frame.
+                // New flow: video plays first with empty cues; the sidecar
+                // parse is scheduled ~200ms after playback starts so the user
+                // sees the first frame instantly. The binary-search findCue
+                // gracefully handles the empty-cues window (returns null
+                // until cues land) and the render loop restarts with the
+                // late cues via [restartRenderLoop].
+                //
+                // Embedded tracks resolve synchronously (they're small
+                // metadata reads on MediaExtractor) so we keep the sync path
+                // for that case — only the I/O-heavy sidecar parse is
+                // deferred.
+                val sortedCues: List<SubtitleCue>
+                val resolvedSource: String
+                if (choice.startsWith("embedded:") || choice.startsWith("sidecar:") ||
+                    choice.startsWith("online:") || choice == "none") {
+                    val parsed = SubtitleSourceResolver.resolveCues(
+                        applicationContext, uriStr, videoPath, choice,
+                    )
+                    sortedCues = parsed.sortedBy { it.start }
+                    resolvedSource = if (choice.isEmpty()) "auto-embedded" else choice
+                } else {
+                    // AUTO path with no embedded fast-path hit: defer the
+                    // sidecar parse. Empty cues for now; they land ~200ms
+                    // after commit via [scheduleDeferredSidecarParse].
+                    sortedCues = emptyList()
+                    resolvedSource = "auto-deferred"
+                }
                 AppLog.d(
                     "PLAY",
-                    "subtitle choice='" + choice.ifEmpty { "auto" } +
-                        "' parsed " + parsed.size + " cues"
+                    "subtitle source='" + resolvedSource +
+                        "' committed " + sortedCues.size + " cues"
                 )
-                // findCue binary-searches by start time, so cues must be ordered.
-                val sortedCues = parsed.sortedBy { it.start }
                 val manual = state?.subtitleDelayMs ?: 0L
                 val auto = state?.autoSyncOffsetMs ?: 0L
                 val autoSpeed = state?.autoSyncSpeedFactor ?: 1f
@@ -778,13 +870,38 @@ class PlayerActivity : ComponentActivity() {
                 if (gen != openGeneration) return@launch
                 piecewiseSegments = parsePiecewise(state?.autoSyncPiecewise ?: "")
 
-                // Background fingerprint: produce the persisted (alpha, beta)
-                // lock used on the NEXT play. The job dedupes by uri and
-                // skips internally when a lock already exists, so only
-                // schedule when there is nothing stored yet. Gated by the
-                // auto-sync setting: off means the user wants raw timing.
-                if (currentSettings.autoSyncEnabled &&
-                    choice != "none" && parsed.isNotEmpty() && auto == 0L && autoSpeed == 1f) {
+                // Policy A (v0.6.2 sub-sync UX pass): gate the background
+                // fingerprint schedule on three signals.
+                //   1. User toggle [subtitleAutoSyncEnabled] = ON
+                //   2. Sidecar is not already high-confidence (score ≥
+                //      [sidecarConfidenceSkipThreshold] — fingerprinting
+                //      a high-confidence match is wasted CPU)
+                //   3. No persisted lock exists (auto == 0L &&
+                //      autoSpeed == 1f). A persisted lock is reused
+                //      verbatim on the next open — fingerprinting again
+                //      would churn CPU without changing playback timing.
+                // The legacy autoSyncEnabled gate was retired in favor of
+                // the explicit user toggle (default OFF). Legacy users keep
+                // their behaviour because [subtitleAutoSyncEnabled] defaults
+                // to false, matching v0.6.2's spec; the legacy field is
+                // still read by SyncFingerprintJob for the runtime check.
+                val userToggleOn = currentSettings.subtitleAutoSyncEnabled
+                val sidecarHighConfidence = scoreAutoSidecarIfAny(uriStr, videoPath) >=
+                    sidecarConfidenceSkipThreshold
+                val noPersistedLock = auto == 0L && autoSpeed == 1f
+                val shouldScheduleFingerprint = userToggleOn &&
+                    !sidecarHighConfidence &&
+                    noPersistedLock &&
+                    choice != "none" &&
+                    sortedCues.isNotEmpty()
+                if (shouldScheduleFingerprint) {
+                    AppLog.d(
+                        "PLAY",
+                        "scheduling fingerprint: toggleOn=$userToggleOn " +
+                            "sidecarScore>=$sidecarConfidenceSkipThreshold=" +
+                            sidecarHighConfidence +
+                            " noLock=$noPersistedLock"
+                    )
                     SyncFingerprint.schedule(applicationContext, uriStr)
                 }
 
@@ -939,9 +1056,23 @@ class PlayerActivity : ComponentActivity() {
                 MediaItem.fromUri(pending.uriStr), pending.uriStr, pending.cues,
                 pending.manual, pending.auto, pending.autoSpeed,
                 resume = resume,
-                syncEnabled = currentSettings.autoSyncEnabled,
+                // v0.6.2 sub-sync UX pass: live re-lock is now gated by
+                // [subtitleAutoSyncEnabled] (user toggle, default OFF).
+                // The legacy autoSyncEnabled kept its v0.6.1 default-true
+                // semantics for any code paths that still read it, but
+                // the engine itself only needs the new field.
+                syncEnabled = currentSettings.subtitleAutoSyncEnabled,
                 savedPositionMs = savedPosMs,
             )
+            // v0.6.2: also apply the new toggle to the audio processor
+            // directly so the live re-lock is gated even before
+            // engine.play's syncEnabled reaches it.
+            engine.setSubSyncEnabled(currentSettings.subtitleAutoSyncEnabled)
+            // v0.6.2: deferred sidecar parse for the AUTO path — video
+            // plays first with empty cues, cues land ~200ms later.
+            if (sortedCuesWasDeferred(pending.uriStr, pending.cues)) {
+                scheduleDeferredSidecarParse(pending.uriStr, currentVideoPath)
+            }
             // Belt-and-braces: skip publishing state if a newer open landed.
             if (pending.gen != openGeneration) return@launch
             // Fully-watched episodes restart from the top instead of
@@ -1085,35 +1216,71 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /**
+     * Cached MediaStore-derived (w,h) pair for PiP aspect lookup. Populated
+     * by [refreshPipAspectAsync] on a background dispatcher; read by
+     * [pipAspect] so the fast path stays synchronous and never blocks the
+     * main thread on a contentResolver.query.
+     */
+    private var pipAspectCacheW by mutableIntStateOf(0)
+    private var pipAspectCacheH by mutableIntStateOf(0)
+
+    /**
+     * Kick off the MediaStore aspect lookup off the main thread. The query
+     * is wrapped in try/catch — the path may not exist on some emulators
+     * and a failure here must never block playback or PiP entry.
+     */
+    private fun refreshPipAspectAsync(uriStr: String) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            var w = 0
+            var h = 0
+            try {
+                contentResolver.query(
+                    Uri.parse(uriStr),
+                    arrayOf(
+                        android.provider.MediaStore.Video.Media.WIDTH,
+                        android.provider.MediaStore.Video.Media.HEIGHT,
+                    ),
+                    null, null, null,
+                )?.use { c ->
+                    if (c.moveToFirst()) {
+                        w = c.getInt(0)
+                        h = c.getInt(1)
+                    }
+                }
+            } catch (e: Exception) {
+                AppLog.e("PIP", "aspect lookup failed", e)
+            }
+            if (w > 0 && h > 0) {
+                // Snapshot writes — safe from any thread (Compose routes
+                // them through the main looper).
+                pipAspectCacheW = w
+                pipAspectCacheH = h
+            }
+        }
+    }
+
+    /**
      * PiP aspect ratio from the real video size, clamped to Android's
      * allowed [0.418, 2.39] range. Player videoSize first, MediaStore
-     * metadata for [currentUriStr] second; 16:9 fallback when unknown.
+     * cache (populated by [refreshPipAspectAsync]) second, 16:9 fallback
+     * when unknown. The actual contentResolver.query is always off the
+     * main thread so PiP entry never blocks on disk.
      */
     private fun pipAspect(): Rational {
         val size = AnonrodeApp.get(this).engine.player.videoSize
         var w = size.width
         var h = size.height
+        // Player hasn't reported a size yet — fall back to the cached
+        // MediaStore result (populated by [refreshPipAspectAsync] off
+        // the main thread); 16:9 if we don't have that either.
         if (w <= 0 || h <= 0) {
-            // Player hasn't reported a size yet — try MediaStore metadata.
-            currentUriStr?.let { uriStr ->
-                try {
-                    contentResolver.query(
-                        Uri.parse(uriStr),
-                        arrayOf(android.provider.MediaStore.Video.Media.WIDTH,
-                            android.provider.MediaStore.Video.Media.HEIGHT),
-                        null, null, null,
-                    )?.use { c ->
-                        if (c.moveToFirst()) {
-                            w = c.getInt(0)
-                            h = c.getInt(1)
-                        }
-                    }
-                } catch (e: Exception) {
-                    AppLog.e("PIP", "aspect lookup failed", e)
-                }
+            if (pipAspectCacheW > 0 && pipAspectCacheH > 0) {
+                w = pipAspectCacheW
+                h = pipAspectCacheH
+            } else {
+                return Rational(16, 9)
             }
         }
-        if (w <= 0 || h <= 0) return Rational(16, 9)
         val ratio = w.toDouble() / h.toDouble()
         return when {
             ratio < 0.418 -> Rational(418, 1000)
@@ -1158,7 +1325,13 @@ class PlayerActivity : ComponentActivity() {
         } finally {
             // Fallback only: STATE_READY in [playerEventListener] normally
             // clears the flag sooner; this bounds the never-ready case.
-            handler.postDelayed({ isRebuildingDecoder = false }, 800L)
+            // Use lifecycleScope (not the Handler) so a configuration
+            // change that recreates the activity cancels the stale delay
+            // instead of letting it fire on a dead instance.
+            lifecycleScope.launch {
+                delay(800L)
+                isRebuildingDecoder = false
+            }
         }
     }
 
@@ -1543,6 +1716,225 @@ class PlayerActivity : ComponentActivity() {
             AppLog.e("SUB", "path resolution failed", e)
             null
         }
+    }
+
+    /**
+     * v0.6.2 sub-sync UX pass: best-effort normalized score for the
+     * auto-pick candidate. Returns 0.0 when:
+     *   - the video path is unresolvable (SAF / network URI),
+     *   - the picker finds no sidecar,
+     *   - the picked sidecar's score is non-positive (episode conflict
+     *     or similar).
+     * Reading the sidecar list to score by filename is cheap (one
+     * listFiles call), and avoids the policy-A "schedule fingerprint on
+     * a perfect-stem sidecar" trap.
+     */
+    private fun scoreAutoSidecarIfAny(uriStr: String, videoPath: String?): Double {
+        if (videoPath == null) return 0.0
+        val videoName = videoPath.substringAfterLast('/')
+        val sidecar = try {
+            SubtitleSourceResolver.pickAutoSidecar(applicationContext, videoPath)
+        } catch (t: Throwable) {
+            AppLog.e("SUB", "scoreAutoSidecar failed", t)
+            return 0.0
+        } ?: return 0.0
+        return dev.anonrode.player.core.media.subtitle.SubtitleMatcher
+            .normalizedScore(videoName, sidecar.name)
+    }
+
+    /**
+     * v0.6.2 sub-sync UX pass: deferred sidecar parse.
+     * Schedules a parse of the auto-picked sidecar ~200 ms after the
+     * current playback start. When cues land, we restart the render loop
+     * with them so the user sees subtitles right after first-frame.
+     * Cancelled automatically by the next [openVideo] (which assigns
+     * [deferredSidecarJob]).
+     */
+    private fun scheduleDeferredSidecarParse(uriStr: String, videoPath: String?) {
+        deferredSidecarJob?.cancel()
+        val genAtSchedule = openGeneration
+        deferredSidecarJob = lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                kotlinx.coroutines.delay(200L)
+                if (genAtSchedule != openGeneration) return@launch
+                if (videoPath == null) return@launch
+                val sidecar = try {
+                    SubtitleSourceResolver.pickAutoSidecar(applicationContext, videoPath)
+                } catch (t: Throwable) {
+                    AppLog.e("SUB", "deferred pick failed", t)
+                    null
+                } ?: return@launch
+                if (genAtSchedule != openGeneration) return@launch
+                val bytes = try {
+                    java.io.File(sidecar.uri.path!!).takeIf { it.isFile }?.readBytes()
+                } catch (t: Throwable) {
+                    AppLog.e("SUB", "deferred read failed", t)
+                    null
+                } ?: return@launch
+                if (genAtSchedule != openGeneration) return@launch
+                val cues = try {
+                    dev.anonrode.player.core.media.subtitle.SubtitleParser
+                        .parseBytes(sidecar.name, bytes)
+                        .sortedBy { it.start }
+                } catch (t: Throwable) {
+                    AppLog.e("SUB", "deferred parse failed", t)
+                    emptyList()
+                }
+                if (cues.isEmpty()) return@launch
+                if (genAtSchedule != openGeneration) return@launch
+                AppLog.d("PLAY", "deferred cues landed: ${sidecar.name} (${cues.size})")
+                withContext(Dispatchers.Main) {
+                    if (genAtSchedule != openGeneration) return@withContext
+                    restartRenderLoop(cues)
+                }
+            } catch (e: CancellationException) {
+                // Normal: a newer openVideo superseded us.
+            }
+        }
+    }
+
+    /**
+     * True when the cues handed to commitPlay were the empty placeholder
+     * the deferred-parse path uses. The cue list size + a state-store
+     * lookup together identify the deferred path: when the persisted
+     * subtitle choice is empty AND there are no embedded text tracks,
+     * the cues are by definition the deferred placeholder.
+     */
+    private fun sortedCuesWasDeferred(uriStr: String, cues: List<SubtitleCue>): Boolean {
+        if (cues.isNotEmpty()) return false
+        // Re-read the persisted choice cheaply from the in-memory cache;
+        // openVideo already wrote [subtitleChoice] before this commit.
+        return subtitleChoice.isEmpty()
+    }
+
+    /**
+     * v0.6.2 sub-sync UX pass: callback wired from the bottom-row
+     * sub-sync toggle. Persists the new state to DataStore and adjusts
+     * the live re-lock gate on the AudioSyncProcessor. When toggling
+     * OFF, also cancels any in-flight fingerprint jobs for this video
+     * (WorkManager skips enqueues if the toggle is off — see
+     * [SyncFingerprint.scheduleSuspending] — but pending jobs from
+     * earlier are killed explicitly here so the user sees the change
+     * immediately).
+     */
+    private fun onSetSubSyncEnabled(enabled: Boolean) {
+        val app = AnonrodeApp.get(this)
+        app.engine.setSubSyncEnabled(enabled)
+        lifecycleScope.launch {
+            try {
+                app.playerSettingsDataStore.updateData { it.copy(subtitleAutoSyncEnabled = enabled) }
+            } catch (e: Exception) {
+                AppLog.e("SUB", "sub-sync toggle persist failed", e)
+            }
+        }
+        if (!enabled) {
+            currentUriStr?.let { SyncFingerprint.cancel(applicationContext, it) }
+        }
+    }
+
+    /**
+     * "Resync now" (long-press on the sync toggle): run a fingerprint
+     * schedule immediately, regardless of the legacy schedule gates
+     * inside [openVideo]. We bypass the Policy A score/lock checks so
+     * a user can force a re-fingerprint after editing a subtitle.
+     */
+    private fun onResyncNow() {
+        val uri = currentUriStr ?: return
+        val app = AnonrodeApp.get(this)
+        // Force-enable live re-lock too — "resync now" implies the user
+        // wants the sync engine active.
+        app.engine.setSubSyncEnabled(true)
+        lifecycleScope.launch {
+            try {
+                app.playerSettingsDataStore.updateData {
+                    it.copy(subtitleAutoSyncEnabled = true)
+                }
+            } catch (e: Exception) {
+                AppLog.e("SUB", "resync persist failed", e)
+            }
+            // Schedule without the score / persisted-lock gate that
+            // openVideo applies — the user explicitly asked for it.
+            SyncFingerprint.scheduleSuspending(applicationContext, uri)
+        }
+    }
+
+    // ── instance-state save / restore ────────────────────────────────
+    //
+    // The mutableStateOf fields on the activity are NOT rememberSaveable
+    // (they're owned by the activity, not the Compose tree, and several
+    // mirror imperative engine state). On a configuration change that the
+    // manifest doesn't intercept (e.g. uiMode / dark-mode toggle since
+    // the activity only lists screenSize|orientation|...), the activity
+    // is destroyed and recreated with no saveable backup — every dialog,
+    // A-B repeat, queued next episode, etc. silently vanishes. This
+    // Bundle round-trips the user-visible subset through that window.
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_SETTINGS_OPEN, settingsOpen)
+        outState.putBoolean(KEY_PIP_MODE, pipMode)
+        outState.putBoolean(KEY_IS_CALIBRATING, isCalibrating)
+        outState.putString(KEY_PLAYBACK_ERROR, playbackError)
+        outState.putBoolean(KEY_IS_REBUILDING_DECODER, isRebuildingDecoder)
+        abStartMs?.let { outState.putLong(KEY_AB_START_MS, it) }
+        abEndMs?.let { outState.putLong(KEY_AB_END_MS, it) }
+        outState.putInt(KEY_NEXT_COUNTDOWN_SEC, nextCountdownSec)
+        pendingNext?.let {
+            outState.putString(KEY_PENDING_NEXT_URI, it.uri)
+            outState.putString(KEY_PENDING_NEXT_TITLE, it.title)
+        }
+        outState.putBoolean(KEY_HOLD_AUTO_ADVANCE_ONCE, holdAutoAdvanceOnce)
+        outState.putString(KEY_SUBTITLE_CHOICE, subtitleChoice)
+        outState.putLong(KEY_MANUAL_NUDGE_MS, manualNudgeMs)
+        outState.putFloat(KEY_SESSION_SPEED, sessionSpeed)
+        outState.putInt(KEY_SAVED_ZOOM_IDX, savedZoomIdx)
+        outState.putString(KEY_CURRENT_URI_STR, currentUriStr)
+        outState.putString(KEY_CURRENT_VIDEO_PATH, currentVideoPath)
+        explicitQueueUris?.let { outState.putStringArrayList(KEY_EXPLICIT_QUEUE_URIS, ArrayList(it)) }
+        pendingAudioTrackIdx?.let { outState.putInt(KEY_PENDING_AUDIO_TRACK_IDX, it) }
+        outState.putBoolean(KEY_SWITCHING, switching)
+    }
+
+    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
+        super.onRestoreInstanceState(savedInstanceState)
+        settingsOpen = savedInstanceState.getBoolean(KEY_SETTINGS_OPEN, settingsOpen)
+        pipMode = savedInstanceState.getBoolean(KEY_PIP_MODE, pipMode)
+        isCalibrating = savedInstanceState.getBoolean(KEY_IS_CALIBRATING, isCalibrating)
+        playbackError = savedInstanceState.getString(KEY_PLAYBACK_ERROR)
+        isRebuildingDecoder = savedInstanceState.getBoolean(KEY_IS_REBUILDING_DECODER, isRebuildingDecoder)
+        if (savedInstanceState.containsKey(KEY_AB_START_MS)) {
+            abStartMs = savedInstanceState.getLong(KEY_AB_START_MS)
+        }
+        if (savedInstanceState.containsKey(KEY_AB_END_MS)) {
+            abEndMs = savedInstanceState.getLong(KEY_AB_END_MS)
+        }
+        nextCountdownSec = savedInstanceState.getInt(KEY_NEXT_COUNTDOWN_SEC, nextCountdownSec)
+        val pendingUri = savedInstanceState.getString(KEY_PENDING_NEXT_URI)
+        val pendingTitle = savedInstanceState.getString(KEY_PENDING_NEXT_TITLE)
+        if (pendingUri != null && pendingTitle != null) {
+            // Video isn't Parcelable; rebuild a minimal stub holding only
+            // uri + title. playNextNow / performSwitch only read those two
+            // fields when invoking openVideo.
+            pendingNext = Video(
+                uri = pendingUri, path = "", title = pendingTitle,
+                durationMs = 0L, width = 0, height = 0, sizeBytes = 0L,
+                lastModifiedMs = 0L, mediaStoreId = 0L, parentPath = "",
+            )
+        }
+        holdAutoAdvanceOnce = savedInstanceState.getBoolean(KEY_HOLD_AUTO_ADVANCE_ONCE, holdAutoAdvanceOnce)
+        subtitleChoice = savedInstanceState.getString(KEY_SUBTITLE_CHOICE, subtitleChoice)
+        manualNudgeMs = savedInstanceState.getLong(KEY_MANUAL_NUDGE_MS, manualNudgeMs)
+        sessionSpeed = savedInstanceState.getFloat(KEY_SESSION_SPEED, sessionSpeed)
+        savedZoomIdx = savedInstanceState.getInt(KEY_SAVED_ZOOM_IDX, savedZoomIdx)
+        currentUriStr = savedInstanceState.getString(KEY_CURRENT_URI_STR, currentUriStr)
+        currentVideoPath = savedInstanceState.getString(KEY_CURRENT_VIDEO_PATH, currentVideoPath)
+        savedInstanceState.getStringArrayList(KEY_EXPLICIT_QUEUE_URIS)?.let {
+            explicitQueueUris = it
+        }
+        if (savedInstanceState.containsKey(KEY_PENDING_AUDIO_TRACK_IDX)) {
+            pendingAudioTrackIdx = savedInstanceState.getInt(KEY_PENDING_AUDIO_TRACK_IDX)
+        }
+        switching = savedInstanceState.getBoolean(KEY_SWITCHING, switching)
     }
 
     override fun onDestroy() {

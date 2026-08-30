@@ -1,5 +1,6 @@
 package dev.anonrode.player.feature.library
 
+import androidx.compose.runtime.Immutable
 import androidx.datastore.core.DataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -48,13 +49,23 @@ class LibraryViewModel(
     private val settings: DataStore<PlayerSettings>,
 ) : ViewModel() {
 
+    /**
+     * Marked [Immutable] — every field is either a primitive/String, a
+     * [Video] (also immutable in core/model), or one of the other
+     * @Immutable data classes below. Compose skips structural equality on
+     * parameters of these types when crossing the composable boundary,
+     * which means a ContinueCard / EpisodeRow doesn't recompose just
+     * because its sibling changed — only when its own row did.
+     */
+    @Immutable
     data class InProgress(
         val video: Video,
         val fraction: Float,
         val label: String,
     )
 
-    /** One episode row inside a folder drill-down. */
+    /** One episode row inside a folder drill-down. [Immutable] (see InProgress). */
+    @Immutable
     data class EpisodeItem(
         val video: Video,
         /** Watched fraction 0..1 (position/duration; 1 when finished). */
@@ -64,7 +75,8 @@ class LibraryViewModel(
         val resumeLabel: String?,
     )
 
-    /** One row in the global search results. */
+    /** One row in the global search results. [Immutable] (see InProgress). */
+    @Immutable
     data class SearchHit(
         val video: Video,
         val folderName: String,
@@ -113,6 +125,25 @@ class LibraryViewModel(
         val folderNameByPath: Map<String, String> = emptyMap(),
         val fractionByUri: Map<String, Float> = emptyMap(),
         val finishedUris: Set<String> = emptySet(),
+        /**
+         * Per-video pre-lowercased title. naturalCompare walks the title
+         * character-by-character for every comparison, and the per-folder
+         * sort runs `naturalVideoOrder` (which calls naturalCompare in
+         * sortedWith) for every snapshot — tens of thousands of videos
+         * means hundreds of thousands of `lowercaseChar()` calls per sort
+         * pass. Caching the lowercased key once per snapshot removes that
+         * from the hot path. Keyed by Video.uri (string identity), not
+         * equality, so it's safe across snapshot replacements.
+         */
+        val lowerTitleByUri: Map<String, String> = emptyMap(),
+        /**
+         * Per-Video pre-resolved EpisodePattern (season/episode integers
+         * or null). [EpisodePattern.find] regex-matches the title; with a
+         * large library we run find() once per naturalVideoOrder
+         * comparison pair. Cache it once per snapshot and pass it
+         * straight into the comparator.
+         */
+        val episodePatternByUri: Map<String, EpisodePattern?> = emptyMap(),
     )
 
     private var libData = LibData()
@@ -247,18 +278,30 @@ class LibraryViewModel(
             }
 
         // Per-folder episode rows (display order + progress) and folder stats.
+        // Pre-compute the lowercase title + EpisodePattern for every video
+        // in this snapshot once. naturalVideoOrder + naturalCompare read
+        // both, and with N videos sorted over N log N comparisons that
+        // turns O(N² log N) lowercasing into O(N).
+        val lowerTitleByUri = HashMap<String, String>(snap.videos.size)
+        val episodePatternByUri = HashMap<String, EpisodePattern?>(snap.videos.size)
+        for (v in snap.videos) {
+            lowerTitleByUri[v.uri] = v.title.lowercase()
+            episodePatternByUri[v.uri] = EpisodePattern.find(v.title)
+        }
+
         val episodesByFolder = HashMap<String, List<EpisodeItem>>()
         val folderLastPlayed = HashMap<String, Long>()
         val seriesWithWatched = snap.series.map { s ->
-            val items = s.videos.sortedWith(naturalVideoOrder).map { v ->
-                val st = statesByUri[v.uri]
-                val finished = st?.finished == true
-                val resume = if (!finished && st != null && st.playbackPositionMs > 0L) {
-                    val d = st.durationMs ?: 0L
-                    if (d > 0) "${fmtMin(st.playbackPositionMs)} / ${fmtMin(d)}" else null
-                } else null
-                EpisodeItem(v, if (finished) 1f else (fractionByUri[v.uri] ?: 0f), finished, resume)
-            }
+            val items = s.videos.sortedWith(naturalVideoOrder(snap.videos, lowerTitleByUri, episodePatternByUri))
+                .map { v ->
+                    val st = statesByUri[v.uri]
+                    val finished = st?.finished == true
+                    val resume = if (!finished && st != null && st.playbackPositionMs > 0L) {
+                        val d = st.durationMs ?: 0L
+                        if (d > 0) "${fmtMin(st.playbackPositionMs)} / ${fmtMin(d)}" else null
+                    } else null
+                    EpisodeItem(v, if (finished) 1f else (fractionByUri[v.uri] ?: 0f), finished, resume)
+                }
             episodesByFolder[s.folderPath] = items
             val last = s.videos.maxOfOrNull { statesByUri[it.uri]?.lastPlayedTimeMs ?: 0L } ?: 0L
             if (last > 0L) folderLastPlayed[s.folderPath] = last
@@ -277,6 +320,8 @@ class LibraryViewModel(
             folderNameByPath = folderNameByPath,
             fractionByUri = fractionByUri,
             finishedUris = finishedUris,
+            lowerTitleByUri = lowerTitleByUri,
+            episodePatternByUri = episodePatternByUri,
         )
     }
 
@@ -322,21 +367,24 @@ class LibraryViewModel(
 
     /**
      * Natural-order title comparison: digit runs compare numerically so
-     * "Episode 2" sorts before "Episode 10".
+     * "Episode 2" sorts before "Episode 10". Both inputs MUST already be
+     * lowercased (see [naturalVideoOrder] — the snapshot's pre-computed
+     * lowercase title cache is passed in so we don't re-lowercase on
+     * every comparison).
      */
-    private fun naturalCompare(a: String, b: String): Int {
+    private fun naturalCompare(aLower: String, bLower: String): Int {
         var ia = 0
         var ib = 0
-        while (ia < a.length && ib < b.length) {
-            val ca = a[ia]
-            val cb = b[ib]
+        while (ia < aLower.length && ib < bLower.length) {
+            val ca = aLower[ia]
+            val cb = bLower[ib]
             if (ca.isDigit() && cb.isDigit()) {
                 var ea = ia
-                while (ea < a.length && a[ea].isDigit()) ea++
+                while (ea < aLower.length && aLower[ea].isDigit()) ea++
                 var eb = ib
-                while (eb < b.length && b[eb].isDigit()) eb++
-                val na = a.substring(ia, ea).trimStart('0')
-                val nb = b.substring(ib, eb).trimStart('0')
+                while (eb < bLower.length && bLower[eb].isDigit()) eb++
+                val na = aLower.substring(ia, ea).trimStart('0')
+                val nb = bLower.substring(ib, eb).trimStart('0')
                 val cmp = when {
                     na.length != nb.length -> na.length.compareTo(nb.length)
                     na.isNotEmpty() -> na.compareTo(nb)
@@ -346,32 +394,44 @@ class LibraryViewModel(
                 ia = ea
                 ib = eb
             } else {
-                val cmp = ca.lowercaseChar().compareTo(cb.lowercaseChar())
+                val cmp = ca.compareTo(cb)
                 if (cmp != 0) return cmp
                 ia++
                 ib++
             }
         }
-        return (a.length - ia).compareTo(b.length - ib)
+        return (aLower.length - ia).compareTo(bLower.length - ib)
     }
 
     /**
      * Display order inside a folder: season/episode pattern first (mirrors
      * the player's EpisodeQueue ordering), natural title order otherwise.
+     *
+     * Bound to a per-snapshot [lowerTitleByUri] / [episodePatternByUri]
+     * cache so neither the per-comparison `lowercaseChar()` nor the
+     * per-comparison `EpisodePattern.find` (regex) runs during the sort.
+     * Cache lifetime == snapshot lifetime, so a stale entry is impossible:
+     * the maps are rebuilt every time a fresh snapshot arrives in [join].
      */
-    private val naturalVideoOrder: Comparator<Video> = Comparator { a, b ->
-        val ea = EpisodePattern.find(a.title)
-        val eb = EpisodePattern.find(b.title)
+    private fun naturalVideoOrder(
+        @Suppress("UNUSED_PARAMETER") snapshot: List<Video>,
+        lowerTitleByUri: Map<String, String>,
+        episodePatternByUri: Map<String, EpisodePattern?>,
+    ): Comparator<Video> = Comparator { a, b ->
+        val ea = episodePatternByUri[a.uri]
+        val eb = episodePatternByUri[b.uri]
+        val aLow = lowerTitleByUri[a.uri] ?: a.title
+        val bLow = lowerTitleByUri[b.uri] ?: b.title
         when {
             ea != null && eb != null -> {
                 val sa = ea.first ?: 0
                 val sb = eb.first ?: 0
                 val cmp = if (sa != sb) sa.compareTo(sb) else ea.second.compareTo(eb.second)
-                if (cmp != 0) cmp else naturalCompare(a.title, b.title)
+                if (cmp != 0) cmp else naturalCompare(aLow, bLow)
             }
             ea != null -> -1
             eb != null -> 1
-            else -> naturalCompare(a.title, b.title)
+            else -> naturalCompare(aLow, bLow)
         }
     }
 
