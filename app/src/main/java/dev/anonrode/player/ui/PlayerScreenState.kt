@@ -250,4 +250,20 @@ internal class QuickRowUiState(initialHwDecoder: Boolean) {
 
     /** The currently active audio track label, for the audio-track popover. */
     val audioTrackToast = mutableStateOf<String?>(null)
+
+    /**
+     * User-driven subtitle sync toggle. Mirrors
+     * [dev.anonrode.player.core.datastore.PlayerSettings.subtitleAutoSyncEnabled]
+     * so the toggle icon flips instantly without a DataStore round-trip.
+     * Persisted to DataStore on every change.
+     */
+    val subSyncEnabled = mutableStateOf(false)
+
+    /**
+     * True while a live re-lock is in progress. Drives the spinning ring
+     * on the right-rail sync icon. Set by the Activity's openVideo path
+     * around the AudioSyncProcessor's setCues call; cleared when the
+     * first lock lands or the engine gives up.
+     */
+    val subSyncRunning = mutableStateOf(false)
 }

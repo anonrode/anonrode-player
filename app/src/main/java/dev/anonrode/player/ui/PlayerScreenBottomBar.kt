@@ -45,7 +45,9 @@ import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -192,7 +194,14 @@ internal fun PlayerScreenBottomBar(
     }
 }
 
-/* ── Seek-bar row — 14sp timestamps, 32dp thumb, drag-to-seek ───────────── */
+/* ── Seek-bar row — 14sp timestamps, 32dp thumb, drag-to-seek ─────────────
+ *
+ * Tap-to-toggle: tapping the LEFT label flips between "current" and
+ * "−remaining" (e.g. 12:34 / −32:47). Tapping the RIGHT label flips
+ * between "remaining" and "total". NextPlayer / VLC / NewPipe all do
+ * this. Two remembered booleans hold the user's per-side preference
+ * across recompositions.
+ */
 
 @UnstableApi
 @Composable
@@ -204,14 +213,24 @@ private fun SeekBarRow(
     localSeek: MutableFloatState,
     onSeekCommitted: (Float) -> Unit,
 ) {
+    var showRemainingOnLeft by remember { mutableStateOf(false) }
+    var showCurrentOnRight by remember { mutableStateOf(false) }
+    val remainingSec = (durationSec - positionSec).coerceAtLeast(0f)
+    val leftLabel = if (showRemainingOnLeft) "−${fmtTime(remainingSec.toLong())}" else fmtTime(currentPositionMs)
+    val rightLabel = if (showCurrentOnRight) fmtTime(currentPositionMs) else fmtTime(remainingSec.toLong())
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
-            fmtTime(currentPositionMs),
+            leftLabel,
             color = Color.White.copy(alpha = 0.75f),
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Start,
-            modifier = Modifier.widthIn(min = 52.dp)
+            modifier = Modifier
+                .widthIn(min = 52.dp)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = ripple(bounded = false, radius = 32.dp, color = accent),
+                ) { showRemainingOnLeft = !showRemainingOnLeft }
         )
         // Animate the visible thumb position between the host's 10Hz tick
         // so the slider doesn't strobe.
@@ -242,12 +261,17 @@ private fun SeekBarRow(
                 .heightIn(min = 32.dp)
         )
         Text(
-            fmtTime((durationSec - positionSec).coerceAtLeast(0f).toLong()),
+            rightLabel,
             color = Color.White.copy(alpha = 0.75f),
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.End,
-            modifier = Modifier.widthIn(min = 52.dp)
+            modifier = Modifier
+                .widthIn(min = 52.dp)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = ripple(bounded = false, radius = 32.dp, color = accent),
+                ) { showCurrentOnRight = !showCurrentOnRight }
         )
     }
 }
@@ -449,8 +473,12 @@ internal fun LockToggleButton(
     }
 }
 
-/** 72dp play/pause — 50% bigger than its siblings, accent ripple so the
- *  thumb finds it instantly. Animated icon flip on isPlaying toggle. */
+/** 64dp play/pause — bigger than its siblings, accent ripple so the
+ *  thumb finds it instantly. Sized down from the original 72dp per the
+ *  v0.7 design research (5-player survey): 72dp crowds on 720p budget
+ *  screens, 64dp is the survey median (between mpvKt's 72dp and
+ *  NewPipe's 60dp) and keeps the side icons from feeling cramped.
+ *  Animated icon flip on isPlaying toggle. */
 @Composable
 internal fun BigPlayPauseButton(
     isPlaying: Boolean,
@@ -459,12 +487,12 @@ internal fun BigPlayPauseButton(
 ) {
     Box(
         modifier = Modifier
-            .size(72.dp)
+            .size(64.dp)
             .clip(CircleShape)
             .border(2.dp, Color.White, CircleShape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = ripple(bounded = true, radius = 44.dp, color = accent),
+                indication = ripple(bounded = true, radius = 40.dp, color = accent),
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
@@ -481,13 +509,16 @@ internal fun BigPlayPauseButton(
                 if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                 contentDescription = if (playing) "Pause" else "Play",
                 tint = Color.White,
-                modifier = Modifier.size(34.dp),
+                modifier = Modifier.size(32.dp),
             )
         }
     }
 }
 
-/** 48dp squared pill showing "«10s" / "10s»". Accent-tinted. */
+/** 48dp squared pill with the "10" label INSIDE the icon (no chevron +
+ *  text). The label is the universal pattern across VLC / ReVanced /
+ *  NextPlayer and is the cheapest way to make skip-10 discoverable.
+ *  Accent-tinted pill, white text. */
 @Composable
 internal fun TimeSeekButton(
     direction: TimeSeekDirection,
@@ -507,22 +538,34 @@ internal fun TimeSeekButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
+        // "10" inside the pill, big and bold, with a small chevron hint
+        // to convey direction without taking extra width.
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(1.dp),
         ) {
+            if (direction == TimeSeekDirection.BACK) {
+                Text(
+                    text = "‹",
+                    color = accent,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 14.sp,
+                )
+            }
             Text(
-                text = if (direction == TimeSeekDirection.BACK) "«" else "»",
+                text = "10",
                 color = accent,
                 fontWeight = FontWeight.Black,
-                fontSize = 13.sp,
+                fontSize = 14.sp,
             )
-            Text(
-                text = "10s",
-                color = accent,
-                fontWeight = FontWeight.Black,
-                fontSize = 12.sp,
-            )
+            if (direction == TimeSeekDirection.FORWARD) {
+                Text(
+                    text = "›",
+                    color = accent,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 14.sp,
+                )
+            }
         }
     }
 }

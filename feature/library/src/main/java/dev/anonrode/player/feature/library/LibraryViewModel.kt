@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.anonrode.player.core.datastore.PlayerSettings
+import dev.anonrode.player.core.media.library.LibraryEvent
 import dev.anonrode.player.core.media.library.LibrarySnapshot
 import dev.anonrode.player.core.media.library.MediaScanner
 import dev.anonrode.player.core.media.state.MediaStateStore
@@ -156,8 +157,13 @@ class LibraryViewModel(
     init {
         // Single scan pipeline: observer-driven snapshots + explicit rescan
         // requests (the only two places a scan is ever triggered).
+        // observeLibrary() now emits LibraryEvent (DISK first, then
+        // MEDIASTORE deltas); the rescan branch still emits a raw
+        // LibrarySnapshot. Map both to a single shape so merge() unifies
+        // their types — downstream consumers (combine → join) only need
+        // the snapshot, not the event metadata.
         val library = merge(
-            scanner.observeLibrary(),
+            scanner.observeLibrary().map { it.snapshot },
             rescanRequests
                 .drop(1)
                 .map { scanner.scan(force = true) }
