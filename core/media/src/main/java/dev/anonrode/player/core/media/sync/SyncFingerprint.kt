@@ -80,11 +80,10 @@ object SyncFingerprint {
      * call sites should prefer [scheduleSuspending] (the suspending
      * entry point).
      */
+    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     @Suppress("OPT_IN_USAGE")
     fun schedule(context: Context, videoUri: String) {
-        kotlinx.coroutines.GlobalScope.launch(
-            kotlinx.coroutines.Dispatchers.IO,
-        ) {
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             scheduleSuspending(context.applicationContext, videoUri)
         }
     }

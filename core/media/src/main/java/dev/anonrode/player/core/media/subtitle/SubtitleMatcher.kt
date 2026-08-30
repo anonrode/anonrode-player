@@ -46,7 +46,7 @@ object SubtitleMatcher {
 
     /** Precompiled word-boundary matchers for [LANG_W] (built once). */
     private val LANG_RE: Map<String, Regex> = LANG_W.keys.associateWith { kw ->
-        Regex("(?:^|[._\\-\\s\\[(])$kw(?:[._\\-\\s\\])]|$)")
+        Regex("""(?:^|[._\s\[\-(])$kw(?:[._\s\-\]]|$)""")
     )
 
     /**
@@ -225,7 +225,7 @@ object SubtitleMatcher {
 
     private fun tokens(name: String): List<String> =
         name.lowercase()
-            .replace(Regex("[._\\-\\[\\](){}+]"), " ")
-            .split(Regex("\\s+"))
+            .replace(Regex("""[._\-\[\](){}+]"""), " ")
+            .split(Regex("""\s+"""))
             .filter { it.length > 2 && it !in JUNK && !it.all { c -> c.isDigit() } }
 }
