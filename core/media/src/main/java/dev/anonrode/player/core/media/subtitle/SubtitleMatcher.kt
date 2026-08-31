@@ -45,9 +45,13 @@ object SubtitleMatcher {
     )
 
     /** Precompiled word-boundary matchers for [LANG_W] (built once). */
-    private val LANG_RE: Map<String, Regex> = LANG_W.keys.associateWith { kw ->
-        Regex("""(?:^|[._\s\[\-(])$kw(?:[._\s\-\]]|$)""")
-    )
+    private val LANG_RE: Map<String, Regex> = run {
+        val sep = "[._\\s\\[\\-(]"
+        val tail = "[._\\s\\-\\]]|\\$"
+        LANG_W.keys.associateWith { kw ->
+            Regex("(?:^|" + sep + ")" + kw + "(?:" + tail + ")")
+        }
+    }
 
     /**
      * @param videoName filename of the video (with extension)
