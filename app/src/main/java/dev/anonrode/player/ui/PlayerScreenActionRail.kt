@@ -141,7 +141,7 @@ internal fun PlayerScreenActionRail(
             // composable inside our 48dp wrapper so the rail visuals
             // (size / ripple / padding) stay consistent.
             syncSlot(
-                modifier = Modifier
+                Modifier
                     .size(PlayerDimens.chipMd)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.35f))
@@ -150,7 +150,7 @@ internal fun PlayerScreenActionRail(
                         color = Color.White.copy(alpha = 0.20f),
                         shape = CircleShape,
                     ),
-                accent = accent,
+                accent,
             )
 
             // 4) rotate — reuses PlayerScreenRotateButton (which already

@@ -173,6 +173,13 @@ fun PlayerScreen(
     brightnessGestureEnabled: Boolean = true,
     /** Gates the two-finger pinch-to-zoom gesture (Settings → Pinch zoom). */
     pinchZoomEnabled: Boolean = true,
+    /**
+     * v0.6.2 sub-sync UX pass: the persisted subtitle auto-sync toggle,
+     * flowed from the host's DataStore. Mirrored into
+     * [quick.subSyncEnabled] below so the bottom-bar chip reflects
+     * restarts / external Settings edits immediately.
+     */
+    subtitleAutoSyncEnabled: Boolean = false,
     /** HUD auto-hide delay while playing (ms). */
     autoHideControlsMs: Long = 3500L,
     /** Sleep timer armed from the settings screen (0=off, -1=end of episode). */
@@ -310,8 +317,8 @@ fun PlayerScreen(
     // [onSetSubSyncEnabled] on tap; this collector ensures a process
     // restart (or an external DataStore edit from Settings) is picked up
     // immediately, without waiting for the next tap.
-    LaunchedEffect(settings.subtitleAutoSyncEnabled) {
-        quick.subSyncEnabled.value = settings.subtitleAutoSyncEnabled
+    LaunchedEffect(subtitleAutoSyncEnabled) {
+        quick.subSyncEnabled.value = subtitleAutoSyncEnabled
     }
     ZoomApplyEffect(ui.zoomIdx.intValue, ui)
     RotationLockEffect(activity, quick.rotateMode.value)

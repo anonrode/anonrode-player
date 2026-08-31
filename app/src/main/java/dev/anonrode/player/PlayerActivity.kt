@@ -567,6 +567,7 @@ class PlayerActivity : ComponentActivity() {
                             pinchZoomEnabled = settings.pinchZoom,
                             autoHideControlsMs = settings.autoHideControlsMs,
                             initialSleepTimerMinutes = settings.sleepTimerMinutes,
+                            subtitleAutoSyncEnabled = settings.subtitleAutoSyncEnabled,
                             abStartMs = abStartMs,
                             abEndMs = abEndMs,
                             onAbRepeatTap = { advanceAbRepeat() },

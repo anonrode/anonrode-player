@@ -203,7 +203,7 @@ internal fun PlayerOverflowSheet(
                     OverflowTile(
                         icon = Icons.Filled.Bedtime,
                         label = "Sleep timer",
-                        subLabel = state.sleep.selection.label,
+                        subLabel = state.sleep.selection.value.label,
                         accent = if (state.sleep.active) MxGreen else Color.White,
                         onClick = { onSleep(); onDismiss() },
                     )

@@ -192,6 +192,19 @@ fun LibraryScreen(
     // hit the outgoing list.
     var scrollRequest by remember { mutableIntStateOf(0) }
     var scrollIndex by remember { mutableIntStateOf(0) }
+
+    fun scrollTo(index: Int) {
+        scrollIndex = index
+        scrollRequest++
+    }
+
+    // The folders header sits right after the optional selection bar (+1)
+    // and the optional continue-watching header + row (+2).
+    fun jumpToFolders() {
+        val leading = (if (selecting) 1 else 0) + (if (state.inProgress.isEmpty()) 0 else 2)
+        scrollTo(leading)
+    }
+
     LaunchedEffect(scrollRequest) {
         if (scrollRequest > 0) listState.animateScrollToItem(scrollIndex)
     }
@@ -273,18 +286,6 @@ fun LibraryScreen(
         val queue = selected.mapNotNull { byUri[it] }
         if (queue.isNotEmpty()) playQueue(queue)
         exitSelectionMode()
-    }
-
-    fun scrollTo(index: Int) {
-        scrollIndex = index
-        scrollRequest++
-    }
-
-    // The folders header sits right after the optional selection bar (+1)
-    // and the optional continue-watching header + row (+2).
-    fun jumpToFolders() {
-        val leading = (if (selecting) 1 else 0) + (if (state.inProgress.isEmpty()) 0 else 2)
-        scrollTo(leading)
     }
 
     BackHandler(enabled = selecting || searchActive || openFolder != null) {

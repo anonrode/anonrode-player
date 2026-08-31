@@ -61,7 +61,7 @@ internal class PlayerScreenActions(
     private val hud: HudUiState,
     private val sleep: SleepTimerUiState,
     val gestures: GestureUiState,
-    private val quick: QuickRowUiState,
+    val quick: QuickRowUiState,
     val speedIdx: MutableIntState,
     val speeds: List<Float>,
     val seekIncrementSec: Int,
