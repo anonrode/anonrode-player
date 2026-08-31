@@ -138,13 +138,12 @@ class LibraryViewModel(
          */
         val lowerTitleByUri: Map<String, String> = emptyMap(),
         /**
-         * Per-Video pre-resolved EpisodePattern (season/episode integers
-         * or null). [EpisodePattern.find] regex-matches the title; with a
-         * large library we run find() once per naturalVideoOrder
-         * comparison pair. Cache it once per snapshot and pass it
-         * straight into the comparator.
+         * Per-Video pre-resolved season/episode pair (or null), as returned
+         * by [EpisodePattern.find]. With a large library we would otherwise
+         * run find() once per naturalVideoOrder comparison pair. Cache it
+         * once per snapshot and pass it straight into the comparator.
          */
-        val episodePatternByUri: Map<String, EpisodePattern?> = emptyMap(),
+        val episodePatternByUri: Map<String, Pair<Int?, Int>?> = emptyMap(),
     )
 
     private var libData = LibData()
@@ -289,7 +288,7 @@ class LibraryViewModel(
         // both, and with N videos sorted over N log N comparisons that
         // turns O(N² log N) lowercasing into O(N).
         val lowerTitleByUri = HashMap<String, String>(snap.videos.size)
-        val episodePatternByUri = HashMap<String, EpisodePattern?>(snap.videos.size)
+        val episodePatternByUri = HashMap<String, Pair<Int?, Int>?>(snap.videos.size)
         for (v in snap.videos) {
             lowerTitleByUri[v.uri] = v.title.lowercase()
             episodePatternByUri[v.uri] = EpisodePattern.find(v.title)
@@ -422,7 +421,7 @@ class LibraryViewModel(
     private fun naturalVideoOrder(
         @Suppress("UNUSED_PARAMETER") snapshot: List<Video>,
         lowerTitleByUri: Map<String, String>,
-        episodePatternByUri: Map<String, EpisodePattern?>,
+        episodePatternByUri: Map<String, Pair<Int?, Int>?>,
     ): Comparator<Video> = Comparator { a, b ->
         val ea = episodePatternByUri[a.uri]
         val eb = episodePatternByUri[b.uri]
