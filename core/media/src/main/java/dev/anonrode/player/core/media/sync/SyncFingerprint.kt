@@ -8,7 +8,10 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import dev.anonrode.player.core.datastore.playerSettingsDataStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 /**
@@ -49,7 +52,7 @@ object SyncFingerprint {
      */
     suspend fun scheduleSuspending(context: Context, videoUri: String) {
         val enabled = try {
-            playerSettingsDataStore.data.first().subtitleAutoSyncEnabled
+            context.playerSettingsDataStore.data.first().subtitleAutoSyncEnabled
         } catch (_: Throwable) {
             false
         }
@@ -83,7 +86,7 @@ object SyncFingerprint {
     @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     @Suppress("OPT_IN_USAGE")
     fun schedule(context: Context, videoUri: String) {
-        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        GlobalScope.launch(Dispatchers.IO) {
             scheduleSuspending(context.applicationContext, videoUri)
         }
     }
