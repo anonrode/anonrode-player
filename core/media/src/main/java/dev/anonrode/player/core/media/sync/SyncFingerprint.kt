@@ -47,10 +47,18 @@ object SyncFingerprint {
      * re-reads the toggle at runtime so a flipped-off toggle still kills
      * pending/retrying jobs even after this call returned.
      *
+     * [force] re-fingerprints even when a persisted lock exists — the
+     * "Resync now" contract: the user explicitly asked for a re-fit
+     * (e.g. after editing the subtitle file), and the job's own
+     * skip-if-locked guard would silently turn that request into a no-op.
+     * A force run replaces the pending non-force job for the same URI
+     * (REPLACE, not KEEP) so the explicit request is not swallowed by an
+     * earlier KEEP-enqueued job.
+     *
      * Callers must invoke this on a background dispatcher (Dispatchers.IO)
      * — the Flow read is suspending.
      */
-    suspend fun scheduleSuspending(context: Context, videoUri: String) {
+    suspend fun scheduleSuspending(context: Context, videoUri: String, force: Boolean = false) {
         val enabled = try {
             context.playerSettingsDataStore.data.first().subtitleAutoSyncEnabled
         } catch (_: Throwable) {
@@ -58,7 +66,12 @@ object SyncFingerprint {
         }
         if (!enabled) return
         val request = OneTimeWorkRequestBuilder<SyncFingerprintJob>()
-            .setInputData(workDataOf(SyncFingerprintJob.KEY_VIDEO_URI to videoUri))
+            .setInputData(
+                workDataOf(
+                    SyncFingerprintJob.KEY_VIDEO_URI to videoUri,
+                    SyncFingerprintJob.KEY_FORCE to force,
+                )
+            )
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .setInitialDelay(90, TimeUnit.SECONDS)
             .setConstraints(
@@ -70,7 +83,7 @@ object SyncFingerprint {
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             "$WORK_TAG-$videoUri",
-            ExistingWorkPolicy.KEEP,
+            if (force) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
             request,
         )
     }

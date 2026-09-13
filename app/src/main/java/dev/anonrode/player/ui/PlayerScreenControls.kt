@@ -73,6 +73,7 @@ import androidx.media3.common.util.UnstableApi
 @Composable
 internal fun PlayerControlsOverlay(
     visible: Boolean,
+    showSeekBar: Boolean = true,
     title: String,
     accent: Color,
     currentPositionMs: Long,
@@ -90,18 +91,24 @@ internal fun PlayerControlsOverlay(
     onPlayNext: () -> Unit,
     onMore: () -> Unit,
 ) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(animationSpec = tween(220)),
-        exit = fadeOut(animationSpec = tween(220)),
-    ) {
-        Box(Modifier.fillMaxSize()) {
-            // Top chrome — back, title (truncated), more. Keyed on
-            // menuOpen + abStartMs + hwDecoder so unrelated state flips
-            // don't recompose it.
-            key(actions.ui.menuOpen.value) {
+    // UI-4 fix: the seek bar is documented ALWAYS-visible but the OUTER
+    // AnimatedVisibility here faded the whole chrome block (top bar AND
+    // bottom bar), so the progress bar vanished with the controls. Render
+    // the block ungated; the top bar and the transport row each keep their
+    // own fade, and the seek bar row stays on screen at all times.
+    Box(Modifier.fillMaxSize()) {
+        // Top chrome — back, title (truncated), more. Keyed on
+        // menuOpen + abStartMs + hwDecoder so unrelated state flips
+        // don't recompose it.
+        key(actions.ui.menuOpen.value) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = visible,
+                enter = fadeIn(animationSpec = tween(220)),
+                exit = fadeOut(animationSpec = tween(220)),
+                modifier = Modifier.align(Alignment.TopCenter),
+            ) {
                 PlayerScreenTopBar(
-                    modifier = Modifier.align(Alignment.TopCenter),
+                    modifier = Modifier,
                     title = title,
                     accent = accent,
                     actions = actions,
@@ -109,10 +116,13 @@ internal fun PlayerControlsOverlay(
                     onMore = onMore,
                 )
             }
-            // Bottom chrome — seek bar (always visible) + transport
-            // (auto-hide). The seek bar is intentionally OUTSIDE the
-            // bottom-bar's AnimatedVisibility — it's always visible.
-            // Keyed on isPlaying (BIG play icon flip) + locked.
+        }
+        // Bottom chrome — seek bar (always visible) + transport
+        // (auto-hide). The seek bar is intentionally OUTSIDE the
+        // bottom-bar's AnimatedVisibility — it's always visible (except
+        // PiP/locked, where the whole overlay is skipped by the host).
+        // Keyed on isPlaying (BIG play icon flip) + locked.
+        if (showSeekBar) {
             key(isPlaying, locked, actions.quick.subSyncEnabled.value) {
                 PlayerScreenBottomBar(
                     visible = visible,

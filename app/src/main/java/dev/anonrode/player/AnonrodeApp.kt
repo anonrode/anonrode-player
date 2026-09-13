@@ -78,9 +78,11 @@ class AnonrodeApp : Application() {
         AppLog.d("APP", "app starting, sdk=" + android.os.Build.VERSION.SDK_INT)
         // Coil: register the video-frame decoder so library thumbnails
         // (PosterArt) render real frames from content:// video URIs.
+        // Crossfade: kills the pop-in when flinging through a big folder.
         SingletonImageLoader.setSafe { ctx ->
             ImageLoader.Builder(ctx)
                 .components { add(VideoFrameDecoder.Factory()) }
+                .crossfade(true)
                 .build()
         }
         scanner = MediaScanner(this)

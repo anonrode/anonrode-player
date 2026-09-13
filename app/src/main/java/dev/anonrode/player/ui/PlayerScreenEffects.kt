@@ -6,6 +6,7 @@ import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import android.view.View
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FastForward
@@ -285,8 +286,19 @@ internal fun FirstFramePosterEffect(mediaId: String, context: Context, ui: Playe
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(context, Uri.parse(mediaId))
-                val bmp: Bitmap? = retriever.getFrameAtTime(0L,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                // Perf fix: a native-res ARGB_8888 frame is ~8MB on 1080p
+                // — the poster only needs to cover the black flash before
+                // STATE_READY, and it competes with prepare() for the same
+                // container/IO. Scaled decode: same cover, ~0.5MB, and the
+                // decoder does far less work while ExoPlayer opens the file.
+                val bmp: Bitmap? = if (Build.VERSION.SDK_INT >= 27) {
+                    retriever.getScaledFrameAtTime(
+                        0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 270,
+                    )
+                } else {
+                    retriever.getFrameAtTime(0L,
+                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                }
                 if (bmp != null) {
                     ui.posterBitmap.value = bmp.asImageBitmap()
                 }

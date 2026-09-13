@@ -107,6 +107,20 @@ class PlaybackEngine(
      *  persistence side clears in the same lock write. */
     @Volatile var onLiveSyncLocked: (() -> Unit)? = null
 
+    /**
+     * v0.7.1: apply a persisted (fingerprint) lock to the LIVE session —
+     * called by the host when Room reports a lock for the video the user
+     * is currently watching (the background job finished mid-watch).
+     * Kept additive with the manual delay, mirroring [play]'s
+     * syncEnabled branch. A later live re-lock overwrites cleanly.
+     */
+    fun applyPersistedLock(autoOffsetMs: Long, speedFactor: Float) {
+        persistedAutoMs = autoOffsetMs
+        subtitleOffsetMs = autoOffsetMs + manualDelayMs
+        subtitleSpeedFactor = speedFactor
+        AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor")
+    }
+
     private val syncProcessor = AudioSyncProcessor(this)
 
     /** VLC-style gain stage after the sync analyzer (see its KDoc). */
@@ -246,6 +260,26 @@ class PlaybackEngine(
     /** Whether the engine is currently on a device-decoder profile
      *  (anything except the FFmpeg-preferred mode). */
     val isHw: Boolean get() = decoderMode != MODE_PREFER_APP
+
+    /** v0.7.1: the chip's 3-state cycle — HW+SW → APP SW → HW ONLY → back.
+     *  The old 2-state boolean ping-ponged between DEVICE_ONLY and
+     *  PREFER_APP and could never return to the default hybrid mode. */
+    val decoderModeLabel: String
+        get() = when (decoderMode) {
+            MODE_DEVICE_ONLY -> "HW"
+            MODE_PREFER_APP -> "APP"
+            else -> "HW+SW"
+        }
+
+    /** Cycle the decoder profile (PREFER_DEVICE → PREFER_APP → DEVICE_ONLY). */
+    fun cycleDecoderMode(): Int {
+        val next = when (decoderMode) {
+            MODE_PREFER_DEVICE -> MODE_PREFER_APP
+            MODE_PREFER_APP -> MODE_DEVICE_ONLY
+            else -> MODE_PREFER_DEVICE
+        }
+        return rebuildMode(next)
+    }
 
     /**
      * Speed the host intends to apply after a [rebuild]. The host sets

@@ -49,6 +49,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -153,7 +154,14 @@ fun LibraryScreen(
     startDestination: LibraryStartDestination = LibraryStartDestination.Home,
 ) {
     val vm: dev.anonrode.player.feature.library.LibraryViewModel =
-        androidx.lifecycle.viewmodel.compose.viewModel(factory = viewModelFactory)
+        androidx.lifecycle.viewmodel.compose.viewModel(
+            factory = viewModelFactory,
+            // Perf fix: scope the VM to the ACTIVITY, not the NavBackStackEntry.
+            // The old default gave Home and Series tabs their OWN VM — two
+            // full MediaStore scans, two ContentObservers, two join pipelines,
+            // and drill-down state that did NOT survive the tab hop.
+            viewModelStoreOwner = androidx.compose.ui.platform.LocalContext.current as androidx.lifecycle.ViewModelStoreOwner,
+        )
     val state by vm.ui.collectAsState()
     val palette = rememberSkinPalette()
     val libBg = palette.background
@@ -355,11 +363,17 @@ fun LibraryScreen(
         },
     ) { padding ->
         if (loading || state.loading) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = libAccent)
-                    Spacer(Modifier.height(Dimens.gapMd))
-                    Text("Scanning library…", color = libSecondary, style = MaterialTheme.typography.bodyMedium)
+            // Skeleton loader: placeholder rows matching the real folder-row
+            // geometry instead of a spinner — reads as "content arriving",
+            // not "app waiting". Shown on first run only (the disk snapshot
+            // usually paints instantly on later launches).
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(all = Dimens.gapMd),
+                verticalArrangement = Arrangement.spacedBy(Dimens.gapSm),
+            ) {
+                items(7) { idx ->
+                    SkeletonRow(palette = palette, wide = idx == 0)
                 }
             }
             return@Scaffold
@@ -624,7 +638,11 @@ private fun FolderSectionHeader(
                 color = palette.accent,
                 modifier = Modifier
                     .clickable { menuOpen = true }
-                    .padding(vertical = Dimens.gapXs),
+                    // 48dp touch target (M3 minimum): the bare Text was
+                    // ~24×30dp — the most-used control on the screen and
+                    // the hardest to hit.
+                    .padding(vertical = Dimens.gapXs)
+                    .minimumInteractiveComponentSize(),
             )
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 FolderSortMode.entries.forEach { mode ->
@@ -719,7 +737,10 @@ private fun FolderRow(palette: SkinPalette, s: Series, onClick: () -> Unit, onPl
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier
                     .clickable { menuOpen = true }
-                    .padding(horizontal = Dimens.gapSm, vertical = Dimens.gapXs),
+                    .padding(horizontal = Dimens.gapSm, vertical = Dimens.gapXs)
+                    // 48dp touch target (M3 minimum) — the old Text was
+                    // ~24×30dp.
+                    .minimumInteractiveComponentSize(),
             )
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
@@ -1244,4 +1265,50 @@ private fun episodeSubtitle(ep: EpisodeItem): String {
     }
     val size = fmtSize(ep.video.sizeBytes).ifEmpty { null }
     return listOfNotNull(status, size).joinToString(" · ")
+}
+
+/* ── Skeleton loader row (first-run "Scanning library…" state) ───────────
+ * Matches the folder-row geometry: a 64×44 tile + two text bars, pulsing
+ * via an infinite transition (allocation-light, no shimmer gradient).
+ * ------------------------------------------------------------------------- */
+@Composable
+private fun SkeletonRow(palette: SkinPalette, wide: Boolean = false) {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "skeleton")
+    val alpha by transition.animateFloat(
+        initialValue = 0.12f,
+        targetValue = 0.32f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(700),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "skeletonAlpha",
+    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Dimens.gapMd),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Box(
+            Modifier
+                .size(width = 64.dp, height = 44.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(palette.textDim.copy(alpha = alpha))
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(Dimens.gapXs)) {
+            Box(
+                Modifier
+                    .fillMaxWidth(if (wide) 0.9f else 0.6f)
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(palette.textDim.copy(alpha = alpha))
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth(0.35f)
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(palette.textDim.copy(alpha = alpha))
+            )
+        }
+    }
 }

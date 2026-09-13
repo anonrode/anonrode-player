@@ -44,6 +44,9 @@ class SyncFingerprintJob(
     companion object {
         const val KEY_VIDEO_URI = "video_uri"
 
+        /** "Resync now": re-fingerprint even when a lock is already persisted. */
+        const val KEY_FORCE = "force"
+
         private const val MIN_RECALL = 0.35
         private const val MIN_MARGIN = 0.04
         private const val MIN_ONSETS = 20
@@ -78,9 +81,12 @@ class SyncFingerprintJob(
         val store = MediaStateStore(MediaDatabase.get(applicationContext).mediaStateDao())
 
         try {
-            // Skip if a lock already exists for this video
+            // Skip if a lock already exists for this video — unless this is
+            // a forced "Resync now" run, which must re-fit (the user
+            // edited the subtitle file or suspects the old lock).
+            val forced = inputData.getBoolean(KEY_FORCE, false)
             val existing = store.get(videoUri)
-            if (existing != null &&
+            if (!forced && existing != null &&
                 (existing.autoSyncOffsetMs != 0L || existing.autoSyncSpeedFactor != 1f)) {
                 AppLog.d("SYNC_JOB", "already locked, skipping")
                 return@withContext Result.success()
@@ -162,8 +168,9 @@ class SyncFingerprintJob(
             store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, lock.piecewise)
             AppLog.d(
                 "SYNC_JOB",
-                "LOCKED (${lock.tag}) uri=$videoUri offset=${lock.offsetMs}ms " +
-                    "speed=${lock.speed} recall=${"%.2f".format(lock.recall)}"
+                "LOCKED${if (forced) " (forced)" else ""} (${lock.tag}) uri=$videoUri " +
+                    "offset=${lock.offsetMs}ms speed=${lock.speed} " +
+                    "recall=${"%.2f".format(lock.recall)}"
             )
             Result.success()
         } catch (t: Throwable) {

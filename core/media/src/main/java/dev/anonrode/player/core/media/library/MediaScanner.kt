@@ -200,9 +200,15 @@ class MediaScanner(private val context: Context) {
                     trySend(Unit)
                 }
             }
-            resolver.registerContentObserver(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, observer
-            )
+            try {
+                resolver.registerContentObserver(
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, observer
+                )
+            } catch (t: Throwable) {
+                // Mirrors the init{} guard: a revoked permission must not
+                // crash the collector — the TTL backstop still refreshes.
+                AppLog.e("SCAN", "observer registration failed", t)
+            }
             trySend(Unit)
             awaitClose { resolver.unregisterContentObserver(observer) }
         }

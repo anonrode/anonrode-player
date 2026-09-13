@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.sp
 internal fun DoubleTapFlash(
     modifier: Modifier = Modifier,
     side: Int,
+    seekIncrementSec: Int = 10,
 ) {
     Box(
         modifier = modifier
@@ -69,7 +70,9 @@ internal fun DoubleTapFlash(
                 null, tint = Color.White, modifier = Modifier.size(34.dp)
             )
             Text(
-                (if (side < 0) "−" else "+") + "10s",
+                // The configured seek step (5/10/15/30s in Settings), not a
+                // hardcoded "10s" — the flash must match what actually seeked.
+                (if (side < 0) "−" else "+") + "${seekIncrementSec.coerceAtLeast(1)}s",
                 color = Color.White, style = MaterialTheme.typography.labelLarge
             )
         }

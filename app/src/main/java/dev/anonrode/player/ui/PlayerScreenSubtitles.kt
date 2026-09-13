@@ -145,9 +145,11 @@ internal fun OutlinedSubtitleText(
                 fontSize = sizeSp,
                 lineHeight = lineSp,
                 textAlign = TextAlign.Center,
-                maxLines = 2,
+                // 3 lines, no ellipsis: fansub ASS conversions often carry
+                // 3-line cues; hard-truncating at 2 silently lost content.
+                maxLines = 3,
                 softWrap = true,
-                overflow = TextOverflow.Ellipsis,
+                overflow = TextOverflow.Visible,
                 modifier = Modifier.offset(dx.dp, dy.dp),
             )
         }
@@ -158,9 +160,9 @@ internal fun OutlinedSubtitleText(
             fontSize = sizeSp,
             lineHeight = lineSp,
             textAlign = TextAlign.Center,
-            maxLines = 2,
+            maxLines = 3,
             softWrap = true,
-            overflow = TextOverflow.Ellipsis,
+            overflow = TextOverflow.Visible,
         )
     }
 }

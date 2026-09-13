@@ -22,11 +22,13 @@ import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -79,6 +81,10 @@ internal data class OverflowState(
     val equalizerOn: Boolean,
     val headphonesOn: Boolean,
     val castRouteName: String?,
+    /** v0.7.1 decoder + boost tiles (were unreachable before). */
+    val decoderModeLabel: String = "HW+SW",
+    val rebuildingDecoder: Boolean = false,
+    val volumeBoostPct: Int = 0,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -98,6 +104,8 @@ internal fun PlayerOverflowSheet(
     onHeadphones: () -> Unit,
     onSpeaker: () -> Unit,
     onCaptureFrame: () -> Unit,
+    onDecoder: () -> Unit = {},
+    onVolumeBoost: () -> Unit = {},
 ) {
     if (!visible) return
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -274,6 +282,28 @@ internal fun PlayerOverflowSheet(
                         subLabel = "Save PNG",
                         accent = Color.White,
                         onClick = { onCaptureFrame(); onDismiss() },
+                    )
+                }
+                // ── decoder profile + volume boost (UI-3: these were fully
+                //    engineered (engine.rebuildMode 3 profiles, boost
+                //    processor) but unreachable — the pre-redesign dropdown
+                //    that hosted them was deleted). ──
+                item(key = "decoder") {
+                    OverflowTile(
+                        icon = Icons.Filled.Memory,
+                        label = "Decoder",
+                        subLabel = state.decoderModeLabel,
+                        accent = if (state.rebuildingDecoder) Color.White.copy(alpha = 0.5f) else Color.White,
+                        onClick = { onDecoder(); onDismiss() },
+                    )
+                }
+                item(key = "boost") {
+                    OverflowTile(
+                        icon = Icons.Filled.VolumeUp,
+                        label = "Volume boost",
+                        subLabel = if (state.volumeBoostPct > 0) "+${state.volumeBoostPct}%" else "Off",
+                        accent = if (state.volumeBoostPct > 0) MxGreen else Color.White,
+                        onClick = { onVolumeBoost(); onDismiss() },
                     )
                 }
             }

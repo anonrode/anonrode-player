@@ -161,6 +161,15 @@ class AudioSyncProcessor(
             // Forced give-up so we stop spending CPU on a user-disabled
             // feature; a later re-arm via setCues(true) clears gaveUp.
             gaveUp = true
+        } else if (gaveUp) {
+            // Re-arm on the OFF→ON flip itself: without this the processor
+            // stays dormant until the next seek/discontinuity resets the
+            // window (resetWindow), so flipping the toggle back ON
+            // mid-playback produced no live re-lock for the rest of the
+            // episode. Re-arming here keeps the already-accumulated bins —
+            // evaluation resumes at the next eval slot (~1.4s of audio).
+            failedEvals = 0
+            gaveUp = false
         }
         AppLog.d("SYNC", "setEnabled=$enabled")
     }

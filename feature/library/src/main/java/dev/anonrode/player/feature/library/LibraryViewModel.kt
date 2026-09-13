@@ -85,6 +85,10 @@ class LibraryViewModel(
         val finished: Boolean,
     )
 
+    // @Immutable: UiState is a frozen snapshot by construction (built once
+    // per join then published); annotating lets Compose skip unchanged rows
+    // instead of recomposing the whole list on every emission.
+    @Immutable
     data class UiState(
         val loading: Boolean = true,
         /** Continue watching, most recently played first, deduplicated. */

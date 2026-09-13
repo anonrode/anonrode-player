@@ -1,5 +1,6 @@
 package dev.anonrode.player.core.model
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 
 /**
@@ -30,7 +31,11 @@ data class Video(
     val isSeriesEpisode: Boolean get() = EpisodePattern.find(title) != null
 }
 
-/** One "series" — a folder auto-grouped by the library scanner. */
+/** One "series" — a folder auto-grouped by the library scanner.
+ *  [Immutable]: lets FolderRow skip recomposition when other rows change
+ *  (the VM's other list types are already annotated; Series gates the most
+ *  recompositions because it carries the whole episode list). */
+@Immutable
 @Serializable
 data class Series(
     val name: String,

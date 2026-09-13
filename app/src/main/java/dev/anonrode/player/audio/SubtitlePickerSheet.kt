@@ -109,8 +109,12 @@ fun SubtitlePickerSheet(
                     hash.hash,
                     hash.sizeBytes,
                     // Settings' preferred language wins; empty falls back to
-                    // the client default (Chinese + English).
-                    if (allLangs) "all" else preferredLangs.ifEmpty { OpenSubtitlesClient.DEFAULT_LANGS },
+                    // the client default (Chinese + English). "All langs"
+                    // must be the EMPTY id — the XML-RPC sublanguageid field
+                    // takes ISO codes or "" for any-language; the literal
+                    // "all" matches a nonexistent language and returns
+                    // zero results.
+                    if (allLangs) "" else preferredLangs.ifEmpty { OpenSubtitlesClient.DEFAULT_LANGS },
                 )
             }
             searching = false

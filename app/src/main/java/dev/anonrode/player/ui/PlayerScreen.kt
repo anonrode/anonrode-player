@@ -89,6 +89,12 @@ fun PlayerScreen(
     onOpenSettings: () -> Unit = {},
     /** Live subtitle offset (ms, signed) reported by the sync engine. */
     liveOffsetMs: Long = 0L,
+    /**
+     * v0.7.1: true while the sync engine is actually working (live
+     * correlation in flight or a forced fingerprint running). Drives the
+     * bottom-row toggle spinner and the SYNCED chip's honest visibility.
+     */
+    subSyncRunning: Boolean = false,
     /** True while a fresh calibration pass is running. */
     isCalibrating: Boolean = false,
     /** Start a new calibration pass (CALIB button in the sync popover). */
@@ -309,8 +315,14 @@ fun PlayerScreen(
     ZoomRestoreEffect(initialZoomIdx, ui)
     // Mirror the restored speed into the player; the livePlayer key re-runs
     // this on every decoder swap.
-    LaunchedEffect(initialSpeed, livePlayer) {
-        livePlayer.setPlaybackSpeed(initialSpeed)
+    // Bug-8 fix: re-apply speed on decoder swaps from the LIVE speed index,
+    // not the open-time initialSpeed. The old (initialSpeed, livePlayer)
+    // keys rolled mid-session speed changes (user set 1.5x, swapped the
+    // decoder, got 1.0x back) because initialSpeed is frozen at open.
+    // speedIdx is updated by the speed pill as the user changes speed, so
+    // reading it here preserves the session value across player rebuilds.
+    LaunchedEffect(livePlayer) {
+        livePlayer.setPlaybackSpeed(speeds[speedIdx.intValue])
     }
     // v0.6.2 sub-sync UX pass: mirror the live DataStore toggle into the
     // Compose state the bottom-bar reads from. The host writes through
@@ -319,6 +331,12 @@ fun PlayerScreen(
     // immediately, without waiting for the next tap.
     LaunchedEffect(subtitleAutoSyncEnabled) {
         quick.subSyncEnabled.value = subtitleAutoSyncEnabled
+    }
+    // v0.7.1: mirror the host's sync-running signal into the Compose state
+    // the bottom-bar spinner reads. The host sets it around the live
+    // correlation window and while a forced fingerprint is queued/running.
+    LaunchedEffect(subSyncRunning) {
+        quick.subSyncRunning.value = subSyncRunning
     }
     ZoomApplyEffect(ui.zoomIdx.intValue, ui)
     RotationLockEffect(activity, quick.rotateMode.value)
@@ -393,6 +411,7 @@ fun PlayerScreen(
                     if (ui.flashSide.value < 0) Alignment.CenterStart else Alignment.CenterEnd
                 ),
                 side = ui.flashSide.value,
+                seekIncrementSec = seekIncrementSec,
             )
         }
 
@@ -419,9 +438,12 @@ fun PlayerScreen(
             )
         }
 
-        // ── controls overlay (hidden entirely while in PiP / locked) ──
+        // ── controls overlay — the seek bar row inside stays visible even
+        //    when the chrome is hidden (see UI-4 fix in PlayerScreenControls);
+        //    hidden entirely only while in PiP / locked.
         PlayerControlsOverlay(
             visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
+            showSeekBar = !ui.locked.value && !isPipMode,
             title = title,
             accent = accent,
             currentPositionMs = livePlayer.currentPosition,
@@ -486,6 +508,9 @@ fun PlayerScreen(
                 equalizerOn = quick.equalizerOn.value,
                 headphonesOn = quick.headphonesOn.value,
                 castRouteName = castRouteName,
+                decoderModeLabel = engine?.decoderModeLabel ?: "HW+SW",
+                rebuildingDecoder = isRebuildingDecoder,
+                volumeBoostPct = volumeBoostPct,
             ),
             onDismiss = { overflowOpen.value = false },
             onAspect = { actions.cycleZoom() },
@@ -506,6 +531,10 @@ fun PlayerScreen(
             onHeadphones = { actions.toggleHeadphones() },
             onSpeaker = { actions.openAudioOutputPicker() },
             onCaptureFrame = { actions.captureFrame() },
+            // v0.7.1: real actions for the previously-dead decoder/boost
+            // tiles — the host cycles the 3 engine profiles / boosts gain.
+            onDecoder = { actions.toggleHwDecoder() },
+            onVolumeBoost = onVolumeBoostCycle,
         )
 
         // ── A-B repeat chip (tap advances the cycle: set B / clear) ──
@@ -546,7 +575,11 @@ fun PlayerScreen(
         }
 
         // ── SYNCED chip + sync popover (top-left, just below the top bar) ──
-        if (!isPipMode) {
+        // Truthful visibility: the chip is a "locked" signal, not wallpaper.
+        // It appears only when a real offset exists (persisted lock applied
+        // or live lock landed) OR the user's manual nudges moved it — a
+        // zero offset on a never-synced video renders nothing.
+        if (!isPipMode && (liveOffsetMs != 0L || subSyncRunning)) {
             SyncedChip(
                 modifier = Modifier.align(Alignment.TopStart).padding(top = 70.dp, start = 14.dp),
                 offsetMs = liveOffsetMs,

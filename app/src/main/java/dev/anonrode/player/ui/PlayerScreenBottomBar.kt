@@ -217,7 +217,11 @@ private fun SeekBarRow(
     var showCurrentOnRight by remember { mutableStateOf(false) }
     val remainingSec = (durationSec - positionSec).coerceAtLeast(0f)
     val leftLabel = if (showRemainingOnLeft) "−${fmtTime(remainingSec.toLong())}" else fmtTime(currentPositionMs)
-    val rightLabel = if (showCurrentOnRight) fmtTime(currentPositionMs) else fmtTime(remainingSec.toLong())
+    // Bug-7 fix: the right label's second state is CURRENT (duplicating
+    // the left), so the mockup's "12:34 / 45:21" (total) was unreachable.
+    // Default = total duration; tap flips to current — both sides now
+    // show distinct, honest values.
+    val rightLabel = if (showCurrentOnRight) fmtTime(currentPositionMs) else fmtTime(durationSec.toLong())
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             leftLabel,

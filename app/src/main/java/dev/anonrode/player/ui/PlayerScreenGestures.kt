@@ -14,6 +14,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.withTimeoutOrNull
@@ -161,7 +163,13 @@ internal fun Modifier.playerGestureLayer(
                             val deltaFrac = (x - gestures.startX.floatValue) / gestures.scrW.floatValue
                             val target =
                                 (gestures.startPosMs.floatValue + deltaFrac * d).coerceIn(0f, d.toFloat())
-                            actions.livePlayer.seekTo(target.toLong())
+                            // Perf fix: the drag does NOT seek per pointer
+                            // event — each seek is a track re-position +
+                            // buffer re-read (50ms+ on HEVC), the classic
+                            // janky scrub. Track the pending target here
+                            // (HUD pill + state for the seek bar to read);
+                            // ONE seek fires in onDragEnd.
+                            gestures.pendingSeekMs.floatValue = target
                             actions.showHud(Icons.Filled.FastForward,
                                 fmtTime(target.toLong()) + " / " + fmtTime(d))
                         }
@@ -188,7 +196,23 @@ internal fun Modifier.playerGestureLayer(
                     }
                     gestures.lastX.floatValue = x
                 },
-                onDragEnd = { gestures.mode.value = null },
+                onDragEnd = {
+                    // Commit the ONE pending scrub seek (fast/keyframe seek —
+                    // scrubbing is coarse navigation; the seekbar handles
+                    // exact seeks). Same setSeekParameters pattern as seekBy.
+                    if (gestures.mode.value == "seek" && gestures.pendingSeekMs.floatValue >= 0f) {
+                        val target = gestures.pendingSeekMs.floatValue.toLong()
+                        val p = actions.engine?.player ?: actions.livePlayer
+                        (p as? ExoPlayer)?.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                        p.seekTo(target)
+                        actions.view.postDelayed({
+                            ((actions.engine?.player ?: actions.livePlayer) as? ExoPlayer)
+                                ?.setSeekParameters(SeekParameters.EXACT)
+                        }, 500)
+                        gestures.pendingSeekMs.floatValue = -1f
+                    }
+                    gestures.mode.value = null
+                },
                 onDragCancel = { gestures.mode.value = null },
             )
         }

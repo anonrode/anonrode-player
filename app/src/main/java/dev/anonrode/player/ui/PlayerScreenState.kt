@@ -199,6 +199,13 @@ internal class GestureUiState {
     val startY = mutableFloatStateOf(0f)
     val lastX = mutableFloatStateOf(0f)
     val startPosMs = mutableFloatStateOf(0f)
+
+    /**
+     * Pending scrub target of an in-flight seek gesture (ms; −1 = none).
+     * The drag itself no longer seeks per pointer event — the single
+     * commit fires on drag end (PlayerScreenGestures onDragEnd).
+     */
+    val pendingSeekMs = mutableFloatStateOf(-1f)
     val startVol = mutableIntStateOf(0)
     val startBri = mutableFloatStateOf(0.5f)
 
