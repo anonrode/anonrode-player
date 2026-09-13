@@ -73,7 +73,11 @@ object SyncFingerprint {
                 )
             )
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .setInitialDelay(90, TimeUnit.SECONDS)
+            // v0.7.1 speed pass: an explicit "Resync now" runs IMMEDIATELY
+            // (no initial delay) — the user is watching and asked. The
+            // background auto-schedule keeps the 90s delay so the decode
+            // pass doesn't fight the viewing session for CPU/IO.
+            .setInitialDelay(if (force) 0 else 90, TimeUnit.SECONDS)
             .setConstraints(
                 Constraints.Builder()
                     .setRequiresBatteryNotLow(true)

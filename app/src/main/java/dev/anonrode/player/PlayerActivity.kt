@@ -141,8 +141,12 @@ class PlayerActivity : ComponentActivity() {
 
     private var title by mutableStateOf("")
     private var cueText by mutableStateOf<String?>(null)
-    private var positionSec by mutableFloatStateOf(0f)
-    private var durationSec by mutableFloatStateOf(0f)
+    // Backing states exposed AS State to PlayerScreen (v0.7.1 perf pass):
+    // the delegate `positionSec` stays for imperative reads in this class.
+    private val positionState = mutableFloatStateOf(0f)
+    private val durationState = mutableFloatStateOf(0f)
+    private var positionSec by positionState
+    private var durationSec by durationState
 
     /** Playback speed applied to the current video (drives the speed button). */
     private var restoredSpeed by mutableFloatStateOf(1f)
@@ -545,8 +549,12 @@ class PlayerActivity : ComponentActivity() {
                             title = title,
                             mediaId = currentUriStr ?: "",
                             cueText = cueText,
-                            positionSec = positionSec,
-                            durationSec = durationSec,
+                            // v0.7.1 perf pass: pass the backing STATE objects
+                            // (activity fields are mutableFloatStateOf) so a
+                            // 10Hz tick recomposes only the seek bar, not the
+                            // whole PlayerScreen body.
+                            positionSec = positionState,
+                            durationSec = durationState,
                             onBack = { finish() },
                             initialSpeed = restoredSpeed,
                             onSpeedChanged = { speed ->

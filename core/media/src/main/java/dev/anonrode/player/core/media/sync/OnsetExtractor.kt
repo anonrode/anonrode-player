@@ -191,6 +191,11 @@ class OnsetExtractor(private val context: Context) {
             val mime = format.getString(MediaFormat.KEY_MIME) ?: return
             extractor.selectTrack(track)
 
+            // Null surface + releaseOutputBuffer(idx, false) means the
+            // decoder is never paced to a render timeline — the loop below
+            // drains PCM as fast as the codec produces it (CPU-bound,
+            // typically 10-20x realtime for audio), which is what makes
+            // the whole-file fingerprint pass tractable.
             codec = MediaCodec.createDecoderByType(mime)
             codec.configure(format, null, null, 0)
             codec.start()

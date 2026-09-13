@@ -70,6 +70,14 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
      */
     val localSeek = mutableFloatStateOf(-1f)
 
+    /**
+     * Scrub frame preview (v0.7.1 MX-style scrub): the throttled, scaled
+     * frame at the current scrub target — slider drag OR swipe gesture —
+     * decoded by ScrubPreviewEffect while scrubbing, null otherwise.
+     * Read only by the scrub bubble in the seek bar row.
+     */
+    val scrubPreview = mutableStateOf<ImageBitmap?>(null)
+
     /** -1 left, +1 right, 0 none — double-tap seek flash side. */
     val flashSide = mutableIntStateOf(0)
 

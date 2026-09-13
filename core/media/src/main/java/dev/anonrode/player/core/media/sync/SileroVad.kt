@@ -224,14 +224,20 @@ class SileroVad(context: Context) : AutoCloseable {
     }
 
     // ── linear resampler to 16 kHz mono ──────────────────────────────
+    // v0.7.1 speed pass: pending was an ArrayList<Float> — one boxed
+    // allocation per sample (48kHz stereo → 48k boxes/second, GC churn
+    // through the whole multi-minute decode). A growable FloatArray
+    // with manual sizing does the same job with zero per-sample cost.
     private val resampler = object {
         private var srcRate = 0
         private var fracPos = 0.0
         private var prevLast = 0f
-        private val pending = ArrayList<Float>(8192)
+        private var pending = FloatArray(8192)
+        private var n = 0
 
         fun push(x: Float) {
-            pending.add(x)
+            if (n == pending.size) pending = pending.copyOf(n * 2)
+            pending[n++] = x
         }
 
         fun drain(sampleRate: Int, emit: (Float) -> Unit) {
@@ -239,8 +245,10 @@ class SileroVad(context: Context) : AutoCloseable {
                 srcRate = sampleRate
                 fracPos = 0.0
             }
-            val n = pending.size
-            if (n < 2) return
+            if (n < 2) {
+                n = 0
+                return
+            }
             val step = srcRate.toDouble() / SR.toDouble()
             var p = fracPos
             while (p < n - 1) {
@@ -253,7 +261,7 @@ class SileroVad(context: Context) : AutoCloseable {
             }
             fracPos = p - n
             prevLast = pending[n - 1]
-            pending.clear()
+            n = 0
         }
     }
 }

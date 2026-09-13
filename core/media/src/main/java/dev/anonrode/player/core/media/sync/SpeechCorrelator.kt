@@ -37,7 +37,18 @@ import kotlin.math.abs
 object SpeechCorrelator {
 
     const val ALIGN_BIN = 0.1
-    const val MIN_AUDIO_SECONDS = 16.0
+
+    /**
+     * Minimum analyzed audio before the first evaluation may run. v0.7.1
+     * speed pass: 16s → 8s. The cross-half gate still needs two sensible
+     * halves (≥2.5s speech mass each at the old gates), and the four lock
+     * gates (score/margin/containment/cross-half) are unchanged — 8s of
+     * dense C-drama dialogue carries plenty of onset structure for the
+     * correlator. Videos with sparse dialogue simply fail the gates and
+     * keep accumulating (the next eval slot retries with more data), so
+     * the lower floor only speeds up LOCKABLE content, never mis-locks.
+     */
+    const val MIN_AUDIO_SECONDS = 8.0
     const val MAX_OFFSET_SEC = 40.0
     const val MIN_SPEECH_BINS = 30
 

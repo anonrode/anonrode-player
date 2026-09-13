@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.State
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -77,8 +78,9 @@ internal fun PlayerControlsOverlay(
     title: String,
     accent: Color,
     currentPositionMs: Long,
-    positionSec: Float,
-    durationSec: Float,
+    /** State-wrapped (v0.7.1 perf pass) — see PlayerScreen's param docs. */
+    positionSec: State<Float>,
+    durationSec: State<Float>,
     localSeek: MutableFloatState,
     isPlaying: Boolean,
     locked: Boolean,

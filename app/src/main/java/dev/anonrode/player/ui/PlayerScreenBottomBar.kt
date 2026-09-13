@@ -10,18 +10,22 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -44,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,6 +58,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -99,8 +106,9 @@ internal fun PlayerScreenBottomBar(
     modifier: Modifier = Modifier,
     accent: Color,
     currentPositionMs: Long,
-    positionSec: Float,
-    durationSec: Float,
+    /** State-wrapped (v0.7.1 perf pass) — see PlayerScreen's param docs. */
+    positionSec: State<Float>,
+    durationSec: State<Float>,
     localSeek: MutableFloatState,
     isPlaying: Boolean,
     locked: Boolean,
@@ -133,12 +141,18 @@ internal fun PlayerScreenBottomBar(
             .padding(horizontal = PlayerDimens.gapLg, vertical = PlayerDimens.gapSm)
     ) {
         // ── 1) Seekbar row — ALWAYS visible (no AnimatedVisibility gate) ──
+        // pendingSeekMs / scrubPreview are REF passes (no .value reads in
+        // this body) so a scrub tick recomposes only SeekBarRow, not the
+        // whole bottom bar — same containment discipline as the
+        // State<Float> perf pass.
         SeekBarRow(
             accent = accent,
             currentPositionMs = currentPositionMs,
             positionSec = positionSec,
             durationSec = durationSec,
             localSeek = localSeek,
+            pendingSeekMs = actions.gestures.pendingSeekMs,
+            scrubPreview = actions.ui.scrubPreview,
             onSeekCommitted = { sec ->
                 actions.livePlayer.seekTo((sec * 1000).toLong())
             },
@@ -146,12 +160,14 @@ internal fun PlayerScreenBottomBar(
         Spacer(Modifier.height(PlayerDimens.gapSm))
 
         // ── 2) Transport row — auto-hides with the chrome ──
-        // Only fades; does not collapse space (that would jump the seek
-        // bar up/down when the chrome hides.
+        // Only fades + slides a half-height (does not collapse space —
+        // that would jump the seek bar up/down when the chrome hides).
         androidx.compose.animation.AnimatedVisibility(
             visible = visible,
-            enter = fadeIn(animationSpec = tween(220)),
-            exit = fadeOut(animationSpec = tween(220)),
+            enter = fadeIn(animationSpec = tween(220)) +
+                slideInVertically(animationSpec = tween(220)) { it / 2 },
+            exit = fadeOut(animationSpec = tween(220)) +
+                slideOutVertically(animationSpec = tween(220)) { it / 2 },
         ) {
             TransportRow(
                 accent = accent,
@@ -208,20 +224,32 @@ internal fun PlayerScreenBottomBar(
 private fun SeekBarRow(
     accent: Color,
     currentPositionMs: Long,
-    positionSec: Float,
-    durationSec: Float,
+    positionSec: State<Float>,
+    durationSec: State<Float>,
     localSeek: MutableFloatState,
+    /** Swipe-gesture scrub target (ms, −1 = none) — see GestureUiState. */
+    pendingSeekMs: MutableFloatState,
+    /** Throttled frame preview for the scrub bubble — see ScrubPreviewEffect. */
+    scrubPreview: State<ImageBitmap?>,
     onSeekCommitted: (Float) -> Unit,
 ) {
     var showRemainingOnLeft by remember { mutableStateOf(false) }
     var showCurrentOnRight by remember { mutableStateOf(false) }
-    val remainingSec = (durationSec - positionSec).coerceAtLeast(0f)
-    val leftLabel = if (showRemainingOnLeft) "−${fmtTime(remainingSec.toLong())}" else fmtTime(currentPositionMs)
+    // v0.7.1 perf pass: whole-second reads. The labels recompute only when
+    // the integer second changes (1Hz), not on every 10Hz tick; the slider
+    // thumb still tracks smoothly via the raw state below.
+    val posWhole = positionSec.value.toLong()
+    val leftLabel = if (showRemainingOnLeft) {
+        "−${fmtTime(((durationSec.value - positionSec.value).coerceAtLeast(0f)).toLong())}"
+    } else {
+        fmtTime(posWhole * 1000L)
+    }
     // Bug-7 fix: the right label's second state is CURRENT (duplicating
     // the left), so the mockup's "12:34 / 45:21" (total) was unreachable.
     // Default = total duration; tap flips to current — both sides now
     // show distinct, honest values.
-    val rightLabel = if (showCurrentOnRight) fmtTime(currentPositionMs) else fmtTime(durationSec.toLong())
+    val rightLabel = if (showCurrentOnRight) fmtTime(posWhole * 1000L)
+    else fmtTime(durationSec.value.toLong() * 1000L)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             leftLabel,
@@ -236,34 +264,59 @@ private fun SeekBarRow(
                     indication = ripple(bounded = false, radius = 32.dp, color = accent),
                 ) { showRemainingOnLeft = !showRemainingOnLeft }
         )
-        // Animate the visible thumb position between the host's 10Hz tick
-        // so the slider doesn't strobe.
-        val visualPos by animateFloatAsState(
-            targetValue = if (localSeek.floatValue >= 0f) localSeek.floatValue
-            else positionSec,
-            animationSpec = tween(durationMillis = 100, easing = LinearEasing),
-            label = "seekbar",
-        )
-        Slider(
-            value = visualPos.coerceIn(0f, durationSec.coerceAtLeast(1f)),
-            onValueChange = { localSeek.floatValue = it },
-            onValueChangeFinished = {
-                if (localSeek.floatValue >= 0f) {
-                    onSeekCommitted(localSeek.floatValue)
-                }
-                localSeek.floatValue = -1f
-            },
-            valueRange = 0f..durationSec.coerceAtLeast(1f),
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = accent,
-                inactiveTrackColor = Color.White.copy(alpha = 0.25f)
-            ),
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 8.dp)
-                .heightIn(min = 32.dp)
-        )
+        // v0.7.1: MX-style scrub. The Box tracks BOTH scrub sources — the
+        // slider drag (localSeek) and the horizontal swipe gesture
+        // (pendingSeekMs, written by PlayerScreenGestures; the bar was
+        // always meant to read it, per the gesture code's own comment).
+        // While either is active the thumb follows the target and a frame
+        // + time bubble floats above the bar (ScrubBubble).
+        Box(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+            // Animate the visible thumb position between the host's 10Hz tick
+            // so the slider doesn't strobe.
+            val visualPos by animateFloatAsState(
+                targetValue = when {
+                    localSeek.floatValue >= 0f -> localSeek.floatValue
+                    pendingSeekMs.floatValue >= 0f -> pendingSeekMs.floatValue / 1000f
+                    else -> positionSec.value
+                },
+                animationSpec = tween(durationMillis = 100, easing = LinearEasing),
+                label = "seekbar",
+            )
+            val dur = durationSec.value.coerceAtLeast(1f)
+            Slider(
+                value = visualPos.coerceIn(0f, dur),
+                onValueChange = { localSeek.floatValue = it },
+                onValueChangeFinished = {
+                    if (localSeek.floatValue >= 0f) {
+                        onSeekCommitted(localSeek.floatValue)
+                    }
+                    localSeek.floatValue = -1f
+                },
+                valueRange = 0f..dur,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = accent,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 32.dp)
+            )
+            val scrubSec = when {
+                localSeek.floatValue >= 0f -> localSeek.floatValue
+                pendingSeekMs.floatValue >= 0f -> pendingSeekMs.floatValue / 1000f
+                else -> -1f
+            }
+            if (scrubSec >= 0f) {
+                ScrubBubble(
+                    timeLabel = fmtTime((scrubSec * 1000).toLong()),
+                    fraction = (scrubSec / dur).coerceIn(0f, 1f),
+                    preview = scrubPreview.value,
+                    accent = accent,
+                    modifier = Modifier.align(Alignment.TopStart),
+                )
+            }
+        }
         Text(
             rightLabel,
             color = Color.White.copy(alpha = 0.75f),
@@ -277,6 +330,73 @@ private fun SeekBarRow(
                     indication = ripple(bounded = false, radius = 32.dp, color = accent),
                 ) { showCurrentOnRight = !showCurrentOnRight }
         )
+    }
+}
+
+/* ── Scrub bubble (v0.7.1) ────────────────────────────────────────────────
+ * MX-style preview card floating above the seek bar while scrubbing: a
+ * 128×72dp frame preview (throttled decode from ScrubPreviewEffect) with
+ * the exact target time on a scrim strip along the bottom. A dark
+ * placeholder shows until the first frame decodes, so the card geometry
+ * never jumps.
+ *
+ * Fixed size is deliberate: the horizontal anchor — centre the card on
+ * the thumb, clamped to the track — needs the card width known BEFORE
+ * layout, and a fixed card is what MX Player shows. The card has no
+ * pointer-input modifiers, so it never steals touches from the slider.
+ * ------------------------------------------------------------------------- */
+@Composable
+private fun ScrubBubble(
+    timeLabel: String,
+    fraction: Float,
+    preview: ImageBitmap?,
+    accent: Color,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier) {
+        val trackW = maxWidth
+        val cardW = 128.dp
+        // Centre the card on the thumb position, clamped so the card
+        // never spills past either end of the track.
+        val x = (trackW * fraction - cardW / 2).coerceIn(0.dp, (trackW - cardW).coerceAtLeast(0.dp))
+        Box(
+            modifier = Modifier
+                // 72dp card + 16dp clearance above the slider's top edge.
+                .offset(x = x, y = (-88).dp)
+                .size(width = cardW, height = 72.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color.Black.copy(alpha = 0.75f))
+                .border(1.dp, accent.copy(alpha = 0.6f), RoundedCornerShape(10.dp)),
+        ) {
+            if (preview != null) {
+                Image(
+                    bitmap = preview,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            // Scrim strip + exact target time pinned to the card bottom.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))
+                        )
+                    )
+                    .padding(vertical = 2.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    timeLabel,
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
     }
 }
 

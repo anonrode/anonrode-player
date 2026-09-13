@@ -23,7 +23,7 @@ interface SyncListener {
  *
  * Pipeline: 10 ms windows -> multi-feature speech score (energy / syllable
  * variance / ZCR against an adaptive floor-peak VAD) -> one soft bin per
- * 100 ms of media time -> every ~1.4 s of audio a snapshot of the bin
+ * 100 ms of media time -> every ~1.0 s of audio a snapshot of the bin
  * window is handed to [SyncAnalysisWorker], which runs the expensive
  * [SpeechCorrelator.findOffset] on a dedicated low-priority thread and
  * publishes the lock decision through [SyncListener].
@@ -31,7 +31,7 @@ interface SyncListener {
  * Audio-thread budget: this processor runs inside Media3's audio sink
  * thread, so [queueInput] does ONLY cheap, allocation-free work: a
  * single pass over the samples updating running window sums, a passthrough
- * copy into a reused output buffer, and (once per ~1.4 s of audio) a
+ * copy into a reused output buffer, and (once per ~1.0 s of audio) a
  * System.arraycopy snapshot under the worker's single-flight gate. All
  * correlation and lock decisions happen on the worker thread — running
  * findOffset here caused underruns on budget devices.
@@ -167,7 +167,7 @@ class AudioSyncProcessor(
             // window (resetWindow), so flipping the toggle back ON
             // mid-playback produced no live re-lock for the rest of the
             // episode. Re-arming here keeps the already-accumulated bins —
-            // evaluation resumes at the next eval slot (~1.4s of audio).
+            // evaluation resumes at the next eval slot (~1s of audio).
             failedEvals = 0
             gaveUp = false
         }
@@ -423,7 +423,7 @@ class AudioSyncProcessor(
      * background worker. The audio render thread only pays one
      * System.arraycopy (into the worker's preallocated snapshot buffer,
      * under the single-flight gate); if an evaluation is already in flight
-     * this slot is dropped and the next one (~1.4 s of audio later)
+     * this slot is dropped and the next one (~1.0 s of audio later)
      * retries.
      */
     private fun scheduleEvaluate(posMs: Long) {
@@ -502,16 +502,27 @@ class AudioSyncProcessor(
          */
         private const val BIN_WINDOW = 40 * 10 * 2 + 15 * 60 * 10
 
-        /** One evaluation slot per ~1.4 s of analyzed audio. */
-        private const val EVAL_INTERVAL_MS = 1400L
+        /**
+         * One evaluation slot per ~1.0 s of analyzed audio (was 1.4 s —
+         * v0.7.1 speed pass). A lock needs two agreeing evaluations, so
+         * the interval directly scales time-to-lock: 8s arm floor + two
+         * 1s-apart agreeing evals ≈ 10s from press-play, versus ~19s at
+         * the old constants. The worker is single-flight and drops the
+         * slot when busy, so a heavy correlation can never back up the
+         * audio thread — the interval only bounds how often we RETRY.
+         */
+        private const val EVAL_INTERVAL_MS = 1000L
 
         /**
          * Consecutive no-lock evaluations before we stop trying. A lock
-         * needs two agreeing evaluations, so 10 slots is generous for
-         * lockable content while capping un-lockable content at ~14 s of
-         * evaluation slots (plus the 16 s of audio needed to arm the first
-         * one). Re-armed by flush()/reset()/position reset/fresh cues.
+         * needs two agreeing evaluations, so lockable content locks long
+         * before the budget matters; the budget exists to cap CPU on
+         * un-lockable content. Sized so the give-up horizon is ~30 s of
+         * audio (8 s arm floor + 22 × 1 s slots) — the SAME coverage the
+         * old constants gave (16 s + 10 × 1.4 s), so sparse-dialogue
+         * videos keep their full listening window despite the speed pass.
+         * Re-armed by flush()/reset()/position reset/fresh cues.
          */
-        private const val MAX_EVAL_ATTEMPTS = 10
+        private const val MAX_EVAL_ATTEMPTS = 22
     }
 }

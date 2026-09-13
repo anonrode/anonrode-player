@@ -13,6 +13,8 @@ import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -307,6 +309,93 @@ internal fun FirstFramePosterEffect(mediaId: String, context: Context, ui: Playe
             } finally {
                 try { retriever.release() } catch (_: Throwable) {}
             }
+        }
+    }
+}
+
+/**
+ * MX-style scrub preview (v0.7.1 UI pass): while the user is scrubbing —
+ * slider drag ([PlayerUiState.localSeek]) OR horizontal swipe
+ * ([GestureUiState.pendingSeekMs]) — keep ONE MediaMetadataRetriever open
+ * for the whole scrub session and decode throttled, downscaled frames at
+ * the pending target, published to [PlayerUiState.scrubPreview] for the
+ * scrub bubble.
+ *
+ * Keying: the effect keys on the derived "scrubbing" boolean, never on the
+ * target itself — the target moves at pointer-event rate, and re-keying
+ * per tick would reopen the retriever dozens of times a second. The
+ * derivedStateOf read lives inside THIS composable's scope, so the
+ * pointer-event stream never invalidates PlayerScreen's body; only the
+ * drag-start / drag-end transitions do.
+ *
+ * Frame source notes: OPTION_CLOSEST_SYNC decodes from the nearest
+ * keyframe, which is the budget-safe choice — an exact (OPTION_CLOSEST)
+ * decode must walk from the previous keyframe and can cost 300ms+ per
+ * frame on a 10s-GOP rip. The preview frame is therefore approximate (up
+ * to one GOP away); the time label on the bubble carries the exact target.
+ * The retriever's codec use can contend with active playback decode on
+ * low-end devices, hence the small 256×144 target and the ~8fps cap.
+ */
+@Composable
+internal fun ScrubPreviewEffect(
+    mediaId: String,
+    context: Context,
+    ui: PlayerUiState,
+    gestures: GestureUiState,
+) {
+    val scrubbing by remember {
+        derivedStateOf {
+            ui.localSeek.floatValue >= 0f || gestures.pendingSeekMs.floatValue >= 0f
+        }
+    }
+    LaunchedEffect(scrubbing, mediaId) {
+        if (!scrubbing || mediaId.isBlank()) {
+            ui.scrubPreview.value = null
+            return@LaunchedEffect
+        }
+        val retriever = MediaMetadataRetriever()
+        try {
+            withContext(Dispatchers.IO) {
+                try {
+                    retriever.setDataSource(context, Uri.parse(mediaId))
+                } catch (t: Throwable) {
+                    AppLog.e("SCRUB", "retriever open failed for $mediaId", t)
+                    return@withContext
+                }
+                while (true) {
+                    val targetMs = when {
+                        ui.localSeek.floatValue >= 0f ->
+                            (ui.localSeek.floatValue * 1000).toLong()
+                        gestures.pendingSeekMs.floatValue >= 0f ->
+                            gestures.pendingSeekMs.floatValue.toLong()
+                        else -> break
+                    }
+                    val bmp: Bitmap? = try {
+                        if (Build.VERSION.SDK_INT >= 27) {
+                            retriever.getScaledFrameAtTime(
+                                targetMs * 1000,
+                                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                                256, 144,
+                            )
+                        } else {
+                            retriever.getFrameAtTime(
+                                targetMs * 1000,
+                                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                            )
+                        }
+                    } catch (t: Throwable) {
+                        AppLog.e("SCRUB", "frame decode failed at ${targetMs}ms", t)
+                        null
+                    }
+                    if (bmp != null) {
+                        ui.scrubPreview.value = bmp.asImageBitmap()
+                    }
+                    delay(120)
+                }
+            }
+        } finally {
+            ui.scrubPreview.value = null
+            try { retriever.release() } catch (_: Throwable) {}
         }
     }
 }

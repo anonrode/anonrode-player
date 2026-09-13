@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,8 +68,16 @@ fun PlayerScreen(
     engine: PlaybackEngine? = null,
     title: String,
     cueText: String?,
-    positionSec: Float,
-    durationSec: Float,
+    /**
+     * Live playback position (seconds) and duration, as STATE — v0.7.1 perf
+     * pass. Plain Float params made every 10Hz render-tick write a new value
+     * into the whole 65-parameter PlayerScreen body, recomposing top bar,
+     * rail, sheets and pills 10x/second. As State params, a tick recomposes
+     * ONLY the composables that read .value (the seek bar + its labels);
+     * everything else stays skipped.
+     */
+    positionSec: State<Float>,
+    durationSec: State<Float>,
     onBack: () -> Unit,
     initialSpeed: Float = 1f,
     onSpeedChanged: (Float) -> Unit = {},
@@ -361,6 +370,8 @@ fun PlayerScreen(
     SubtitlePositionRestoreEffect(mediaId, context, gestures)
     SubtitlePositionPresetEffect(subtitleStyle.position, context, mediaId, gestures)
     FirstFramePosterEffect(mediaId, context, ui)
+    // v0.7.1: throttled frame previews for the MX-style scrub bubble.
+    ScrubPreviewEffect(mediaId, context, ui, gestures)
 
     Box(
         modifier = modifier
@@ -449,8 +460,7 @@ fun PlayerScreen(
             currentPositionMs = livePlayer.currentPosition,
             positionSec = positionSec,
             durationSec = durationSec,
-            localSeek = ui.localSeek,
-            isPlaying = ui.isPlaying.value,
+            localSeek = ui.localSeek,            isPlaying = ui.isPlaying.value,
             locked = ui.locked.value,
             hasPreviousEpisode = hasPreviousEpisode,
             hasNextEpisode = hasNextEpisode,
@@ -470,8 +480,14 @@ fun PlayerScreen(
         //    appears too — but the seek bar underneath stays.
         androidx.compose.animation.AnimatedVisibility(
             visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
-            enter = androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(220)),
-            exit = androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(220)),
+            enter = androidx.compose.animation.fadeIn(
+                animationSpec = androidx.compose.animation.core.tween(220)) +
+                androidx.compose.animation.slideInHorizontally(
+                    animationSpec = androidx.compose.animation.core.tween(220)) { it / 3 },
+            exit = androidx.compose.animation.fadeOut(
+                animationSpec = androidx.compose.animation.core.tween(220)) +
+                androidx.compose.animation.slideOutHorizontally(
+                    animationSpec = androidx.compose.animation.core.tween(220)) { it / 3 },
         ) {
             PlayerScreenActionRail(
                 modifier = Modifier
@@ -549,8 +565,11 @@ fun PlayerScreen(
         }
 
         // ── Up Next pill (final 30 s of an episode) ──
-        if (!isPipMode && hasNextEpisode && durationSec > 0f &&
-            durationSec - positionSec <= NEXT_BUTTON_WINDOW_SEC && nextCountdownSec < 0
+        // Reads the position STATE: recomposes only in the final 30s window
+        // (the condition itself gates it — Compose skips until the boolean
+        // flips, not on every tick).
+        if (!isPipMode && hasNextEpisode && durationSec.value > 0f &&
+            durationSec.value - positionSec.value <= NEXT_BUTTON_WINDOW_SEC && nextCountdownSec < 0
         ) {
             UpNextPill(
                 // Sits above the new two-row bottom block
@@ -578,14 +597,25 @@ fun PlayerScreen(
         // Truthful visibility: the chip is a "locked" signal, not wallpaper.
         // It appears only when a real offset exists (persisted lock applied
         // or live lock landed) OR the user's manual nudges moved it — a
-        // zero offset on a never-synced video renders nothing.
-        if (!isPipMode && (liveOffsetMs != 0L || subSyncRunning)) {
-            SyncedChip(
+        // zero offset on a never-synced video renders nothing. v0.7.1: the
+        // chip fades/slides in when a lock lands instead of popping.
+        if (!isPipMode) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = liveOffsetMs != 0L || subSyncRunning,
+                enter = androidx.compose.animation.fadeIn(
+                    animationSpec = androidx.compose.animation.core.tween(300)) +
+                    androidx.compose.animation.slideInVertically(
+                        animationSpec = androidx.compose.animation.core.tween(300)) { -it / 2 },
+                exit = androidx.compose.animation.fadeOut(
+                    animationSpec = androidx.compose.animation.core.tween(300)),
                 modifier = Modifier.align(Alignment.TopStart).padding(top = 70.dp, start = 14.dp),
-                offsetMs = liveOffsetMs,
-                accent = accent,
-                onClick = { actions.openSyncPopover() },
-            )
+            ) {
+                SyncedChip(
+                    offsetMs = liveOffsetMs,
+                    accent = accent,
+                    onClick = { actions.openSyncPopover() },
+                )
+            }
         }
         if (quick.showSyncPopover.value && !isPipMode) {
             SyncPopover(
