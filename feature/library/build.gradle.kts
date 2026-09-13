@@ -30,4 +30,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewModel.ktx)
     implementation(libs.androidx.lifecycle.runtimeCompose)
     implementation(libs.kotlinx.coroutines.android)
+    // @Immutable on the UiState data classes needs the annotation at
+    // COMPILE time only — the app module supplies the Compose runtime.
+    compileOnly(platform(libs.androidx.compose.bom))
+    compileOnly(libs.androidx.compose.runtime)
 }

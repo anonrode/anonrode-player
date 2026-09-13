@@ -23,4 +23,10 @@ android {
 
 dependencies {
     implementation(libs.kotlinx.serialization.json)
+    // @Immutable on the model classes (Compose stability hints for the
+    // consumer modules) needs the annotation at COMPILE time only — the
+    // app module supplies its own Compose runtime. compileOnly keeps this
+    // module Compose-free at runtime.
+    compileOnly(platform(libs.androidx.compose.bom))
+    compileOnly(libs.androidx.compose.runtime)
 }
