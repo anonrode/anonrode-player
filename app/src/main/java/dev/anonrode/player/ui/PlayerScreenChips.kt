@@ -38,8 +38,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlin.math.max
 
 /* ── Shared control-chip vocabulary (v0.7.3 chrome redesign) ──────────────
  * ONE primitive for every circular icon control in the player: top bar
@@ -83,7 +83,7 @@ internal fun ControlChip(
     }
     val bg = if (selected) accent.copy(alpha = 0.20f) else Color.Black.copy(alpha = 0.35f)
     val border = if (selected) accent.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.20f)
-    val cell = max(size, PlayerDimens.touchMin)
+    val cell = size.coerceAtLeast(PlayerDimens.touchMin)
     Box(
         modifier = modifier
             .size(cell)

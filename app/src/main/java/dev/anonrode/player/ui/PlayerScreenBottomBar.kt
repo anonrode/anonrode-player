@@ -137,8 +137,9 @@ internal fun PlayerScreenBottomBar(
             .navigationBarsPadding()
             .displayCutoutPadding()
             .padding(
-                horizontal = PlayerDimens.gapLg,
+                start = PlayerDimens.gapLg,
                 top = PlayerDimens.gapSm,
+                end = PlayerDimens.gapLg,
                 bottom = PlayerDimens.gapXs,
             )
             .onSizeChanged {

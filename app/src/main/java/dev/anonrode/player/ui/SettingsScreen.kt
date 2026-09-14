@@ -449,19 +449,23 @@ fun SettingsScreen(
             item("sec-syncdiag") { SectionHeader(palette, "Auto-sync & diagnostics") }
 
             item("subtree") {
+                // Snapshot the delegated state once: `subTreeUri` is a
+                // `by remember` property, so the compiler cannot smart-cast
+                // it to non-null inside the branches below.
+                val tree = subTreeUri
                 SettingsRow(
                     palette = palette,
                     icon = Icons.Filled.FolderOpen,
                     title = "Subtitles folder access",
-                    subtitle = if (subTreeUri == null) {
+                    subtitle = if (tree == null) {
                         "Android 13+ hides .srt files from apps — grant the folder holding your subtitles"
                     } else {
-                        "Sidecar search also scans: ${subtitleTreeLabel(subTreeUri)}"
+                        "Sidecar search also scans: ${subtitleTreeLabel(tree)}"
                     },
                     trailing = {
                         ValueText(
                             palette = palette,
-                            text = if (subTreeUri == null) "Set" else "Change",
+                            text = if (tree == null) "Set" else "Change",
                         )
                     },
                     onClick = { subTreePicker.launch(null) },

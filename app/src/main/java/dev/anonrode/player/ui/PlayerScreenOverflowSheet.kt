@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ClosedCaptionDisabled
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
@@ -32,7 +33,6 @@ import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.automirrored.filled.VolumeSelect
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -302,7 +302,7 @@ internal fun PlayerControlCenterSheet(
                 // into one honest entry (MediaRouter covers speaker/BT/
                 // cast/HDMI/wired).
                 CenterTile(
-                    icon = Icons.AutoMirrored.Filled.VolumeSelect,
+                    icon = Icons.Filled.Headphones,
                     label = "Audio output",
                     value = state.castRouteName ?: "This device",
                     active = state.castRouteName != null,

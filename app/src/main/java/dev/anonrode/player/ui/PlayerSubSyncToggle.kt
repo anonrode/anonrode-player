@@ -5,8 +5,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.StiffnessMedium
-import androidx.compose.animation.core.DampingRatioMediumBouncy
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -115,10 +113,11 @@ internal fun PlayerSubSyncToggle(
     val pulseKey = (offsetMs / 100).toInt()
     val scaleAnim = remember(pulseKey) { Animatable(0.85f) }
     LaunchedEffect(pulseKey) {
-        scaleAnim.animateTo(1f, spring(
-            dampingRatio = DampingRatioMediumBouncy,
-            stiffness = StiffnessMedium,
-        ))
+        // Medium-bouncy spring: damping 0.5, stiffness 800 — the values
+        // behind the retired chip's Spring.DampingRatioMediumBouncy /
+        // Spring.StiffnessMedium (framework constants, API 21+), inlined
+        // so this file needs no animation-core constant imports.
+        scaleAnim.animateTo(1f, spring(dampingRatio = 0.5f, stiffness = 800f))
     }
 
     val tint = if (active || enabled) accent else Color.White.copy(alpha = 0.7f)
