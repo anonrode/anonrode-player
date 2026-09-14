@@ -87,6 +87,29 @@ class MediaStateStore(private val dao: MediaStateDao) {
         dao.updateAutoSyncFields(uri, offsetMs, speed, piecewise, System.currentTimeMillis())
     }
 
+    /**
+     * Mark that the whole-file fingerprint engine reached a verdict for this
+     * video (see [MediaStateEntity.autoSyncCheckedAtMs]) — a stored lock, a
+     * refused fit, or too-sparse content. The player's auto-schedule uses
+     * this to run the engine once per video instead of once per open; a
+     * forced "Resync now" ignores it.
+     */
+    suspend fun markAutoSyncChecked(uri: String) {
+        dao.ensureRow(uri)
+        val now = System.currentTimeMillis()
+        dao.updateAutoSyncCheckedFields(uri, now, now)
+    }
+
+    /**
+     * Clear the fingerprint verdict mark so the next open re-runs the
+     * engine — used when the subtitle source changes, since the stored
+     * verdict was about a different cue file.
+     */
+    suspend fun clearAutoSyncChecked(uri: String) {
+        dao.ensureRow(uri)
+        dao.updateAutoSyncCheckedFields(uri, 0L, System.currentTimeMillis())
+    }
+
     suspend fun updateSpeed(uri: String, speed: Float) {
         dao.ensureRow(uri)
         dao.updateSpeedFields(uri, speed, System.currentTimeMillis())
@@ -132,6 +155,7 @@ class MediaStateStore(private val dao: MediaStateDao) {
         autoSyncOffsetMs = autoSyncOffsetMs,
         autoSyncSpeedFactor = autoSyncSpeedFactor,
         autoSyncPiecewise = autoSyncPiecewise,
+        autoSyncCheckedAtMs = autoSyncCheckedAtMs,
         playbackSpeed = playbackSpeed,
         videoScale = videoScale,
         lastPlayedTimeMs = lastPlayedTimeMs,

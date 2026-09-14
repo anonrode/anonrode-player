@@ -42,14 +42,16 @@ interface MediaStateDao {
      * UPDATEs below so concurrent writers never clobber each other's
      * fields. Every NOT NULL column is bound explicitly: the schema has
      * no SQL DEFAULT clauses, so a uri-only insert would violate NOT NULL
-     * and be silently ignored.
+     * and be silently ignored. A new NOT NULL entity column MUST be added
+     * here — forgetting it makes every ensureRow call fail the constraint
+     * and be swallowed by OR IGNORE, silently disabling every writer.
      */
     @Query(
         "INSERT OR IGNORE INTO media_state(" +
             "uri, playback_position_ms, external_subtitle_uris, subtitle_choice, " +
             "subtitle_delay_ms, auto_sync_offset_ms, auto_sync_speed_factor, " +
-            "auto_sync_piecewise, playback_speed, video_scale, finished" +
-        ") VALUES(:uri, 0, '', '', 0, 0, 1.0, '', 1.0, 1.0, 0)"
+            "auto_sync_piecewise, auto_sync_checked_at_ms, playback_speed, video_scale, finished" +
+        ") VALUES(:uri, 0, '', '', 0, 0, 1.0, '', 0, 1.0, 1.0, 0)"
     )
     suspend fun ensureRow(uri: String)
 
@@ -121,6 +123,19 @@ interface MediaStateDao {
         piecewise: String,
         lastPlayedMs: Long,
     )
+
+    /**
+     * Background-fingerprint bookkeeping (see
+     * [MediaStateEntity.autoSyncCheckedAtMs]): non-zero marks that the
+     * whole-file engine reached a verdict for this video; 0 clears the mark
+     * (used when the subtitle source changes, so the new source gets its
+     * own fit).
+     */
+    @Query(
+        "UPDATE media_state SET auto_sync_checked_at_ms = :checkedAtMs, " +
+            "last_played_time_ms = :lastPlayedMs WHERE uri = :uri"
+    )
+    suspend fun updateAutoSyncCheckedFields(uri: String, checkedAtMs: Long, lastPlayedMs: Long)
 
     @Query(
         "UPDATE media_state SET playback_speed = :speed, " +

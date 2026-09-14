@@ -38,6 +38,13 @@ data class MediaStateEntity(
     // Piecewise cut segments: "startAudioSec:betaSec;startAudioSec:betaSec".
     // Empty = single affine lock (offset + speed apply everywhere).
     @ColumnInfo(name = "auto_sync_piecewise") val autoSyncPiecewise: String = "",
+    // Background-fingerprint bookkeeping: 0 = the whole-file sync engine has
+    // never reached a verdict for this video; non-zero = it ran to a verdict
+    // (lock stored above, or the fit was refused / the content had too few
+    // onsets). Gates the auto-schedule in openVideo so a checked video is not
+    // re-decoded on every open; cleared when the subtitle source changes and
+    // bypassed by a forced "Resync now".
+    @ColumnInfo(name = "auto_sync_checked_at_ms") val autoSyncCheckedAtMs: Long = 0L,
     @ColumnInfo(name = "playback_speed") val playbackSpeed: Float = 1f,
     @ColumnInfo(name = "video_scale") val videoScale: Float = 1f,
     @ColumnInfo(name = "last_played_time_ms") val lastPlayedTimeMs: Long? = null,

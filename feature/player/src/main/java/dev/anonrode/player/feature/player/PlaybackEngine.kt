@@ -107,6 +107,13 @@ class PlaybackEngine(
      *  persistence side clears in the same lock write. */
     @Volatile var onLiveSyncLocked: (() -> Unit)? = null
 
+    /** Invoked when the live engine spends its evaluation budget without a
+     *  lock. Fires on the sync-eval worker thread — receivers must post to
+     *  their own thread. The host uses it to hand the video to the
+     *  whole-file fingerprint engine, which is the only one of the two
+     *  whose confidence gates were validated on real content. */
+    @Volatile var onLiveSyncNoMatch: (() -> Unit)? = null
+
     /**
      * v0.7.1: apply a persisted (fingerprint) lock to the LIVE session —
      * called by the host when Room reports a lock for the video the user
@@ -396,6 +403,28 @@ class PlaybackEngine(
         syncProcessor.setStartPosition(startPositionMs)
     }
 
+    /**
+     * Attach a freshly resolved cue list to the live engine WITHOUT
+     * re-anchoring its position clock — the correct call for cues that
+     * arrive while playback is already running (the deferred sidecar /
+     * embedded-parse landing ~200 ms after first frame, and the user
+     * flipping the sub-sync toggle ON mid-episode).
+     *
+     * The processor has been binning audio with correct media-time labels
+     * ever since play() anchored it, so a late cue attach only has to add
+     * the correlation reference. The old call sites reused
+     * [attachSyncProcessor] with startPositionMs = 0, which re-anchored the
+     * clock at 0 while playback was (on a resume) often minutes in: every
+     * bin was then mislabeled by the resume position, and since
+     * [dev.anonrode.player.core.media.sync.SpeechCorrelator] only searches
+     * ±40 s of offset, the live engine could NEVER lock after a deferred
+     * cue load or a mid-playback toggle flip — it just never found a fit
+     * (or, closer to 0, found one that was wrong by the anchor error).
+     */
+    fun attachSyncCues(cues: List<SubtitleCue>) {
+        syncProcessor.setCues(cues)
+    }
+
     fun detachSyncProcessor() {
         syncProcessor.setCues(emptyList())
         subtitleOffsetMs = manualDelayMs
@@ -418,6 +447,7 @@ class PlaybackEngine(
         // rather than dropping back to the bare manual delay — undoing a good
         // stored lock mid-episode would desync already-correct subtitles.
         subtitleOffsetMs = persistedAutoMs + manualDelayMs
+        onLiveSyncNoMatch?.invoke()
     }
 
     /**

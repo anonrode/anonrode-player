@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.padding
@@ -56,6 +57,14 @@ import androidx.compose.foundation.layout.width
  *                  user can force a calibration without first flipping
  *                  the toggle ON.
  *
+ * Two homes, one composable (v0.7.2 device-fix round): the bottom-row
+ * transport cluster at the spec'd 56dp + "SYNCING" label, and the
+ * right-edge action rail (48dp cell, no label — the rail has no room and
+ * the label would break its vertical rhythm). In portrait the transport
+ * row's fixed-width children (≈524dp) overflow a phone's width and the
+ * right-end chips used to be laid out past the screen edge — the rail is
+ * the always-on-surface home that keeps the toggle reachable there.
+ *
  * The DataStore write is the host's responsibility: the caller supplies a
  * `onSetEnabled: (Boolean) -> Unit` that persists the new value. The
  * composable never reads or writes DataStore directly — it only renders
@@ -69,6 +78,10 @@ internal fun PlayerSubSyncToggle(
     onSetEnabled: (Boolean) -> Unit,
     onResync: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Outer circle diameter — 56dp in the bottom row, 48dp in the rail. */
+    size: Dp = 56.dp,
+    /** "SYNCING" label under the icon (bottom row only). */
+    showStatusLabel: Boolean = true,
 ) {
     val view = LocalView.current
     // Spinning ring: 0 → 360 in 1.6s, linear, infinite. Only animates
@@ -93,7 +106,7 @@ internal fun PlayerSubSyncToggle(
     ) {
         Box(
             modifier = Modifier
-                .size(56.dp)
+                .size(size)
                 .clip(CircleShape)
                 .background(bg)
                 .border(
@@ -125,7 +138,7 @@ internal fun PlayerSubSyncToggle(
                     contentDescription = null,
                     tint = accent.copy(alpha = 0.45f),
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(size * 0.71f)
                         .rotate(ringRotation),
                 )
             }
@@ -133,23 +146,27 @@ internal fun PlayerSubSyncToggle(
                 Icons.Filled.AutoAwesome,
                 contentDescription = if (enabled) "Sub sync on" else "Sub sync off",
                 tint = tint,
-                modifier = Modifier.size(26.dp),
+                modifier = Modifier.size(size * 0.46f),
             )
         }
         // Status text under the icon: "SYNCING" only while running.
         // Empty string while idle (OFF or ON-idle) so the row stays compact
         // and the bottom bar's height doesn't bounce when running flips.
-        Text(
-            text = if (running) "SYNCING" else "",
-            color = accent,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.8.sp,
-            modifier = Modifier
-                .padding(top = 2.dp)
-                .width(56.dp)
-                .alpha(if (running) 1f else 0f)
-        )
+        // The rail variant omits it entirely — no vertical room, and the
+        // ring already says "working" there.
+        if (showStatusLabel) {
+            Text(
+                text = if (running) "SYNCING" else "",
+                color = accent,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp,
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .width(size)
+                    .alpha(if (running) 1f else 0f)
+            )
+        }
     }
 }
 

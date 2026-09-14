@@ -461,9 +461,12 @@ class AudioSyncProcessor(
             abs(result.offsetSeconds - lastOffset) <= 0.25) stableHits + 1 else 1
         lastOffset = result.offsetSeconds
 
-        // drift detection from segment offsets
+        // drift detection from segment offsets — the tracker owns the policy
+        // (offset-only until a drift rate is actually measurable across
+        // enough media time), so a freshly-locked live pass can never
+        // persist a subtitle speed fitted from two one-second slots.
         driftTracker.add(req.posMs / 1000.0, result.offsetSeconds)
-        val (baseOffset, speedF) = driftTracker.getCorrection(req.posMs / 1000.0)
+        val (baseOffset, speedF) = driftTracker.getCorrection()
 
         AppLog.d("SYNC", "eval t=${req.posMs / 1000}s off=${result.offsetSeconds}s speed=$speedF hits=$stableHits")
 

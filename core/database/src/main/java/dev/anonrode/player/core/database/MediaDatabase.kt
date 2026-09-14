@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [MediaStateEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class MediaDatabase : RoomDatabase() {
@@ -43,6 +43,19 @@ abstract class MediaDatabase : RoomDatabase() {
             }
         }
 
+        /** v4: background-fingerprint "already checked" timestamp (see the
+         *  entity). Same shape as MIGRATION_1_2/2_3 — a column the v3-era
+         *  entity did not declare, added with the NOT NULL DEFAULT its
+         *  @ColumnInfo default implies, so Room's post-migration schema
+         *  validation passes (the v1-era missing-column crash class). */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE media_state ADD COLUMN auto_sync_checked_at_ms INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         @Volatile private var instance: MediaDatabase? = null
 
         fun get(context: Context): MediaDatabase =
@@ -51,7 +64,7 @@ abstract class MediaDatabase : RoomDatabase() {
                     context.applicationContext,
                     MediaDatabase::class.java,
                     "media_db",
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
             }
     }
 }

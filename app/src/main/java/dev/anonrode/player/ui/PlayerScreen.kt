@@ -211,6 +211,14 @@ fun PlayerScreen(
     volumeBoostPct: Int = 0,
     onVolumeBoostCycle: () -> Unit = {},
     /**
+     * Overflow-sheet "Sync log" tile: the host shares the app's own file log
+     * filtered to the subtitle-sync decisions of this session
+     * ([dev.anonrode.player.SyncLogShare]). Deliberately host-owned — it is
+     * the only place that can read app-private storage and it needs the
+     * activity's lifecycle scope for the logger's write delay.
+     */
+    onShareSyncLog: () -> Unit = {},
+    /**
      * A-B repeat region (ms). null start = inactive. The host enforces the
      * loop (seek back to A at B); the screen only surfaces state + the tap.
      * Tap cycle: set A → set B (loop starts) → clear.
@@ -252,16 +260,11 @@ fun PlayerScreen(
     // sites; the sheet reads the same flag.
     val overflowOpen = remember { mutableStateOf(false) }
 
-    // Sync toggle slot. Agent 5 supplies the actual composable; for now
-    // we provide a placeholder so the rail can be rendered without an
-    // undefined-symbol error. Agent 5's wiring replaces this lambda in
-    // its own commit; the lambda's signature must stay stable.
-    val syncSlot: SyncSlot = remember { { mod, ac ->
-        androidx.compose.foundation.layout.Box(
-            modifier = mod,
-            contentAlignment = Alignment.Center,
-        ) { /* agent-5 fills */ }
-    } }
+    // Sync toggle slot for the rail: DEFINED BELOW, next to [actions]
+    // (which it needs). It used to be an empty placeholder — "agent-5
+    // fills" — so the rail rendered a dead circle and the sub-sync toggle
+    // existed only in the transport row, which overflows a portrait phone
+    // (see PlayerScreenBottomBar).
 
     // Rotation mode (3-state: sensor / landscape / portrait). Stored on
     // QuickRowUiState so the button's tap cycle + long-press menu both
@@ -318,6 +321,30 @@ fun PlayerScreen(
             onSetSubSyncEnabled = { onSetSubSyncEnabled(it) },
             onResyncNow = { onResyncNow() },
         )
+    }
+
+    // Rail sync toggle (v0.7.2 device-fix round): the real
+    // [PlayerSubSyncToggle] in the rail's 48dp cell, without the status
+    // label. Same live state and same callbacks as the bottom-row toggle
+    // (both read [QuickRowUiState]'s subSyncEnabled / subSyncRunning), so
+    // the two never disagree about what the engine is doing. This is the
+    // portrait-reachable home for the control: the rail sits on the
+    // right edge of the frame instead of competing for the bottom row's
+    // width, and it auto-hides with the rest of the chrome on exactly the
+    // same tap.
+    val syncSlot: SyncSlot = remember(actions) {
+        { mod, ac ->
+            PlayerSubSyncToggle(
+                enabled = actions.quick.subSyncEnabled.value,
+                running = actions.quick.subSyncRunning.value,
+                accent = ac,
+                onSetEnabled = { actions.setSubSyncEnabled(it) },
+                onResync = { actions.resyncNow() },
+                modifier = mod,
+                size = PlayerDimens.chipMd,
+                showStatusLabel = false,
+            )
+        }
     }
 
     // ── side-effects: same keys and order as before the split ──
@@ -551,6 +578,8 @@ fun PlayerScreen(
             // tiles — the host cycles the 3 engine profiles / boosts gain.
             onDecoder = { actions.toggleHwDecoder() },
             onVolumeBoost = onVolumeBoostCycle,
+            // v0.7.2: shares the device's own sync decisions (see SyncLogShare).
+            onShareSyncLog = onShareSyncLog,
         )
 
         // ── A-B repeat chip (tap advances the cycle: set B / clear) ──

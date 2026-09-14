@@ -122,16 +122,44 @@ class SyncFingerprintJob(
                 AppLog.d("SYNC_JOB", "syncing chosen source: $choice (${resolved.size} cues)")
                 resolved
             } else {
-                val sub = findSidecarSubtitle(videoUri, videoPath) ?: run {
-                    AppLog.d("SYNC_JOB", "no sidecar subtitle found, nothing to sync")
-                    return@withContext Result.success()
+                // AUTO path — resolve exactly the way playback does (see the
+                // deferred parser in the player): a picked sidecar first,
+                // else the first embedded text track. Without the embedded
+                // fallback an MKV with muxed subs (the common release
+                // format) had NO route to the engine at all — the old code
+                // bailed here with "no sidecar subtitle found", so even a
+                // forced "Resync now" was a silent no-op for embedded-only
+                // videos, leaving the (unvalidated) live analyser as their
+                // only possible sync path.
+                val sub = findSidecarSubtitle(videoUri, videoPath)
+                if (sub != null) {
+                    val parsed = SubtitleParser.parse(sub.first, sub.second)
+                    if (parsed.size < 10) {
+                        AppLog.d("SYNC_JOB", "too few cues (${parsed.size}), skipping")
+                        return@withContext Result.success()
+                    }
+                    parsed
+                } else {
+                    val embedded: List<SubtitleCue> = try {
+                        val tracks = SubtitleSourceResolver.listEmbedded(
+                            applicationContext, videoUri, videoPath,
+                        )
+                        if (tracks.isEmpty()) emptyList()
+                        else SubtitleSourceResolver.resolveCues(
+                            applicationContext, videoUri, videoPath,
+                            "embedded:${tracks.first().index}",
+                        ).sortedBy { it.start }
+                    } catch (t: Throwable) {
+                        AppLog.e("SYNC_JOB", "embedded subtitle probe failed", t)
+                        emptyList()
+                    }
+                    if (embedded.size < 10) {
+                        AppLog.d("SYNC_JOB", "no sidecar and no embedded track, nothing to sync")
+                        return@withContext Result.success()
+                    }
+                    AppLog.d("SYNC_JOB", "syncing embedded track (${embedded.size} cues)")
+                    embedded
                 }
-                val parsed = SubtitleParser.parse(sub.first, sub.second)
-                if (parsed.size < 10) {
-                    AppLog.d("SYNC_JOB", "too few cues (${parsed.size}), skipping")
-                    return@withContext Result.success()
-                }
-                parsed
             }
 
             val starts = cues.map { it.start }.sorted()
@@ -151,21 +179,36 @@ class SyncFingerprintJob(
             }
 
             var lock: LockCandidate? = null
+            var fitsAttempted = 0
             for ((tag, onsets) in candidates) {
                 if (onsets.size < MIN_ONSETS) {
                     AppLog.d("SYNC_JOB", "$tag: too few onsets (${onsets.size})")
                     continue
                 }
+                fitsAttempted++
                 lock = attemptLock(onsets, starts, tag)
                 if (lock != null) break
             }
 
             if (lock == null) {
-                AppLog.d("SYNC_JOB", "no lock from any onset source (all refused)")
+                AppLog.d(
+                    "SYNC_JOB",
+                    "no lock (fits attempted: $fitsAttempted/${candidates.size} sources)",
+                )
+                // This is a verdict about the video's own data (the gates
+                // refused every usable source, or there was too little
+                // detectable speech), not a transient failure: record it so
+                // the player stops re-scheduling a whole-file decode on
+                // every open. A forced "Resync now" re-fits regardless.
+                store.markAutoSyncChecked(videoUri)
                 return@withContext Result.success()
             }
 
             store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, lock.piecewise)
+            // The verdict is final for this video (a lock now exists, so the
+            // player's schedule gate stops anyway) — mark it explicitly so
+            // the two gates can never disagree.
+            store.markAutoSyncChecked(videoUri)
             AppLog.d(
                 "SYNC_JOB",
                 "LOCKED${if (forced) " (forced)" else ""} (${lock.tag}) uri=$videoUri " +

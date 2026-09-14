@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Headphones
@@ -64,6 +65,10 @@ import androidx.compose.ui.unit.sp
  *   9.  Headphones          (BT/wired detect — see [PlayerScreenActions])
  *   10. Speaker             (output picker — alias of Cast route picker)
  *   11. Capture frame       (PixelCopy → PNG to Pictures/AnonPlayer)
+ *   12. Sync log            (share the app's own file log, focused on the
+ *                            subtitle-sync decisions of this session — the
+ *                            device-side ground truth when sync misbehaves;
+ *                            see [dev.anonrode.player.SyncLogShare])
  *
  * PiP is intentionally NOT in this sheet — it lives in the transport row
  * (between ⏩10 and the lock), where it's adjacent to the time-seek controls
@@ -106,6 +111,7 @@ internal fun PlayerOverflowSheet(
     onCaptureFrame: () -> Unit,
     onDecoder: () -> Unit = {},
     onVolumeBoost: () -> Unit = {},
+    onShareSyncLog: () -> Unit = {},
 ) {
     if (!visible) return
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -304,6 +310,21 @@ internal fun PlayerOverflowSheet(
                         subLabel = if (state.volumeBoostPct > 0) "+${state.volumeBoostPct}%" else "Off",
                         accent = if (state.volumeBoostPct > 0) MxGreen else Color.White,
                         onClick = { onVolumeBoost(); onDismiss() },
+                    )
+                }
+                // ── sync log (v0.7.2 device-fix round): shares the app's own
+                //    file log filtered to the subtitle-sync decisions of this
+                //    session, so "it didn't lock" on a real phone becomes an
+                //    evidence question instead of a guess. Strictly manual:
+                //    the log contains video paths and nothing leaves the
+                //    device without this tap plus the user choosing a
+                //    recipient in the system sheet.
+                item(key = "synclog") {
+                    OverflowTile(
+                        icon = Icons.Filled.BugReport,
+                        label = "Sync log",
+                        subLabel = "Share what the engines did",
+                        onClick = { onShareSyncLog(); onDismiss() },
                     )
                 }
             }

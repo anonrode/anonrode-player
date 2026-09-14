@@ -206,18 +206,6 @@ class PlayerActivity : ComponentActivity() {
     private var deferredSidecarJob: Job? = null
 
     /**
-     * Threshold (0.0..1.0, normalized via
-     * [dev.anonrode.player.core.media.subtitle.SubtitleMatcher.normalizedScore])
-     * above which an auto-picked sidecar is "good enough" that we skip
-     * scheduling a background fingerprint for the video. The legacy
-     * audit-#23 gate fired only when there was no lock at all; this new
-     * gate additionally covers the case where the sidecar match is
-     * already high-confidence (≥ 0.6) — fingerprinting would just churn
-     * CPU without changing the result.
-     */
-    private val sidecarConfidenceSkipThreshold = 0.6
-
-    /**
      * Threshold (0.0..1.0) above which an existing persisted lock is
      * reused verbatim on next open. The SyncOrchestrator publishes the
      * recall on the persisted lock (see MediaStateStore.updateAutoSync
@@ -442,6 +430,25 @@ class PlayerActivity : ComponentActivity() {
             }
         }
 
+        // The live engine spent its evaluation budget without finding a
+        // fit. That is not the end of the story: hand the video to the
+        // whole-file fingerprint engine (the one validated against real
+        // content), which runs in the background and applies its lock to
+        // this session through the Room collector below when it lands.
+        // keepSpinner = the sync story continues (the background pass is
+        // now the thing working on it), so "SYNCING" stays honest instead
+        // of going dark the moment the live pass gives up.
+        // Fires on the sync-eval worker thread.
+        engine.onLiveSyncNoMatch = {
+            handler.post {
+                if (currentSettings.subtitleAutoSyncEnabled) {
+                    scheduleFingerprintIfNeverChecked(keepSpinner = true)
+                } else {
+                    subSyncRunning = false
+                }
+            }
+        }
+
         // v0.7.1: apply a persisted fingerprint lock to the LIVE session.
         // The fingerprint job runs in the background (whole-file decode)
         // and writes its lock to Room; before this collector the lock only
@@ -465,6 +472,12 @@ class PlayerActivity : ComponentActivity() {
                         AnonrodeApp.get(this@PlayerActivity).engine
                             .applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor)
                         piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
+                        // A real lock just landed for the video being watched
+                        // (the sentinel values are filtered above): sync work
+                        // for this video is done, so the "SYNCING" indicator
+                        // must stop — the toggle stays ON, the subs are now
+                        // corrected.
+                        subSyncRunning = false
                     }
                 }
                 // getAsFlow completes only if the Activity scope is torn
@@ -659,6 +672,7 @@ class PlayerActivity : ComponentActivity() {
                             },
                             fastSeekThresholdSec = settings.fastSeekThresholdSec,
                             volumeBoostPct = settings.volumeBoostPct,
+                            onShareSyncLog = { shareSyncLog() },
                             onVolumeBoostCycle = {
                                 lifecycleScope.launch {
                                     app.playerSettingsDataStore.updateData { s ->
@@ -945,50 +959,49 @@ class PlayerActivity : ComponentActivity() {
                 if (gen != openGeneration) return@launch
                 piecewiseSegments = parsePiecewise(state?.autoSyncPiecewise ?: "")
 
-                // Policy A (v0.6.2 sub-sync UX pass): gate the background
-                // fingerprint schedule on three signals.
+                // Policy A (v0.6.2 sub-sync UX pass, revised in the v0.7.1
+                // device-fix round): gate the background fingerprint
+                // schedule on three signals.
                 //   1. User toggle [subtitleAutoSyncEnabled] = ON
-                //   2. Sidecar is not already high-confidence (score ≥
-                //      [sidecarConfidenceSkipThreshold] — fingerprinting
-                //      a high-confidence match is wasted CPU)
-                //   3. No persisted lock exists (auto == 0L &&
+                //   2. No persisted lock exists (auto == 0L &&
                 //      autoSpeed == 1f). A persisted lock is reused
                 //      verbatim on the next open — fingerprinting again
                 //      would churn CPU without changing playback timing.
-                // The legacy autoSyncEnabled gate was retired in favor of
-                // the explicit user toggle (default OFF). Legacy users keep
-                // their behaviour because [subtitleAutoSyncEnabled] defaults
-                // to false, matching v0.6.2's spec; the legacy field is
-                // still read by SyncFingerprintJob for the runtime check.
+                //   3. The fingerprint has never run for this video
+                //      (autoSyncCheckedAtMs == 0). The job marks the row
+                //      when it reaches a verdict, so a once-checked video
+                //      is not re-decoded on every open; "Resync now"
+                //      (force) bypasses this.
+                //
+                // REMOVED in this round, both were blocking exactly the
+                // videos this feature exists for:
+                //   • "sidecar is high-confidence → skip". A matching file
+                //     name says nothing about the TIMING inside the file —
+                //     a matched-name sidecar that is out of sync is the
+                //     flagship case, and it was being excluded from the
+                //     only engine whose gates were validated on real
+                //     content. The engine's own gates still refuse weak
+                //     fits, and the checked-marker above bounds the cost
+                //     to one whole-file pass per video.
+                //   • "subtitle present at schedule time". On the AUTO
+                //     path the cues are the empty deferred placeholder
+                //     here, and an MKV with muxed subs has no sidecar at
+                //     all, so embedded-only videos never scheduled a
+                //     fingerprint. The job now resolves the same way
+                //     playback does (sidecar, else first embedded track)
+                //     and bails cheaply when there is nothing to fit.
                 val userToggleOn = currentSettings.subtitleAutoSyncEnabled
-                val sidecarHighConfidence = scoreAutoSidecarIfAny(uriStr, videoPath) >=
-                    sidecarConfidenceSkipThreshold
                 val noPersistedLock = auto == 0L && autoSpeed == 1f
-                // Subtitle presence: on the AUTO path sortedCues is the
-                // empty deferred placeholder at this point — the real cues
-                // land ~200ms after first frame. The old gate on
-                // sortedCues.isNotEmpty() therefore never scheduled a
-                // fingerprint for sidecar videos (the deferred majority).
-                // Decide on what the DEFERRED job will actually find: a
-                // named choice resolves real cues; AUTO resolves embedded
-                // tracks (if any) or a sidecar — pickAutoSidecar returning
-                // non-null is the same signal the deferred parse uses.
-                val subtitlePresent = choice.isNotEmpty() ||
-                    (videoPath != null && runCatching {
-                        SubtitleSourceResolver.pickAutoSidecar(applicationContext, videoPath)
-                    }.getOrNull() != null)
+                val alreadyChecked = (state?.autoSyncCheckedAtMs ?: 0L) != 0L
                 val shouldScheduleFingerprint = userToggleOn &&
-                    !sidecarHighConfidence &&
                     noPersistedLock &&
-                    choice != "none" &&
-                    subtitlePresent
+                    !alreadyChecked &&
+                    choice != "none"
                 if (shouldScheduleFingerprint) {
                     AppLog.d(
                         "PLAY",
                         "scheduling fingerprint: toggleOn=$userToggleOn " +
-                            "sidecarScore>=$sidecarConfidenceSkipThreshold=" +
-                            sidecarHighConfidence +
-                            " noLock=$noPersistedLock"
+                            "noLock=$noPersistedLock checked=$alreadyChecked choice='$choice'"
                     )
                     SyncFingerprint.schedule(applicationContext, uriStr)
                 }
@@ -1793,6 +1806,11 @@ class PlayerActivity : ComponentActivity() {
             val app = AnonrodeApp.get(this@PlayerActivity)
             app.stateStore.updateSubtitleChoice(uri, choice)
             app.stateStore.updateAutoSync(uri, 0L, 1f, "")
+            // A different cue source invalidates the previous fingerprint
+            // verdict (it was fitted to a different file): clear the
+            // "already checked" mark so the whole-file engine re-fits this
+            // source on the next open.
+            app.stateStore.clearAutoSyncChecked(uri)
             AppLog.d("SUB", "subtitle choice -> '$choice', reloading")
             withContext(Dispatchers.Main) {
                 app.engine.savePositionNow()
@@ -1813,30 +1831,6 @@ class PlayerActivity : ComponentActivity() {
             AppLog.e("SUB", "path resolution failed", e)
             null
         }
-    }
-
-    /**
-     * v0.6.2 sub-sync UX pass: best-effort normalized score for the
-     * auto-pick candidate. Returns 0.0 when:
-     *   - the video path is unresolvable (SAF / network URI),
-     *   - the picker finds no sidecar,
-     *   - the picked sidecar's score is non-positive (episode conflict
-     *     or similar).
-     * Reading the sidecar list to score by filename is cheap (one
-     * listFiles call), and avoids the policy-A "schedule fingerprint on
-     * a perfect-stem sidecar" trap.
-     */
-    private fun scoreAutoSidecarIfAny(uriStr: String, videoPath: String?): Double {
-        if (videoPath == null) return 0.0
-        val videoName = videoPath.substringAfterLast('/')
-        val sidecar = try {
-            SubtitleSourceResolver.pickAutoSidecar(applicationContext, videoPath)
-        } catch (t: Throwable) {
-            AppLog.e("SUB", "scoreAutoSidecar failed", t)
-            return 0.0
-        } ?: return 0.0
-        return dev.anonrode.player.core.media.subtitle.SubtitleMatcher
-            .normalizedScore(videoName, sidecar.name)
     }
 
     /**
@@ -1909,11 +1903,16 @@ class PlayerActivity : ComponentActivity() {
                     // Hand the late cues to the LIVE sync engine too: the
                     // deferred path committed play() with empty cues, so
                     // AudioSyncProcessor had nothing to correlate against
-                    // and the live re-lock could never fire — re-attach now
-                    // that real cues exist (anchored at the live position).
+                    // and the live re-lock could never fire — attach now,
+                    // CUES ONLY. This must NOT re-anchor the position
+                    // clock: playback has been running (and on a resume,
+                    // often minutes in) since commitPlay, and an anchor of
+                    // 0 here mislabeled every audio bin by the resume
+                    // position — the live engine could then never lock
+                    // (±40 s search window) on any resumed episode.
                     if (currentSettings.subtitleAutoSyncEnabled) {
                         AnonrodeApp.get(this@PlayerActivity).engine
-                            .attachSyncProcessor(cues, 0L)
+                            .attachSyncCues(cues)
                     }
                 }
             } catch (e: CancellationException) {
@@ -1973,18 +1972,84 @@ class PlayerActivity : ComponentActivity() {
 
     /**
      * v0.7.1: turning the toggle ON mid-playback should sync THIS session,
-     * not just future ones. The deferred sidecar path attaches cues to the
-     * engine only when the toggle was ON at open time — if the user flips
-     * it ON later, attach the current render-loop cues now (the lastCues
-     * field holds exactly what the render loop is drawing).
+     * not just future ones.
+     *
+     * Two engines, two jobs here:
+     *   1. Live — attach the current render-loop cues ([lastCues] holds
+     *      exactly what the render loop is drawing) so the processor can
+     *      correlate from the next evaluation slot. Cues ONLY: the audio
+     *      position clock has been correct since play(), and re-anchoring
+     *      it to 0 mid-episode is what made the live engine unable to lock
+     *      after a mid-playback toggle flip.
+     *   2. Background — schedule the whole-file fingerprint. It is the
+     *      engine whose confidence gates were validated against real
+     *      content (PC tests), and the live one only ever listens from
+     *      "now" with a cheap VAD; the fingerprint is what reliably fixes
+     *      an out-of-sync pair. Skipped when it already ran for this video
+     *      or a lock is persisted (the job's own guards would no-op, but
+     *      we avoid enqueueing pointless work).
      */
     private fun scheduleSyncNowIfCuesMissing() {
         if (!currentSettings.subtitleAutoSyncEnabled) return
         val app = AnonrodeApp.get(this)
         val cues = lastCues
         if (cues.isNotEmpty()) {
-            app.engine.attachSyncProcessor(cues, 0L)
+            app.engine.attachSyncCues(cues)
             AppLog.d("SYNC", "toggle ON mid-playback: re-attached ${cues.size} cues")
+        }
+        scheduleFingerprintIfNeverChecked()
+    }
+
+    /**
+     * Enqueue the whole-file fingerprint for the video being watched, unless
+     * it already ran for this video (see MediaState.autoSyncCheckedAtMs) or a
+     * lock is persisted. Safe to call from any mid-playback hook: the store
+     * read happens on IO and a WorkManager unique-work KEEP makes repeat
+     * calls cheap.
+     *
+     * [keepSpinner] makes the call also responsible for the "SYNCING"
+     * indicator: true when the caller is handing the video over because the
+     * live pass just ended (give-up) — the spinner stays lit while the
+     * background pass is queued/running and drops when there is nothing left
+     * to run (already checked, or a lock in place).
+     */
+    private fun scheduleFingerprintIfNeverChecked(keepSpinner: Boolean = false) {
+        val uri = currentUriStr ?: return
+        val app = AnonrodeApp.get(this)
+        lifecycleScope.launch(Dispatchers.IO) {
+            val st = try {
+                app.stateStore.get(uri)
+            } catch (t: Throwable) {
+                AppLog.e("SYNC", "state read before fingerprint schedule failed", t)
+                null
+            }
+            val checked = (st?.autoSyncCheckedAtMs ?: 0L) != 0L
+            val hasLock = st != null &&
+                (st.autoSyncOffsetMs != 0L || st.autoSyncSpeedFactor != 1f)
+            if (checked || hasLock) {
+                AppLog.d("SYNC", "fingerprint not rescheduled (checked=$checked lock=$hasLock)")
+                if (keepSpinner) handler.post { subSyncRunning = false }
+                return@launch
+            }
+            AppLog.d("SYNC", "scheduling fingerprint for current video")
+            if (keepSpinner) handler.post { subSyncRunning = true }
+            SyncFingerprint.scheduleSuspending(applicationContext, uri, force = false)
+        }
+    }
+
+    /**
+     * Overflow-sheet "Sync log" tile: hand the user the device's own account
+     * of what the sync engines did, so "it didn't lock" becomes an evidence
+     * question. Runs on the activity scope because [SyncLogShare] flushes the
+     * logger and waits for its single writer thread before reading the file.
+     */
+    private fun shareSyncLog() {
+        lifecycleScope.launch {
+            try {
+                SyncLogShare.shareSyncLog(this@PlayerActivity)
+            } catch (t: Throwable) {
+                AppLog.e("APP", "sync log share failed", t)
+            }
         }
     }
 

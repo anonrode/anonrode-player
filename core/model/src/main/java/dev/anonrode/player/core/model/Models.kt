@@ -76,6 +76,9 @@ data class MediaState(
     val autoSyncOffsetMs: Long = 0L,
     val autoSyncSpeedFactor: Float = 1f,
     val autoSyncPiecewise: String = "",
+    /** 0 = the background fingerprint never reached a verdict for this
+     *  video; see MediaStateEntity.autoSyncCheckedAtMs. */
+    val autoSyncCheckedAtMs: Long = 0L,
     val playbackSpeed: Float = 1f,
     val videoScale: Float = 1f,
     val lastPlayedTimeMs: Long? = null,

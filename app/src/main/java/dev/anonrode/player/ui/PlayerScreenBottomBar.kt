@@ -72,7 +72,7 @@ import androidx.media3.common.util.UnstableApi
  *   ┌──────────────────────────────────────────────────────────┐
  *   │  seekbar + timestamps  ──○──────────  12:34 / 45:21      │  ALWAYS visible
  *   ├──────────────────────────────────────────────────────────┤
- *   │  transport row  🔒  ⏪10  ⏮  ▶(BIG)  ⏭  ⏩10              │  auto-hides
+ *   │  transport row  🔒 ⏪10 ⏮ ▶(BIG) ⏭ ⏩10 │ ⏉ ✨ 🔃          │  auto-hides
  *   └──────────────────────────────────────────────────────────┘
  *
  * Sizing (per the user-approved layout):
@@ -81,13 +81,16 @@ import androidx.media3.common.util.UnstableApi
  *   transport gaps            12dp between every pair
  *   lock                      40dp (smaller — thumb finds the big play first)
  *   ⏪10 / ⏮ / ⏭ / ⏩10        48dp each
- *   BIG play                  72dp (50% bigger than siblings)
+ *   BIG play                  64dp (survey median; see its KDoc)
+ *   utility cluster (right)   PiP 48 · sub-sync 56 · rotate 48, 8dp gaps
  *
- * PiP is intentionally NOT here — it lives in the overflow sheet (see
- * PlayerScreenOverflowSheet.kt). The transport row already has six
- * icons; adding a seventh would crowd it back into the cramped state
- * the redesign was meant to fix. The rail already has five icons, so
- * PiP also doesn't fit there.
+ * PiP lives here AND in the overflow sheet (v0.7.2 device-fix round). The
+ * row's nine fixed-size buttons need 524dp, more than any portrait phone
+ * has, so `TransportRow` stacks them into two centred rows below 540dp of
+ * width (transport closest to the thumb, utility above) instead of laying
+ * the right-hand cluster past the screen edge — the portrait bug that
+ * made the sub-sync toggle unfindable. The sub-sync toggle is additionally
+ * wired into the always-present right-edge rail (PlayerScreenActionRail).
  *
  * The seek bar is ALWAYS visible, even while the chrome is hidden —
  * matches v0.6.1's behaviour and the user's earlier feedback that the
@@ -400,7 +403,7 @@ private fun ScrubBubble(
     }
 }
 
-/* ── Transport row — 6 icons, centred, BIG play ─────────────────────────── */
+/* ── Transport row — 9 buttons; one row wide, two rows narrow ──────────── */
 
 @Composable
 private fun TransportRow(
@@ -423,61 +426,57 @@ private fun TransportRow(
     onCycleRotation: () -> Unit,
     onEnterPip: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Left cluster: lock + transport
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // 1) Lock — 40dp, far left of transport
-            LockToggleButton(locked = locked, accent = accent, onClick = onLockToggle)
-            Spacer(Modifier.width(PlayerDimens.gapMd))
+    // The nine buttons are fixed-size: the single-row form needs 356dp
+    // (transport cluster) + 168dp (utility cluster) = 524dp, while a
+    // portrait phone gives this row ~290–420dp of content width. Compose
+    // does not shrink fixed sizes — the utility cluster was laid out past
+    // the right screen edge, which is exactly why the sub-sync toggle was
+    // unfindable in portrait (v0.7.2 device-fix round; the chip is also
+    // wired into the always-present right rail now). Narrow widths
+    // therefore stack the buttons into two centred rows: the four
+    // transport buttons sit closest to the thumb, the five utility
+    // buttons (skip pills included) above them. 232dp / 280dp worst case
+    // — both fit any phone from 320dp up.
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val narrow = maxWidth < 540.dp
 
-            // 2) ⏪10 — 48dp squared pill
+        // Leaf buttons shared by both layouts so the two branches can
+        // never drift apart visually.
+        val lockButton: @Composable () -> Unit = {
+            LockToggleButton(locked = locked, accent = accent, onClick = onLockToggle)
+        }
+        val seekBackButton: @Composable () -> Unit = {
             TimeSeekButton(
                 direction = TimeSeekDirection.BACK,
                 accent = accent,
                 onClick = onSeekBack,
             )
-            Spacer(Modifier.width(PlayerDimens.gapMd))
-
-            // 3) ⏮ episode — 48dp round
-            EpisodeJumpButton(
-                direction = EpisodeJumpDirection.PREVIOUS,
-                enabled = hasPreviousEpisode,
-                onClick = onPlayPrevious,
-            )
-            Spacer(Modifier.width(PlayerDimens.gapMd))
-
-            // 4) BIG play — 72dp (50% bigger than siblings), accent ripple
-            BigPlayPauseButton(
-                isPlaying = isPlaying,
-                accent = accent,
-                onClick = onPlayPause,
-            )
-            Spacer(Modifier.width(PlayerDimens.gapMd))
-
-            // 5) ⏭ episode — 48dp round
-            EpisodeJumpButton(
-                direction = EpisodeJumpDirection.NEXT,
-                enabled = hasNextEpisode,
-                onClick = onPlayNext,
-            )
-            Spacer(Modifier.width(PlayerDimens.gapMd))
-
-            // 6) ⏩10 — 48dp squared pill
+        }
+        val seekForwardButton: @Composable () -> Unit = {
             TimeSeekButton(
                 direction = TimeSeekDirection.FORWARD,
                 accent = accent,
                 onClick = onSeekForward,
             )
         }
-        // Right cluster: PiP (48dp) · sub-sync (56dp) · rotate (48dp).
-        // 8dp gaps keep this cluster visually tighter than the left so the
-        // sync toggle's 56dp ring doesn't crowd the 48dp siblings.
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // 7) PiP — 48dp ghost (per spec)
+        val prevButton: @Composable () -> Unit = {
+            EpisodeJumpButton(
+                direction = EpisodeJumpDirection.PREVIOUS,
+                enabled = hasPreviousEpisode,
+                onClick = onPlayPrevious,
+            )
+        }
+        val nextButton: @Composable () -> Unit = {
+            EpisodeJumpButton(
+                direction = EpisodeJumpDirection.NEXT,
+                enabled = hasNextEpisode,
+                onClick = onPlayNext,
+            )
+        }
+        val playButton: @Composable () -> Unit = {
+            BigPlayPauseButton(isPlaying = isPlaying, accent = accent, onClick = onPlayPause)
+        }
+        val pipButton: @Composable () -> Unit = {
             GhostChip(
                 size = PlayerDimens.chipMd,
                 icon = Icons.Filled.PictureInPictureAlt,
@@ -485,8 +484,8 @@ private fun TransportRow(
                 tint = Color.White,
                 onClick = onEnterPip,
             )
-            Spacer(Modifier.width(PlayerDimens.gapSm))
-            // 8) Sub-sync — 56dp (bigger for the spinning ring)
+        }
+        val syncButton: @Composable () -> Unit = {
             PlayerSubSyncToggle(
                 enabled = subSyncEnabled,
                 running = subSyncRunning,
@@ -494,8 +493,8 @@ private fun TransportRow(
                 onSetEnabled = { onSetSubSyncEnabled(it) },
                 onResync = onResyncNow,
             )
-            Spacer(Modifier.width(PlayerDimens.gapSm))
-            // 9) Rotate — 48dp, cycles sensor → landscape → portrait
+        }
+        val rotateButton: @Composable () -> Unit = {
             GhostChip(
                 size = PlayerDimens.chipMd,
                 icon = if (rotationLocked) Icons.Filled.ScreenLockRotation
@@ -504,6 +503,66 @@ private fun TransportRow(
                 tint = if (rotationLocked) accent else Color.White,
                 onClick = onCycleRotation,
             )
+        }
+
+        if (narrow) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement
+                        .spacedBy(PlayerDimens.gapSm, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    seekBackButton()
+                    seekForwardButton()
+                    pipButton()
+                    syncButton()
+                    rotateButton()
+                }
+                Spacer(Modifier.height(PlayerDimens.gapMd))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement
+                        .spacedBy(PlayerDimens.gapMd, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    lockButton()
+                    prevButton()
+                    playButton()
+                    nextButton()
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Left cluster: lock + transport — 12dp gaps (unchanged spec)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    lockButton()
+                    Spacer(Modifier.width(PlayerDimens.gapMd))
+                    seekBackButton()
+                    Spacer(Modifier.width(PlayerDimens.gapMd))
+                    prevButton()
+                    Spacer(Modifier.width(PlayerDimens.gapMd))
+                    playButton()
+                    Spacer(Modifier.width(PlayerDimens.gapMd))
+                    nextButton()
+                    Spacer(Modifier.width(PlayerDimens.gapMd))
+                    seekForwardButton()
+                }
+                // Right cluster: PiP · sub-sync · rotate. 8dp gaps keep this
+                // cluster visually tighter than the left so the sync toggle's
+                // 56dp ring doesn't crowd the 48dp siblings.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    pipButton()
+                    Spacer(Modifier.width(PlayerDimens.gapSm))
+                    syncButton()
+                    Spacer(Modifier.width(PlayerDimens.gapSm))
+                    rotateButton()
+                }
+            }
         }
     }
 }

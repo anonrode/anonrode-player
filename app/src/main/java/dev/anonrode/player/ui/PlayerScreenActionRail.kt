@@ -64,9 +64,10 @@ import androidx.compose.ui.unit.dp
  * rest of the chrome.
  * ------------------------------------------------------------------------- */
 
-/** Slot the subtitle agent (Agent 5) fills. Receives the standard 48dp
- *  circle footprint (Modifier already applied) plus the accent color. The
- *  agent decides what glyph to draw (sync icon, spinning ring, etc.). */
+/** Slot the sub-sync toggle fills (v0.7.1: the real [PlayerSubSyncToggle],
+ *  previously an empty placeholder). Receives the standard 48dp cell
+ *  footprint plus the accent color; the slot draws its own circle, states
+ *  and interactions. */
 internal typealias SyncSlot = @Composable (modifier: Modifier, accent: Color) -> Unit
 
 @Composable
@@ -137,19 +138,13 @@ internal fun PlayerScreenActionRail(
                 },
             )
 
-            // 3) sync — slot for Agent 5. We render the agent's slot
-            // composable inside our 48dp wrapper so the rail visuals
-            // (size / ripple / padding) stay consistent.
+            // 3) sync — the real sub-sync toggle (v0.7.2 device-fix round;
+            // this slot was an empty placeholder before). The slot composable
+            // draws its own circle + states, so we hand it nothing but the
+            // 48dp cell size — no wrapper chrome to double up with the
+            // toggle's own ring.
             syncSlot(
-                Modifier
-                    .size(PlayerDimens.chipMd)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.35f))
-                    .border(
-                        width = 1.dp,
-                        color = Color.White.copy(alpha = 0.20f),
-                        shape = CircleShape,
-                    ),
+                Modifier.size(PlayerDimens.chipMd),
                 accent,
             )
 
@@ -180,7 +175,7 @@ internal fun PlayerScreenActionRail(
 
 /** Single 48dp circle icon used inside the rail. Centralised here so the
  *  CC / audio / more buttons all match the rail's look exactly. The sync
- *  slot is its own composable (Agent 5 decides the visual). */
+ *  slot brings its own visual ([PlayerSubSyncToggle]). */
 @Composable
 private fun RailIcon(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
