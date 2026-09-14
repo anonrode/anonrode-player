@@ -23,15 +23,16 @@ interface SyncListener {
  *
  * Pipeline: 10 ms windows -> multi-feature speech score (energy / syllable
  * variance / ZCR against an adaptive floor-peak VAD) -> one soft bin per
- * 100 ms of media time -> every ~1.0 s of audio a snapshot of the bin
- * window is handed to [SyncAnalysisWorker], which runs the expensive
- * [SpeechCorrelator.findOffset] on a dedicated low-priority thread and
- * publishes the lock decision through [SyncListener].
+ * 100 ms of media time -> v0.8 pass schedule ([SpeechCorrelator.PASS_BINS]:
+ * ~18 s of listening for clean pairs, ~4.8 min of accumulated audio for
+ * tough ones) hands a snapshot of the bin window to [SyncAnalysisWorker],
+ * which runs the expensive [SpeechCorrelator.findOffset] on a dedicated
+ * low-priority thread and publishes the lock decision through [SyncListener].
  *
  * Audio-thread budget: this processor runs inside Media3's audio sink
  * thread, so [queueInput] does ONLY cheap, allocation-free work: a
  * single pass over the samples updating running window sums, a passthrough
- * copy into a reused output buffer, and (once per ~1.0 s of audio) a
+ * copy into a reused output buffer, and (on the v0.8 pass schedule only) a
  * System.arraycopy snapshot under the worker's single-flight gate. All
  * correlation and lock decisions happen on the worker thread — running
  * findOffset here caused underruns on budget devices.
@@ -45,6 +46,10 @@ class AudioSyncProcessor(
     @Volatile private var channelCount = 0
     @Volatile private var inputIsFloat = false
     @Volatile private var active = false
+    /** True once the sink has configured us at least this session —
+     *  distinguishes "analyzer declined this format" (inactive after a
+     *  configure) from "no format yet" (before first configure). */
+    @Volatile private var configured = false
     /**
      * Live-re-lock gate (v0.6.2 sub-sync UX pass). Default true (legacy
      * behaviour). The host mirrors
@@ -80,19 +85,15 @@ class AudioSyncProcessor(
 
     @Volatile private var locked = false
 
-    // Evaluation attempt budget: each findOffset that returns without a
-    // lock counts one failure; after MAX_EVAL_ATTEMPTS we stop evaluating
-    // AND stop feature extraction (gaveUp) so un-lockable content costs
-    // nothing after the budget is spent. flush() / reset() / a position
-    // re-anchor (setStartPosition — fired on every seek, discontinuity and
-    // episode switch) and a fresh non-empty setCues re-arm the budget.
-    // v0.7.4: slots that could not be DECIDED at all (too little speech
-    // mass, window not armed) do not consume this budget — livesim proved
-    // sparse-dialogue content burns all 22 "failures" on undecidable
-    // seconds and gives up (~30 s) before the same track becomes lockable
-    // (~60 s). A separate, much larger cap bounds the battery cost.
-    @Volatile private var failedEvals = 0
-    @Volatile private var notReadyEvals = 0
+    // v0.8 pass budget: the scheduler fires SpeechCorrelator.PASS_BINS.size
+    // passes as the window grows (see accumulateBin), and feature
+    // extraction stops at the last one (gaveUp) or a lock. The CADENCE —
+    // not per-outcome failure counting — is the cost bound: undecidable
+    // and refused passes both just wait for the next scheduled one, which
+    // removes the v0.7.4-era sparse-dialogue starvation structurally.
+    // flush()/reset()/position re-anchor and a fresh non-empty setCues
+    // re-arm the schedule.
+    @Volatile private var passesUsed = 0
     @Volatile private var gaveUp = false
 
     // Bumped on every window reset (flush/reset/position re-anchor) so an
@@ -121,7 +122,6 @@ class AudioSyncProcessor(
     private var lastSpeech = 0.0
 
     private val driftTracker = DriftTracker()
-    private var lastEvalPos = Long.MIN_VALUE
     // Written by the eval worker, reset by the audio thread, read back by
     // the worker on the next evaluation — needs cross-thread visibility.
     @Volatile private var stableHits = 0
@@ -139,14 +139,22 @@ class AudioSyncProcessor(
             // toggle's OFF state keeps the processor dormant even after a
             // track switch.
             if (enabled) {
-                failedEvals = 0
-                notReadyEvals = 0
+                passesUsed = 0
                 gaveUp = false
             } else {
                 // Stay dormant — but DO clear a stale lock so a future flip
                 // back to ON begins from a clean slate, not a previously
                 // locked state.
                 locked = false
+            }
+            // P2-1 mirror of configure()'s handoff: cues usually attach
+            // ~200 ms AFTER the sink configured (deferred sidecar parse),
+            // so the inactive branch there saw empty cues; hand off now
+            // instead of binning nothing forever behind a "Syncing…" chip.
+            if (configured && !active && enabled && !gaveUp) {
+                gaveUp = true
+                AppLog.d("SYNC", "analyzer inactive for this format — cue attach hands off")
+                listener.onSyncNoMatch()
             }
         }
         AppLog.d("SYNC", "setCues: ${cues.size} cues enabled=$enabled")
@@ -180,8 +188,7 @@ class AudioSyncProcessor(
             // mid-playback produced no live re-lock for the rest of the
             // episode. Re-arming here keeps the already-accumulated bins —
             // evaluation resumes at the next eval slot (~1s of audio).
-            failedEvals = 0
-            notReadyEvals = 0
+            passesUsed = 0
             gaveUp = false
             locked = false // belt & braces: never inherit a stale lock
         }
@@ -190,13 +197,37 @@ class AudioSyncProcessor(
 
     // Written from the main thread, consumed by the audio thread.
     @Volatile private var pendingResetPosition: Long? = null
+    @Volatile private var pendingQuietPosition: Long? = null
 
     fun setStartPosition(positionMs: Long) {
         pendingResetPosition = positionMs
     }
 
+    /**
+     * Re-anchor the media-time clock WITHOUT discarding the window
+     * (v0.8, A-B repeat fix). The old blanket re-anchor on every seek
+     * meant an A-B loop re-set the window each iteration, so live sync
+     * could never lock during A-B — and it need not clear anything: the
+     * looped audio re-bins onto the SAME absolute media-time labels with
+     * (near-)identical values, and accumulateBin's max-fold makes that
+     * write idempotent. Recomputing [startPositionMs] so that the clock
+     * agrees with [positionMs] at the current frame count keeps every
+     * existing bin's label true, keeping the window (and the pass
+     * schedule) alive across the loop instead of starting cold.
+     */
+    fun setStartPositionQuiet(positionMs: Long) {
+        pendingQuietPosition = positionMs
+    }
+
     /** Applies a pending position reset on the audio thread. */
     private fun checkAndApplyReset() {
+        val quiet = pendingQuietPosition
+        if (quiet != null) {
+            pendingQuietPosition = null
+            // Offset the anchor so posMs(quiet) == now: labels keep
+            // tracking media time, bins/gates/schedule untouched.
+            startPositionMs = quiet - totalFrames * 1000L / max(sampleRate, 1)
+        }
         val reset = pendingResetPosition ?: return
         pendingResetPosition = null
         startPositionMs = reset
@@ -214,10 +245,29 @@ class AudioSyncProcessor(
         // the untouched input format either way (pure passthrough).
         active = (fmt.encoding == C.ENCODING_PCM_16BIT || inputIsFloat) &&
             sampleRate > 0 && channelCount > 0
+        configured = true
         if (active) {
             // ~10 ms of audio per window at the real sample rate.
             windowFillTarget = max(1, sampleRate / 100) * channelCount
             resetAll()
+        } else {
+            // P2-1 (v0.8): encoded passthrough / offload output routes (AC-3,
+            // E-AC3, DTS on devices with encoded AudioTrack support) deliver
+            // no PCM to AudioProcessors — Media3's DefaultAudioSink says so
+            // in its own comment. Until now that was SILENT: the analyzer
+            // just never ran, no evals, no give-up, and the "Syncing…"
+            // chip spun forever on formats where only the whole-file
+            // fingerprint engine can work. Hand off loudly instead.
+            AppLog.d(
+                "SYNC",
+                "analyzer INACTIVE encoding=" + fmt.encoding +
+                    " sr=" + fmt.sampleRate + " ch=" + fmt.channelCount +
+                    " — no PCM path, handing off to fingerprint",
+            )
+            if (cues.isNotEmpty() && enabled && !gaveUp) {
+                gaveUp = true
+                listener.onSyncNoMatch()
+            }
         }
         return fmt
     }
@@ -285,8 +335,8 @@ class AudioSyncProcessor(
         baseIdx = 0; binCount = 0; totalFrames = 0
         windowN = 0; wSumSq = 0.0; wSumAbs = 0.0; wSumSig = 0.0; wZcr = 0
         floor = 0.0; peak = 0.0; lastSpeech = 0.0
-        lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
-        failedEvals = 0; notReadyEvals = 0; gaveUp = false
+        stableHits = 0; lastOffset = Double.NaN
+        passesUsed = 0; gaveUp = false
         // P1-4: a fresh window must also drop the drift history. Without
         // this the six points a post-seek / episode-switch lock fits can
         // straddle the boundary; the resulting fake span clears
@@ -301,7 +351,8 @@ class AudioSyncProcessor(
      * samples of one input buffer (a duplicate of the input; the original's
      * position is untouched) and folds them into the running 10 ms window
      * sums. Completing a window emits one speech score into the bin window
-     * and, at most once per ~1.4 s of audio, schedules a background eval.
+     * and, when the bin window crosses the next PASS_BINS threshold,
+     * schedules a background eval (the v0.8 pass schedule — not a 1 Hz loop).
      */
     private fun analyze(pcm: ByteBuffer) {
         checkAndApplyReset()
@@ -423,17 +474,30 @@ class AudioSyncProcessor(
         binCount = max(binCount, rel + 1)
         audioBins[rel] = max(audioBins[rel], speech)
 
-        if (lastEvalPos == Long.MIN_VALUE) {
-            lastEvalPos = posMs
-        } else if (posMs - lastEvalPos >= EVAL_INTERVAL_MS) {
-            lastEvalPos = posMs
-            val minBins = (SpeechCorrelator.MIN_AUDIO_SECONDS / SpeechCorrelator.ALIGN_BIN).toInt()
-            // Gate #1 (v0.6.2 sub-sync UX pass): if the user disabled the
-            // live re-lock, never schedule an evaluation. The audio render
-            // thread still bins — so flipping the toggle back ON mid-play
-            // doesn't have to rebuild the feature window.
-            if (binCount >= minBins && cues.isNotEmpty() && !gaveUp && enabled) {
-                scheduleEvaluate(posMs)
+        // v0.8 pass scheduler: thresholds on the GROWING window, not a
+        // 1 Hz retry loop. The first threshold (80 bins) is the
+        // correlator's not-ready floor, so clean content gets its first
+        // ~10 s of listening exactly as before — then the schedule
+        // deliberately slows (5 s, 30 s gaps) because each additional
+        // bin of evidence matters more than another correlation. The
+        // audio render thread still pays only one volatile compare here
+        // per 100 ms bin.
+        if (passesUsed < SpeechCorrelator.PASS_BINS.size &&
+            binCount >= SpeechCorrelator.PASS_BINS[passesUsed] &&
+            cues.isNotEmpty() && !gaveUp && enabled
+        ) {
+            passesUsed++
+            scheduleEvaluate(posMs)
+            if (passesUsed == SpeechCorrelator.PASS_BINS.size) {
+                // Last pass scheduled: the listening budget is spent —
+                // stop binning and hand off to the whole-file engine.
+                // If that final pass still locks, onSyncLocked lands
+                // normally (evaluate() is gated on `locked`, not
+                // `gaveUp`) and a post-handoff live lock is superseded
+                // by the fingerprint's verdict by design (trust rule).
+                gaveUp = true
+                AppLog.d("SYNC", "pass budget spent ($passesUsed), handing off to fingerprint")
+                listener.onSyncNoMatch()
             }
         }
     }
@@ -442,9 +506,11 @@ class AudioSyncProcessor(
      * Hands a snapshot of the current bin window to the single-flight
      * background worker. The audio render thread only pays one
      * System.arraycopy (into the worker's preallocated snapshot buffer,
-     * under the single-flight gate); if an evaluation is already in flight
-     * this slot is dropped and the next one (~1.0 s of audio later)
-     * retries.
+     * under the single-flight gate); if an evaluation is still in flight
+     * the pass is dropped (v0.8: passes are scheduled by window growth,
+     * and a correlation now costs milliseconds — a drop means the worker
+     * was somehow slower than the audio thread, and the NEXT threshold
+     * re-arms it anyway).
      */
     private fun scheduleEvaluate(posMs: Long) {
         worker.submit(
@@ -479,16 +545,19 @@ class AudioSyncProcessor(
             // while the same track was gate-passable from ~60 s). The
             // separate MAX_NOT_READY_EVS cap bounds the battery cost.
             is SpeechCorrelator.Outcome.NotReady -> {
-                notReadyEvals++
-                if (notReadyEvals >= MAX_NOT_READY_EVS) {
-                    gaveUp = true
-                    AppLog.d("SYNC", "undecidable after $notReadyEvals slots, giving up at t=${req.posMs / 1000}s")
-                    listener.onSyncNoMatch()
-                }
+                // v0.8: the cadence bounds cost, so an undecidable window
+                // is logged (this is the sync-log evidence line) and
+                // simply waits for the next scheduled pass.
+                AppLog.d("SYNC", "pass t=${req.posMs / 1000}s bc=${req.binCount}: not ready (thin speech mass)")
                 return
             }
             is SpeechCorrelator.Outcome.NoMatch -> {
-                countFailedEval(req.posMs, req.generation)
+                // Judged and refused: breaks the agreement chain — a lock
+                // needs two CONSECUTIVE agreeing MATCH passes (13/30
+                // false locks proved that in simulation without it).
+                stableHits = 0
+                lastOffset = Double.NaN
+                AppLog.d("SYNC", "pass t=${req.posMs / 1000}s bc=${req.binCount}: judged, gates refused")
                 return
             }
             is SpeechCorrelator.Outcome.Match -> outcome.result
@@ -514,27 +583,9 @@ class AudioSyncProcessor(
         if (stableHits >= 2) {
             locked = true
             listener.onSyncLocked(baseOffset.toFloat(), speedF)
-        } else {
-            countFailedEval(req.posMs, req.generation)
         }
-    }
-
-    /**
-     * Counts an evaluation that returned without locking; once the budget
-     * is exhausted, [gaveUp] stops further evaluations AND feature
-     * extraction until the next flush()/reset()/position reset (or a fresh
-     * non-empty setCues). Evaluations invalidated by a window reset (stale
-     * generation) are not counted against the new window. Runs on the
-     * worker thread; [SyncListener.onSyncNoMatch] therefore fires there too.
-     */
-    private fun countFailedEval(posMs: Long, gen: Int) {
-        if (gen != generation) return
-        failedEvals++
-        if (failedEvals >= MAX_EVAL_ATTEMPTS) {
-            gaveUp = true
-            AppLog.d("SYNC", "no lock after $failedEvals attempts, giving up at t=${posMs / 1000}s")
-            listener.onSyncNoMatch()
-        }
+        // First agreeing pass: wait for the NEXT scheduled pass to
+        // confirm — no failure is counted, the cadence bounds the cost.
     }
 
     companion object {
@@ -545,40 +596,5 @@ class AudioSyncProcessor(
          * media-position bound.
          */
         private const val BIN_WINDOW = 40 * 10 * 2 + 15 * 60 * 10
-
-        /**
-         * One evaluation slot per ~1.0 s of analyzed audio (was 1.4 s —
-         * v0.7.1 speed pass). A lock needs two agreeing evaluations, so
-         * the interval directly scales time-to-lock: 8s arm floor + two
-         * 1s-apart agreeing evals ≈ 10s from press-play, versus ~19s at
-         * the old constants. The worker is single-flight and drops the
-         * slot when busy, so a heavy correlation can never back up the
-         * audio thread — the interval only bounds how often we RETRY.
-         */
-        private const val EVAL_INTERVAL_MS = 1000L
-
-        /**
-         * Consecutive no-lock evaluations before we stop trying. A lock
-         * needs two agreeing evaluations, so lockable content locks long
-         * before the budget matters; the budget exists to cap CPU on
-         * un-lockable content. Sized so the give-up horizon is ~30 s of
-         * audio (8 s arm floor + 22 × 1 s slots) — the SAME coverage the
-         * old constants gave (16 s + 10 × 1.4 s), so sparse-dialogue
-         * videos keep their full listening window despite the speed pass.
-         * Re-armed by flush()/reset()/position reset/fresh cues.
-         */
-        private const val MAX_EVAL_ATTEMPTS = 22
-
-        /**
-         * Cap on consecutive slots that were never decidable (v0.7.4).
-         * These no longer consume [MAX_EVAL_ATTEMPTS] — but a video that
-         * stays below the speech-mass floor forever must still stop paying
-         * the ~1 Hz worker correlation eventually. 90 slots ≈ 90 s of
-         * listening: livesim S5 (20 %-duty anime dialogue) became
-         * gate-passable at ~60 s, so a real sparse lock has margin, while
-         * pure-ambience tracks hand off to the fingerprint engine after a
-         * bounded window.
-         */
-        private const val MAX_NOT_READY_EVS = 90
     }
 }

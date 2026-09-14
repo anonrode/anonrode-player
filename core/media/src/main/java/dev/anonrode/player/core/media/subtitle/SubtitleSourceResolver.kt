@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.model.SubtitleCue
@@ -39,8 +40,13 @@ import java.io.InputStream
  * so with all-files access granted (the app's permission gate asks for
  * it) the video's parent directory is listed directly on the filesystem —
  * fast, complete, permission-proof. The MediaStore.Files query remains as
- * the fallback for legacy storage / no all-files access. Neither path may
- * ever throw upward: a resolver failure simply means "no sidecars".
+ * the fallback for legacy storage / no all-files access. As a last resort
+ * the SAF tree the user designates in Settings ("Subtitles folder access",
+ * [SubtitleTreeStore]) is walked — it is the only route to sidecars that
+ * survives scoped storage without all-files access, and the reason playback
+ * reads them through [readSidecarBytes] instead of File(path).
+ * Neither path may ever throw upward: a resolver failure simply means
+ * "no sidecars".
  */
 object SubtitleSourceResolver {
 
@@ -149,19 +155,22 @@ object SubtitleSourceResolver {
      *   1. All-files access granted (or legacy storage, API < 30): list the
      *      parent directory directly. This is the only complete source for
      *      non-media files on API 30+ — MediaStore.Files hides them under
-     *      READ_MEDIA_VIDEO. A readable-but-empty directory is trusted
-     *      (returns an empty list, no redundant MediaStore round-trip).
-     *   2. Otherwise fall back to the MediaStore.Files query (legacy
-     *      devices, or all-files access denied — best effort).
+     *      READ_MEDIA_VIDEO.
+     *   2. Fall back to the MediaStore.Files query (legacy devices, or
+     *      all-files access denied — best effort).
+     *   3. v0.8 P0-1: when NEITHER found anything, walk the user-granted
+     *      SAF subtitle tree. A readable-but-empty directory no longer
+     *      short-circuits the chain: under scoped storage the subs often
+     *      live in the tree folder, not next to the video.
      * Never throws: any failure degrades to an empty list.
      */
     fun listSidecars(context: Context, videoPath: String): List<Sidecar> {
         val parentDir = videoPath.substringBeforeLast('/')
         if (canListDirectories()) {
-            val direct = listSidecarsDirect(parentDir)
-            if (direct != null) return direct
+            listSidecarsDirect(parentDir)?.takeIf { it.isNotEmpty() }?.let { return it }
         }
-        return listSidecarsMediaStore(context, parentDir)
+        listSidecarsMediaStore(context, parentDir).takeIf { it.isNotEmpty() }?.let { return it }
+        return listSidecarsViaTree(context, parentDir)
     }
 
     /**
@@ -285,6 +294,98 @@ object SubtitleSourceResolver {
         return out.sortedBy { it.name.lowercase() }
     }
 
+    // ── SAF tree sidecar source (v0.8 P0-1) ───────────────────────────
+
+    private data class TreeEntry(val id: String, val name: String, val isDir: Boolean)
+
+    /**
+     * Walk the user-granted subtitle tree (Settings → "Subtitles folder
+     * access"). Two levels are scanned: the root itself (the common case —
+     * the folder holding the .srt next to nothing else) and one level down
+     * into a folder whose name matches the video's own directory (covers a
+     * grant on a parent like "Download" or external-storage root). Results
+     * are content:// document URIs, readable via [readSidecarBytes] with the
+     * persistable permission; the pick is still name-scored by
+     * [pickAutoSidecar], so an over-broad grant can never auto-load a
+     * conflicting episode's file.
+     */
+    private fun listSidecarsViaTree(context: Context, parentDir: String): List<Sidecar> {
+        val treeStr = SubtitleTreeStore.get(context) ?: return emptyList()
+        val treeUri = try { Uri.parse(treeStr) } catch (t: Throwable) { return emptyList() }
+        val granted = try {
+            context.contentResolver.persistedUriPermissions.any {
+                it.uri == treeUri && it.isReadPermission
+            }
+        } catch (t: Throwable) {
+            false
+        }
+        if (!granted) {
+            AppLog.d(TAG, "subtitle tree no longer granted: $treeStr")
+            return emptyList()
+        }
+        val parentName = parentDir.substringAfterLast('/')
+        val rootChildren = queryTreeChildren(
+            context,
+            DocumentsContract.buildChildDocumentsUriUsingTree(
+                treeUri, DocumentsContract.getTreeDocumentId(treeUri),
+            ),
+        )
+        val out = ArrayList<Sidecar>()
+        for (e in rootChildren) {
+            val ext = e.name.substringAfterLast('.', "").lowercase()
+            if (!e.isDir && ext in SUB_EXTS) {
+                out.add(Sidecar(DocumentsContract.buildDocumentUriUsingTree(treeUri, e.id), e.name))
+            }
+        }
+        for (d in rootChildren.filter { it.isDir && it.name.equals(parentName, ignoreCase = true) }) {
+            for (e in queryTreeChildren(
+                context,
+                DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, d.id),
+            )) {
+                val ext = e.name.substringAfterLast('.', "").lowercase()
+                if (!e.isDir && ext in SUB_EXTS) {
+                    out.add(Sidecar(DocumentsContract.buildDocumentUriUsingTree(treeUri, e.id), e.name))
+                }
+            }
+        }
+        if (out.isNotEmpty()) AppLog.d(TAG, "tree sidecars for '$parentName': ${out.map { it.name }}")
+        return out.sortedBy { it.name.lowercase() }
+    }
+
+    private fun queryTreeChildren(context: Context, childrenUri: Uri): List<TreeEntry> {
+        val out = ArrayList<TreeEntry>()
+        try {
+            context.contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                ),
+                null, null, null,
+            )?.use { c ->
+                val idCol = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameCol = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeCol = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                while (c.moveToNext()) {
+                    val id = c.getString(idCol) ?: continue
+                    val name = c.getString(nameCol) ?: continue
+                    val mime = c.getString(mimeCol)
+                    out.add(
+                        TreeEntry(
+                            id = id,
+                            name = name,
+                            isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR,
+                        ),
+                    )
+                }
+            }
+        } catch (t: Throwable) {
+            AppLog.e(TAG, "tree children query failed", t)
+        }
+        return out
+    }
+
     // ── internals ─────────────────────────────────────────────────────
 
     private fun extractEmbedded(
@@ -306,7 +407,13 @@ object SubtitleSourceResolver {
             ?: emptyList()
     }
 
-    private fun parseSidecar(context: Context, sidecar: Sidecar): List<SubtitleCue> {
+    /**
+     * Parse one sidecar to cues. PUBLIC (v0.8 P0-1) so every consumer —
+     * playback's deferred parse included — reads through [readSidecarBytes],
+     * which routes file://, MediaStore content:// and SAF-tree document URIs
+     * correctly; `File(uri.path)` breaks on SAF URIs.
+     */
+    fun parseSidecar(context: Context, sidecar: Sidecar): List<SubtitleCue> {
         val bytes = readSidecarBytes(context, sidecar) ?: return emptyList()
         return try {
             SubtitleParser.parseBytes(sidecar.name, bytes)

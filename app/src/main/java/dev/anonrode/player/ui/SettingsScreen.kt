@@ -1,7 +1,11 @@
 package dev.anonrode.player.ui
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,6 +36,7 @@ import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatColorText
 import androidx.compose.material.icons.filled.FormatSize
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.History
@@ -40,6 +45,7 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.StayCurrentPortrait
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -80,11 +86,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import dev.anonrode.player.AnonrodeApp
 import dev.anonrode.player.PlayerPrefs
+import dev.anonrode.player.SyncLogShare
 import dev.anonrode.player.core.database.MediaDatabase
 import dev.anonrode.player.core.datastore.DecoderPriority
 import dev.anonrode.player.core.datastore.PlayerSettings
 import dev.anonrode.player.core.datastore.ResumeBehavior
 import dev.anonrode.player.core.datastore.playerSettingsDataStore
+import dev.anonrode.player.core.media.subtitle.SubtitleTreeStore
 import dev.anonrode.player.core.ui.theme.Skin
 import dev.anonrode.player.core.ui.theme.SkinPalette
 import dev.anonrode.player.core.ui.theme.ThemePrefs
@@ -103,6 +111,8 @@ import kotlinx.coroutines.withContext
  *                     decoder priority
  *   SUBTITLES         auto-sync · size · position · color · bold ·
  *                     preferred language
+ *   AUTO-SYNC & DIAG  subtitles folder access (SAF sidecar grant) ·
+ *                     share app logs (sync decision trail)
  *   GESTURES          double-tap / swipe seek · volume / brightness
  *                     gestures · pinch zoom · seek step · auto-hide ·
  *                     fast-seek threshold
@@ -150,6 +160,28 @@ fun SettingsScreen(
 
     fun toast(message: String) {
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+    }
+
+    // v0.8 P0-1: SAF folder the sidecar scanner may also read. Mirrors the
+    // persisted string in SubtitleTreeStore; only ever written together with
+    // a takePersistable() grant, so the row can claim it works.
+    var subTreeUri by remember { mutableStateOf(SubtitleTreeStore.get(context)) }
+    val subTreePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+            SubtitleTreeStore.set(context, uri.toString())
+            subTreeUri = uri.toString()
+            toast("Sidecars now readable from ${subtitleTreeLabel(uri.toString())}")
+        } catch (t: Throwable) {
+            // Not every provider issues persistable grants; without one the
+            // access dies with the picker session, so we do NOT store it.
+            toast("That provider can't grant lasting access — pick a normal folder")
+        }
     }
 
     Box(
@@ -410,6 +442,42 @@ fun SettingsScreen(
                         )
                     },
                     onClick = { openDialog = DLG_SUB_LANG },
+                )
+            }
+
+            // ══ AUTO-SYNC & DIAGNOSTICS ════════════════════════
+            item("sec-syncdiag") { SectionHeader(palette, "Auto-sync & diagnostics") }
+
+            item("subtree") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.FolderOpen,
+                    title = "Subtitles folder access",
+                    subtitle = if (subTreeUri == null) {
+                        "Android 13+ hides .srt files from apps — grant the folder holding your subtitles"
+                    } else {
+                        "Sidecar search also scans: ${subtitleTreeLabel(subTreeUri)}"
+                    },
+                    trailing = {
+                        ValueText(
+                            palette = palette,
+                            text = if (subTreeUri == null) "Set" else "Change",
+                        )
+                    },
+                    onClick = { subTreePicker.launch(null) },
+                )
+            }
+
+            item("sharelogs") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.Share,
+                    title = "Share app logs",
+                    subtitle = "The sync decision trail — what locked, what refused, and why",
+                    trailing = {},
+                    onClick = {
+                        coroutineScope.launch { SyncLogShare.shareSyncLog(context) }
+                    },
                 )
             }
 
@@ -1145,6 +1213,18 @@ private fun ConfirmDialog(
 }
 
 /* ── row primitives ──────────────────────────────────────────────────── */
+
+/**
+ * Human label for a stored SAF tree URI: the last path segment of
+ * `content://…​.documents/tree/primary%3ADownload/Subs` decodes to
+ * "primary:Download/Subs" → "Download/Subs". Unmatched providers simply
+ * show their raw id tail.
+ */
+private fun subtitleTreeLabel(treeUri: String): String {
+    val seg = try { Uri.parse(treeUri).lastPathSegment } catch (t: Throwable) { null }
+        ?: return treeUri
+    return seg.substringAfterLast(':').substringAfterLast('/').ifEmpty { seg }
+}
 
 @Composable
 private fun SectionHeader(palette: SkinPalette, title: String) {

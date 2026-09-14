@@ -1,6 +1,7 @@
 package dev.anonrode.player.core.media.sync
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.MediaStore
 import androidx.work.CoroutineWorker
@@ -81,14 +82,16 @@ class SyncFingerprintJob(
         val store = MediaStateStore(MediaDatabase.get(applicationContext).mediaStateDao())
 
         try {
-            // Skip if a lock already exists for this video — unless this is
-            // a forced "Resync now" run, which must re-fit (the user
-            // edited the subtitle file or suspects the old lock).
+            // v0.8 P1-7 trust rule: what blocks a re-fit is the engine's
+            // own VERDICT (auto_sync_checked_at_ms), not a stored lock —
+            // live locks also write auto_sync_offset_ms, and the whole-file
+            // engine (validated on real content) must be allowed to run
+            // and SUPERSEDE a two-agreeing-evals live value, not defer to
+            // it forever. A forced "Resync now" re-fits regardless.
             val forced = inputData.getBoolean(KEY_FORCE, false)
             val existing = store.get(videoUri)
-            if (!forced && existing != null &&
-                (existing.autoSyncOffsetMs != 0L || existing.autoSyncSpeedFactor != 1f)) {
-                AppLog.d("SYNC_JOB", "already locked, skipping")
+            if (!forced && existing != null && existing.autoSyncCheckedAtMs != 0L) {
+                AppLog.d("SYNC_JOB", "fingerprint verdict already recorded, skipping")
                 return@withContext Result.success()
             }
 
@@ -191,7 +194,14 @@ class SyncFingerprintJob(
             // silence-sparse files), then VAD-only as last resort. Every
             // source goes through the SAME confidence gates; a refused
             // source just hands over to the next one.
-            val sources = OnsetExtractor(applicationContext).extractSources(videoPath)
+            // v0.8 P2-2/P1-5: the decode budget scales with the video's
+            // duration (the fixed 600 s cap truncated long movies on slow
+            // SoCs and the partial onset set then "failed the gates" — a
+            // false verdict), and the MediaCodec fallback can open the
+            // content URI itself when the resolved path can't be read.
+            val extractor = OnsetExtractor(applicationContext)
+            extractor.decodeTimeoutMs = decodeBudgetMs(videoUri, videoPath)
+            val sources = extractor.extractSources(videoPath, Uri.parse(videoUri))
             val candidates = mutableListOf("silencedetect" to sources.silencedetect)
             if (sources.vad.isNotEmpty()) {
                 candidates.add("hybrid" to sources.hybrid)
@@ -211,6 +221,19 @@ class SyncFingerprintJob(
             }
 
             if (lock == null) {
+                // v0.8 P2-2: a decode that stopped at the budget is NOT a
+                // verdict about the video — the onset set was cut short, so
+                // the gates refusing it proves nothing. Retry once (the pass
+                // may have been slowed by contention, not by the file) and
+                // only then, on the last attempt, fall through to the
+                // checked-mark like any other no-lock outcome.
+                if (extractor.lastDecodeTruncated && runAttemptCount < 2) {
+                    AppLog.d(
+                        "SYNC_JOB",
+                        "no lock BUT decode was truncated at budget — retrying, no verdict",
+                    )
+                    return@withContext Result.retry()
+                }
                 AppLog.d(
                     "SYNC_JOB",
                     "no lock (fits attempted: $fitsAttempted/${candidates.size} sources)",
@@ -294,6 +317,30 @@ class SyncFingerprintJob(
                 tag = "$tag/cut-${model.confidence}",
             )
         }
+    }
+
+    /**
+     * v0.8 P2-2: caller-scaled decode budget. Floor is the old fixed
+     * 600 s; every ms of video adds 1/8 ms of budget (≈8× realtime assumed
+     * audio decode, half the claimed 10-20x worst-case margin), ceiling
+     * 25 min so a corrupt duration can never hang the worker.
+     */
+    private fun decodeBudgetMs(videoUri: String, videoPath: String): Long {
+        val durMs = try {
+            val mmr = MediaMetadataRetriever()
+            try {
+                if (File(videoPath).canRead()) mmr.setDataSource(videoPath)
+                else mmr.setDataSource(applicationContext, Uri.parse(videoUri))
+                mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull() ?: 0L
+            } finally {
+                mmr.release()
+            }
+        } catch (t: Throwable) {
+            AppLog.d("SYNC_JOB", "duration probe failed, using budget floor")
+            0L
+        }
+        return (600_000L + durMs / 8).coerceAtMost(1_500_000L)
     }
 
     /** content:// video URI → real file path (MediaStore DATA column). */

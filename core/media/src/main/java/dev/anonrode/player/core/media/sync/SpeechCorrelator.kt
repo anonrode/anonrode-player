@@ -2,83 +2,123 @@ package dev.anonrode.player.core.media.sync
 
 import dev.anonrode.player.core.model.SubtitleCue
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 /**
- * Subtitle ↔ audio alignment by binary speech-track cross-correlation —
- * the ffsubsync method, validated against simulation (tools/subtitle_engine_sim.py,
- * 23/23 cases) before implementation.
+ * Subtitle ↔ audio alignment by soft-envelope cross-correlation — the
+ * v0.8 redesign, informed by ffsubsync and validated scenario-by-scenario
+ * in a 1:1 simulation port (C:/tmp/syncsim/livesim.py) BEFORE shipping.
  *
- * Both sources are discretized to a 100ms speech-activity grid:
- *   A(t) = audio speech (adaptive floor/peak VAD, binarized at 0.3)
- *   B(t) = subtitle cue activity (1 inside a cue)
+ * What changed vs the v0.7 binary grid (and why):
  *
- * Score every alignment δ ∈ [−40s, +40s]:
- *   score(δ) = Σ A(t)·(2·B(t+δ) − 1) / Σ A(t)   ∈ [−1, 1]
+ *   The old scorer was `score(δ) = (2·hits − mass)/mass` over A bins that
+ *   are a hard binary decision (`audio[i] > 0.3f`), and every speech bin
+ *   outside the cue coverage at the evaluated shift paid a −1 penalty.
+ *   That construction had two systematic false-negative classes measured
+ *   in simulation:
+ *     • quiet endings / early-offset tracks — audio speech past the last
+ *       cue (or a head region before the first one) drags the CORRECT
+ *       alignment's score toward 1−2·frac, below the 0.2 gate BY
+ *       CONSTRUCTION: such videos could never lock no matter how long
+ *       the engine listened;
+ *     • the 0.3 binarization threw the soft VAD score away, so soft-mix
+ *       dialogue (0.25–0.29 bins) counted against its own alignment.
  *
- * Lock gates (all must hold):
- *   score > 0.2                        — strongly positive peak
- *   margin > 0.15                      — clear separation from runner-up
- *                                           (±2s exclusion zone)
- *   containment ≥ 0.7                  — most audio speech sits inside cues
- *   cross-half validation              — the offset found on the first half
- *                                           of the audio replicates on the
- *                                           second half (multiple-comparisons
- *                                           guard: chance peaks don't
- *                                           replicate, true offsets do)
+ *   v0.8 scores the SAME pair of grids with a mean-centered Pearson
+ *   correlation (ffsubsync's "match 1↔1 AND 0↔0" doctrine): regions
+ *   where BOTH tracks agree — silence against gap included — raise r;
+ *   a trailing dead zone no longer singles out the true shift, it
+ *   shifts the whole curve down equally and the PROMINENCE of the peak
+ *   survives. The soft envelope is kept (quantized to 8 bits purely so
+ *   the inner product runs as bit-plane popcounts at word-array speed —
+ *   0.004 quantization noise vs a gate at 0.30).
  *
- * Implementation note: this runs on the sync-eval worker thread (never on
- * the audio render thread). The shift loops are written range-check-free:
- * for a shift δ only speech bins with i+δ inside the subtitle track can
- * contribute a +1, and every out-of-range speech bin contributes exactly
- * −1 = 2·0−1, so score(δ) = (2·hits(δ) − mass) / mass with hits counted
- * only over the in-range i interval. Same integers, same order, same
- * scores as the naive formulation — just no per-sample bounds tests.
+ * Lock gates (measured against the 30-track false-lock scan):
+ *   binCount ≥ [ELIGIBLE_BINS]                  — small windows produce
+ *                                                  0.5+ chance peaks on
+ *                                                  random tracks;
+ *   peak r ≥ [PEAK_MIN]                         — a real alignment;
+ *   prominence ≥ [PROM_MIN]                     — best shift minus the
+ *                                                  best shift ≥2 s away;
+ *   z = r·√binCount ≥ [Z_SMALL]/[Z_LARGE]       — the noise floor of a
+ *                                                  correlation over n
+ *                                                  bins shrinks as 1/√n,
+ *                                                  so short windows must
+ *                                                  clear a taller bar;
+ *   two CONSECUTIVE passes agreeing within 0.25 s (see
+ *   [AudioSyncProcessor]) — the single-pass fast-lock variant false-locked
+ *   13/30 random tracks in simulation and is gone.
+ *
+ * Implementation note: runs on the sync-eval worker thread (never the
+ * audio render thread). The correlation is O(shifts × words) with
+ * LongArray word shifts + 8 bit-plane popcounts per shift:
+ * 1201 shifts × ~155 words × (2 ors + 8 popcounts) ≈ 120k word ops per
+ * pass — microseconds, and passes now run on the scheduler cadence
+ * (~24 total per listening session), not once per second.
  */
 object SpeechCorrelator {
 
     const val ALIGN_BIN = 0.1
 
     /**
-     * Minimum analyzed audio before the first evaluation may run. v0.7.1
-     * speed pass: 16s → 8s. The cross-half gate still needs two sensible
-     * halves (≥2.5s speech mass each at the old gates), and the four lock
-     * gates (score/margin/containment/cross-half) are unchanged — 8s of
-     * dense C-drama dialogue carries plenty of onset structure for the
-     * correlator. Videos with sparse dialogue simply fail the gates and
-     * keep accumulating (the next eval slot retries with more data), so
-     * the lower floor only speeds up LOCKABLE content, never mis-locks.
+     * Minimum analyzed audio before the first pass may run. Kept at the
+     * v0.7.1 speed-pass value; in v0.8 this is a NOT-READY floor, not a
+     * lock floor — the [ELIGIBLE_BINS] gate decides when locking starts.
      */
     const val MIN_AUDIO_SECONDS = 8.0
-    const val MAX_OFFSET_SEC = 40.0
+
+    /** Offset search radius. v0.7: ±40 s. v0.8: ±60 s, matching
+     *  ffsubsync's `--max-offset-seconds` default; sim S9 (+60 s) locks. */
+    const val MAX_OFFSET_SEC = 60.0
+
+    /** Min 0.3-level speech bins in the window for a pass to be judged. */
     const val MIN_SPEECH_BINS = 30
+
+    /**
+     * v0.8 pass schedule, in bins of window growth (0.1 s each): 6 passes
+     * on the dense early ramp (every ~2 s of listening), 10 at 5 s
+     * intervals, 8 at 30 s intervals — ~24 correlations for a whole
+     * listening session (~4.8 min of accumulated audio at the last
+     * threshold) where v0.7 ran ~30 PER MINUTE at 1 Hz. The shape comes
+     * from the simulation: clean pairs lock by pass 6 (~18 s), the hard
+     * S3/S5 classes need passes 11/16 (~43/68 s), and nothing worth
+     * locking needs faster than that. [AudioSyncProcessor] re-arms this
+     * schedule on every position reset / fresh cue attach.
+     */
+    val PASS_BINS = intArrayOf(
+        80, 100, 120, 140, 160, 180,
+        230, 280, 330, 380, 430, 480, 530, 580, 630, 680,
+        780, 1080, 1380, 1680, 1980, 2280, 2580, 2880,
+    )
+
+    // ── v0.8 gates (see class KDoc for the measurements behind each) ──
+    const val PEAK_MIN = 0.30
+    const val PROM_MIN = 0.12
+    const val Z_SMALL = 9.0
+    const val Z_LARGE = 7.0
+    const val ELIGIBLE_BINS = 160
+    const val EXCLUSION_BINS = 20
 
     data class Result(
         val offsetSeconds: Double,
         val score: Double,
         val margin: Double,
         val containment: Double,
+        val z: Double,
     ) {
         val lockable: Boolean = true
     }
 
     /**
-     * Outcome of one correlation attempt (v0.7.4). The caller MUST be able
-     * to distinguish "this slot could not be judged at all" (window not
-     * armed, too few cues, <3 s of detected speech) from "the full ±40 s
-     * shift scan ran and the gates refused it" — only the latter is
-     * evidence against the cue track and may consume the processor's
-     * give-up budget. The livesim (S5) proved charging both starves
-     * sparse-dialogue content: a track that first passes every gate at
-     * t≈60 s dies at t=30 s on 22 "failures" that never matched anything.
+     * Outcome of one correlation pass. Carried over from v0.7.4: the
+     * caller distinguishes "this window was too thin to judge" (NotReady)
+     * from "judged and refused" (NoMatch) for honest sync-log evidence.
+     * The v0.8 scheduler bounds cost with the pass CADENCE, so the
+     * distinction no longer gates a failure budget.
      */
     sealed class Outcome {
-        /** Not enough data to judge this slot — retry on the next one. */
         object NotReady : Outcome()
-
-        /** Correlation ran; one of the four gates refused the result. */
         object NoMatch : Outcome()
-
-        /** All four gates passed. */
         data class Match(val result: Result) : Outcome()
     }
 
@@ -100,115 +140,160 @@ object SpeechCorrelator {
     ): Outcome {
         if (binCount < (MIN_AUDIO_SECONDS / ALIGN_BIN).toInt()) return Outcome.NotReady
         if (cues.size < 3) return Outcome.NotReady
+        val n = binCount
         val total = audio.size
 
-        // ── VAD: hard binary decision on the soft speech track ─────
-        val a = ByteArray(binCount)
-        var mass = 0
-        for (i in 0 until binCount) {
-            if (audio[i] > 0.3f) {
-                a[i] = 1
-                mass++
+        // hard decision ONLY for the sufficiency floor + containment diag
+        var hard = 0
+        for (i in 0 until n) if (audio[i] > 0.3f) hard++
+        if (hard < MIN_SPEECH_BINS) return Outcome.NotReady
+        if (n < ELIGIBLE_BINS) return Outcome.NoMatch // reportable, not lockable yet
+
+        // A envelope → 8 bit-planes over a word array (bit i at position i)
+        val words = (n + 63) / 64
+        val planes = Array(8) { LongArray(words) }
+        for (i in 0 until n) {
+            // quantize soft [0,1] onto the 0..255 grid
+            var q = (audio[i] * 255f + 0.5f).toInt()
+            if (q > 255) q = 255
+            if (q > 0) {
+                val w = i shr 6
+                val bit = 1L shl (i and 63)
+                for (p in 0 until 8) if ((q shr p) and 1 != 0) planes[p][w] = planes[p][w] or bit
             }
         }
-        if (mass < MIN_SPEECH_BINS) return Outcome.NotReady // <3s of detected speech
+        // exact prefix sums of A and A² for the Pearson moments
+        val pa = DoubleArray(n + 1)
+        val pa2 = DoubleArray(n + 1)
+        for (i in 0 until n) {
+            val v = audio[i].toDouble()
+            pa[i + 1] = pa[i] + v
+            pa2[i + 1] = pa2[i] + v * v
+        }
+        val sumA = pa[n]
+        val sumA2 = pa2[n]
+        val varA = n * sumA2 - sumA * sumA
+        if (varA <= 1e-9) return Outcome.NoMatch
 
-        // ── subtitle track B on the same grid ──────────────────────
-        val b = ByteArray(total)
+        // B cue grid on the FULL bin array, word layout, bit j at j
+        val bWords = (total + 63) / 64
+        val B = LongArray(bWords)
         for (cue in cues) {
             val i0 = maxOf(0, ((cue.start - baseSeconds) / ALIGN_BIN).toInt())
             val i1 = minOf(total - 1, ((cue.end - baseSeconds) / ALIGN_BIN).toInt())
-            for (i in i0..i1) b[i] = 1
+            if (i0 > i1) continue
+            var w = i0 shr 6
+            val wEnd = i1 shr 6
+            if (w == wEnd) {
+                B[w] = B[w] or (maskRange(i0 and 63, (i1 and 63) + 1))
+            } else {
+                B[w] = B[w] or (maskRange(i0 and 63, 64))
+                for (k in w + 1 until wEnd) B[k] = -1L
+                B[wEnd] = B[wEnd] or (maskRange(0, (i1 and 63) + 1))
+            }
         }
 
-        // ── correlate over all shifts ──────────────────────────────
         val lo = -(maxOffsetSec / ALIGN_BIN).toInt()
         val hi = (maxOffsetSec / ALIGN_BIN).toInt()
-        val scores = FloatArray(hi - lo + 1)
-        var bestScore = -2.0f
+        val shifts = hi - lo + 1
+        val rs = FloatArray(shifts)
+        val dest = LongArray(words)
+        val lastBits = n and 63
+
+        var peak = -2f
         var bestShift = 0
-        for (shift in lo..hi) {
-            // i range where j = i + shift stays inside the subtitle track.
-            val i0 = if (shift < 0) -shift else 0
-            val i1 = if (binCount < total - shift) binCount else total - shift
-            var hits = 0
-            for (i in i0 until i1) {
-                if (a[i].toInt() != 0 && b[i + shift].toInt() != 0) hits++
+        var bestSb = 0
+        for (idx in 0 until shifts) {
+            val shift = idx + lo
+            shiftB(B, bWords, dest, words, shift)
+            if (lastBits != 0) dest[words - 1] = dest[words - 1] and ((1L shl lastBits) - 1)
+            var sB = 0
+            for (k in 0 until words) sB += java.lang.Long.bitCount(dest[k])
+            if (sB == 0 || sB == n) { rs[idx] = -2f; continue }
+            var sAB = 0L
+            for (p in 0 until 8) {
+                val pl = planes[p]
+                var c = 0
+                for (k in 0 until words) c += java.lang.Long.bitCount(pl[k] and dest[k])
+                if (c != 0) sAB += (1L shl p) * c
             }
-            // Σ (2·B−1) over ALL speech bins = 2·hits − mass (out-of-range
-            // bins contribute −1 each, which 2·0−1 in −mass already covers).
-            val norm = (2 * hits - mass) / mass.toFloat()
-            scores[shift - lo] = norm
-            if (norm > bestScore) {
-                bestScore = norm
-                bestShift = shift
-            }
+            val num = n * (sAB.toDouble() / 255.0) - sumA * sB
+            val varB = n.toDouble() * sB - (sB.toDouble() * sB)
+            val den = sqrt(varA * varB)
+            if (den < 1e-9) { rs[idx] = -2f; continue }
+            val r = (num / den).toFloat()
+            rs[idx] = r
+            if (r > peak) { peak = r; bestShift = shift; bestSb = sB }
         }
+        if (peak <= -2f) return Outcome.NoMatch
 
-        // ── runner-up outside ±2s exclusion zone ───────────────────
-        var second = -2.0f
-        for (k in scores.indices) {
-            val sh = k + lo
-            if (abs(sh - bestShift) * ALIGN_BIN > 2.0 && scores[k] > second) {
-                second = scores[k]
-            }
+        // prominence: best shift at least EXCLUSION_BINS away
+        var second = -2f
+        for (idx in 0 until shifts) {
+            if (abs(idx + lo - bestShift) > EXCLUSION_BINS && rs[idx] > second) second = rs[idx]
         }
-        val margin = bestScore - second
+        val margin = if (second <= -2f) peak else peak - second
 
-        // ── containment: audio speech mass inside cues at the peak ─
-        // (hits at bestShift, the same restricted-range count as above)
-        val c0 = if (bestShift < 0) -bestShift else 0
-        val c1 = if (binCount < total - bestShift) binCount else total - bestShift
+        // containment diagnostic: speech bins covered at the peak
+        shiftB(B, bWords, dest, words, bestShift)
+        if (lastBits != 0) dest[words - 1] = dest[words - 1] and ((1L shl lastBits) - 1)
         var inside = 0
-        for (i in c0 until c1) {
-            if (a[i].toInt() != 0 && b[i + bestShift].toInt() != 0) inside++
+        for (i in 0 until n) {
+            if (audio[i] > 0.3f && ((dest[i shr 6] ushr (i and 63)) and 1L) != 0L) inside++
         }
-        val containment = inside / mass.toFloat()
+        val containment = inside.toFloat() / hard
 
-        // ── cross-half validation ──────────────────────────────────
-        val mid = binCount / 2
-        // Speech mass of the first half — shift-independent, counted once.
-        var halfMass = 0f
-        for (i in 0 until mid) {
-            if (a[i].toInt() != 0) halfMass += 1f
-        }
-        var half1Shift = Int.MIN_VALUE
-        var half1Score = -2.0f
-        for (shift in lo..hi) {
-            val i0 = if (shift < 0) -shift else 0
-            val i1 = if (mid < total - shift) mid else total - shift
-            var hits = 0
-            for (i in i0 until i1) {
-                if (a[i].toInt() != 0 && b[i + shift].toInt() != 0) hits++
-            }
-            val v = if (halfMass > 0f) hits / halfMass else 0f
-            if (v > half1Score) {
-                half1Score = v
-                half1Shift = shift
-            }
-        }
-        var m2 = 0f
-        var c2 = 0f
-        for (i in mid until binCount) {
-            if (a[i].toInt() == 0) continue
-            m2 += 1f
-            val j = i + bestShift
-            c2 += if (j in 0 until total) b[j].toInt() else 0
-        }
-        val containment2 = if (m2 > 0f) c2 / m2 else 0f
-        val validated = half1Shift != Int.MIN_VALUE &&
-            abs(half1Shift - bestShift) * ALIGN_BIN <= 0.3 &&
-            containment2 >= 0.7
-
-        val lockable = bestScore > 0.2 && margin > 0.15 &&
-            containment >= 0.7 && validated
+        val z = peak * sqrt(n.toDouble())
+        val zFloor = if (n < 240) Z_SMALL else Z_LARGE
+        val lockable = peak >= PEAK_MIN && margin >= PROM_MIN && z >= zFloor
         // Renderer convention: applied offset = −peak (subs late → negative).
         val offset = -bestShift * ALIGN_BIN
         return if (lockable) {
             Outcome.Match(
-                Result(offsetSeconds = offset, score = bestScore.toDouble(),
-                    margin = margin.toDouble(), containment = containment.toDouble())
+                Result(offsetSeconds = offset, score = peak.toDouble(),
+                    margin = margin.toDouble(), containment = containment.toDouble(),
+                    z = z),
             )
         } else Outcome.NoMatch
+    }
+
+    // ── word-array helpers ──────────────────────────────────────────────
+
+    /** contiguous bit mask [from, to) within one 64-bit word */
+    private fun maskRange(from: Int, to: Int): Long =
+        if (to <= from) 0L else ((-1L shl from) ushr (64 - to)).let { it }
+
+    /**
+     * dest = B shifted so bit i of dest equals B[i + shift] (the sim's
+     * `A & (B >> shift)` pairing convention). Caller masks the tail word.
+     * [dest] must already be sized to cover the A window.
+     */
+    private fun shiftB(
+        B: LongArray, bWords: Int, dest: LongArray, words: Int, shift: Int,
+    ) {
+        val wShift = if (shift >= 0) shift shr 6 else (-shift) shr 6
+        val bShift = if (shift >= 0) shift and 63 else (-shift) and 63
+        for (k in 0 until words) {
+            dest[k] = if (shift >= 0) {
+                // B >> shift : dest[k] draws src[k + wShift] (toward higher
+                // indices because a cue bin j pairs with audio bin j - shift)
+                val s1 = k + wShift
+                var v = if (s1 < bWords) B[s1] ushr bShift else 0L
+                if (bShift != 0) {
+                    val s2 = s1 + 1
+                    if (s2 < bWords) v = v or (B[s2] shl (64 - bShift))
+                }
+                v
+            } else {
+                // B << |shift|
+                val s1 = k - wShift
+                var v = if (s1 >= 0) B[s1] shl bShift else 0L
+                if (bShift != 0) {
+                    val s2 = s1 - 1
+                    if (s2 >= 0) v = v or (B[s2] ushr (64 - bShift))
+                }
+                v
+            }
+        }
     }
 }

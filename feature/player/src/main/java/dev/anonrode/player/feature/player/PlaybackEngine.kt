@@ -139,6 +139,15 @@ class PlaybackEngine(
      */
     @Volatile private var lastSyncCues: List<SubtitleCue> = emptyList()
 
+    /**
+     * The player's current A-B repeat region as (startMs, endMs), or null
+     * when no loop is active. Queried by the position-discontinuity
+     * listener to recognise loop-back seeks (v0.8 quiet re-anchor) — a
+     * provider rather than a value mirror so the single owner of the state
+     * stays the UI layer and the two can never disagree.
+     */
+    @Volatile var abRegionProvider: (() -> Pair<Long, Long>?)? = null
+
     /** VLC-style gain stage after the sync analyzer (see its KDoc). */
     private val boostProcessor = VolumeBoostProcessor()
 
@@ -412,7 +421,27 @@ class PlaybackEngine(
                         newPosition: Player.PositionInfo,
                         reason: Int,
                     ) {
-                        syncProcessor.setStartPosition(newPosition.positionMs)
+                        // v0.8 A-B repeat fix: a BACKWARD jump landing on
+                        // the loop's start marker is not a seek to new
+                        // content — re-anchoring there used to discard the
+                        // window on every loop iteration, so live sync
+                        // could never lock while A-B was active. Quiet
+                        // re-anchor keeps the bins (the looped audio
+                        // re-labels onto the same times) and only shifts
+                        // the clock base.
+                        val ab = abRegionProvider?.invoke()
+                        val sameItem =
+                            oldPosition.mediaItemIndex == newPosition.mediaItemIndex
+                        if (reason == Player.DISCONTINUITY_REASON_SEEK && ab != null &&
+                            sameItem &&
+                            oldPosition.positionMs >= ab.second - 2_000 &&
+                            newPosition.positionMs <= ab.first + 750 &&
+                            newPosition.positionMs >= ab.first - 1_500
+                        ) {
+                            syncProcessor.setStartPositionQuiet(newPosition.positionMs)
+                        } else {
+                            syncProcessor.setStartPosition(newPosition.positionMs)
+                        }
                     }
                 })
             }
@@ -645,6 +674,7 @@ class PlaybackEngine(
             // correlate against (setCues also re-arms the give-up budget when
             // enabled, which is exactly the fresh-listening we want).
             syncProcessor.setCues(lastSyncCues)
+            AppLog.d("SYNC", "re-granted ${lastSyncCues.size} cues after decoder-mode rebuild (live engine re-armed)")
             // Same order as [play]: setMediaItem → seekTo → prepare, so the
             // rebuilt player starts buffering at the old position instead of
             // flashing frame 0 before a post-prepare seek lands.

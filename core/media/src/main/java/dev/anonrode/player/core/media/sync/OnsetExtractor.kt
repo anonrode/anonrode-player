@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.net.Uri
 import dev.anonrode.player.core.media.log.AppLog
 import java.io.File
 import java.nio.ByteBuffer
@@ -44,6 +45,22 @@ import kotlin.math.sqrt
  */
 class OnsetExtractor(private val context: Context) {
 
+    /**
+     * v0.8 P2-2: the decode budget is CALLER-SCALED now. The old fixed
+     * 600 s cap truncated 2 h movies at the 10–20× realtime claimed speed
+     * on low-end SoCs — and the partial onset set then FAILED the gates,
+     * so the video was marked as an unsyncable VERDICT when the real story
+     * was "we stopped listening early". The job sets this from the video's
+     * duration; the default keeps short files on the old floor.
+     */
+    var decodeTimeoutMs: Long = DECODE_TIMEOUT_MS
+
+    /** True when the last [extractSources]/[extract] stopped at the budget
+     *  instead of the end of stream — the job must NOT treat that as a
+     *  verdict (it retries with a bigger allowance instead). */
+    @Volatile var lastDecodeTruncated = false
+        private set
+
     /** Both onset sources from one pass over the file. */
     data class OnsetSources(
         val silencedetect: List<Double>,
@@ -63,8 +80,10 @@ class OnsetExtractor(private val context: Context) {
      * Extract BOTH onset sources. silencedetect uses the ffmpeg binary
      * when available (exact reference pipeline), else the Kotlin
      * equivalent; VAD runs only when the Silero model asset is present.
+     * [videoUri] (v0.8 P1-5) is the content:// fallback used for the
+     * MediaCodec decode when the path is missing/unreadable.
      */
-    fun extractSources(videoPath: String): OnsetSources {
+    fun extractSources(videoPath: String, videoUri: Uri? = null): OnsetSources {
         val sil = resolveFfmpegPath()?.let {
             extractWithFfmpeg(it, videoPath, 0.0)
         }
@@ -76,7 +95,7 @@ class OnsetExtractor(private val context: Context) {
         // Single MediaCodec decode pass feeding both detectors.
         val silence = SilenceState()
         val vad = if (vadAvailable) SileroVad(context) else null
-        decodeAudio(videoPath) { buf, sr, ch, isFloat ->
+        decodeAudio(videoPath, videoUri) { buf, sr, ch, isFloat ->
             silence.process(buf, sr, ch, isFloat)
             vad?.processPcm(buf, sr, ch, isFloat)
             true
@@ -100,7 +119,7 @@ class OnsetExtractor(private val context: Context) {
             AppLog.d("ONSET", "ffmpeg path failed, falling back to MediaCodec")
         }
         val silence = SilenceState(maxSeconds)
-        decodeAudio(videoPath) { buf, sr, ch, isFloat ->
+        decodeAudio(videoPath, null) { buf, sr, ch, isFloat ->
             silence.process(buf, sr, ch, isFloat)
             !silence.limitReached
         }
@@ -170,13 +189,30 @@ class OnsetExtractor(private val context: Context) {
      * a background worker.
      */
     private fun decodeAudio(
-        videoPath: String,
+        videoPath: String?,
+        videoUri: Uri?,
         onPcm: (buf: ByteBuffer, sampleRate: Int, channels: Int, isFloat: Boolean) -> Boolean,
     ) {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
+        lastDecodeTruncated = false
         try {
-            extractor.setDataSource(videoPath)
+            // v0.8 P1-5: prefer the resolved path (what the reference
+            // pipeline was validated on), fall back to the content URI so
+            // files MediaStore's DATA column can't describe — or that this
+            // process can't open() directly — still get decoded through
+            // the resolver, instead of failing the whole fingerprint.
+            when {
+                videoPath != null && File(videoPath).canRead() ->
+                    extractor.setDataSource(videoPath)
+                videoUri != null ->
+                    extractor.setDataSource(context, videoUri, null)
+                else ->
+                    // No readable path AND no URI: a programming error, but
+                    // let the extractor throw with the real reason inside
+                    // the surrounding catch.
+                    extractor.setDataSource(videoPath!!)
+            }
             var track = -1
             for (i in 0 until extractor.trackCount) {
                 val mime = extractor.getTrackFormat(i)
@@ -258,8 +294,9 @@ class OnsetExtractor(private val context: Context) {
                     }
                 }
 
-                if (System.currentTimeMillis() - t0 > DECODE_TIMEOUT_MS) {
-                    AppLog.e("ONSET", "MediaCodec decode timeout after ${DECODE_TIMEOUT_MS}ms")
+                if (System.currentTimeMillis() - t0 > decodeTimeoutMs) {
+                    AppLog.e("ONSET", "decode stopped at budget ${decodeTimeoutMs}ms before end of stream")
+                    lastDecodeTruncated = true
                     break
                 }
             }
