@@ -86,7 +86,13 @@ class AudioSyncProcessor(
     // nothing after the budget is spent. flush() / reset() / a position
     // re-anchor (setStartPosition — fired on every seek, discontinuity and
     // episode switch) and a fresh non-empty setCues re-arm the budget.
+    // v0.7.4: slots that could not be DECIDED at all (too little speech
+    // mass, window not armed) do not consume this budget — livesim proved
+    // sparse-dialogue content burns all 22 "failures" on undecidable
+    // seconds and gives up (~30 s) before the same track becomes lockable
+    // (~60 s). A separate, much larger cap bounds the battery cost.
     @Volatile private var failedEvals = 0
+    @Volatile private var notReadyEvals = 0
     @Volatile private var gaveUp = false
 
     // Bumped on every window reset (flush/reset/position re-anchor) so an
@@ -134,6 +140,7 @@ class AudioSyncProcessor(
             // track switch.
             if (enabled) {
                 failedEvals = 0
+                notReadyEvals = 0
                 gaveUp = false
             } else {
                 // Stay dormant — but DO clear a stale lock so a future flip
@@ -161,6 +168,11 @@ class AudioSyncProcessor(
             // Forced give-up so we stop spending CPU on a user-disabled
             // feature; a later re-arm via setCues(true) clears gaveUp.
             gaveUp = true
+            // P1-6: "turn sync off" must un-apply the lock too. A stale
+            // `locked` short-circuits analyze() forever, so a later OFF→ON
+            // flip stayed dead until the next seek even though the budget
+            // re-armed (the gaveUp branch below was unreachable-by-effect).
+            locked = false
         } else if (gaveUp) {
             // Re-arm on the OFF→ON flip itself: without this the processor
             // stays dormant until the next seek/discontinuity resets the
@@ -169,7 +181,9 @@ class AudioSyncProcessor(
             // episode. Re-arming here keeps the already-accumulated bins —
             // evaluation resumes at the next eval slot (~1s of audio).
             failedEvals = 0
+            notReadyEvals = 0
             gaveUp = false
+            locked = false // belt & braces: never inherit a stale lock
         }
         AppLog.d("SYNC", "setEnabled=$enabled")
     }
@@ -272,7 +286,13 @@ class AudioSyncProcessor(
         windowN = 0; wSumSq = 0.0; wSumAbs = 0.0; wSumSig = 0.0; wZcr = 0
         floor = 0.0; peak = 0.0; lastSpeech = 0.0
         lastEvalPos = Long.MIN_VALUE; stableHits = 0; lastOffset = Double.NaN
-        failedEvals = 0; gaveUp = false
+        failedEvals = 0; notReadyEvals = 0; gaveUp = false
+        // P1-4: a fresh window must also drop the drift history. Without
+        // this the six points a post-seek / episode-switch lock fits can
+        // straddle the boundary; the resulting fake span clears
+        // MIN_DRIFT_SPAN_SEC, the fit is clamped to ±2.5 %, and a ~9 s/min
+        // subtitle-speed error gets persisted as if it were measured.
+        driftTracker.reset()
         generation++ // invalidate any in-flight evaluation
     }
 
@@ -445,12 +465,33 @@ class AudioSyncProcessor(
         // mid-evaluation — drop the result instead of publishing a lock the
         // user no longer wants.
         if (!enabled) return
-        val result = SpeechCorrelator.findOffset(
-            req.bins, req.binCount, req.cues,
-            baseSeconds = req.baseSeconds,
-        ) ?: run {
-            countFailedEval(req.posMs, req.generation)
-            return
+        val result: SpeechCorrelator.Result = when (
+            val outcome = SpeechCorrelator.findOffset(
+                req.bins, req.binCount, req.cues,
+                baseSeconds = req.baseSeconds,
+            )
+        ) {
+            // Undecidable slot: the correlator had too little data to judge
+            // the pairing (sparse dialogue, long silence, short cue track).
+            // NOT evidence against the subtitle track — v0.7.4 takes it out
+            // of the give-up budget (livesim S5: sparse content charged all
+            // 22 attempts on undecidable seconds and handed off at ~30 s,
+            // while the same track was gate-passable from ~60 s). The
+            // separate MAX_NOT_READY_EVS cap bounds the battery cost.
+            is SpeechCorrelator.Outcome.NotReady -> {
+                notReadyEvals++
+                if (notReadyEvals >= MAX_NOT_READY_EVS) {
+                    gaveUp = true
+                    AppLog.d("SYNC", "undecidable after $notReadyEvals slots, giving up at t=${req.posMs / 1000}s")
+                    listener.onSyncNoMatch()
+                }
+                return
+            }
+            is SpeechCorrelator.Outcome.NoMatch -> {
+                countFailedEval(req.posMs, req.generation)
+                return
+            }
+            is SpeechCorrelator.Outcome.Match -> outcome.result
         }
 
         // Discard stale results: a flush()/reset()/position re-anchor may
@@ -527,5 +568,17 @@ class AudioSyncProcessor(
          * Re-armed by flush()/reset()/position reset/fresh cues.
          */
         private const val MAX_EVAL_ATTEMPTS = 22
+
+        /**
+         * Cap on consecutive slots that were never decidable (v0.7.4).
+         * These no longer consume [MAX_EVAL_ATTEMPTS] — but a video that
+         * stays below the speech-mass floor forever must still stop paying
+         * the ~1 Hz worker correlation eventually. 90 slots ≈ 90 s of
+         * listening: livesim S5 (20 %-duty anime dialogue) became
+         * gate-passable at ~60 s, so a real sparse lock has margin, while
+         * pure-ambience tracks hand off to the fingerprint engine after a
+         * bounded window.
+         */
+        private const val MAX_NOT_READY_EVS = 90
     }
 }

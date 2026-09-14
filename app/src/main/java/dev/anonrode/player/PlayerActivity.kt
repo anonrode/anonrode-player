@@ -296,6 +296,17 @@ class PlayerActivity : ComponentActivity() {
      */
     private var subSyncRunning by mutableStateOf(false)
 
+    /**
+     * v0.7.4 P1-2 companion: true while a background fingerprint job for
+     * the CURRENT video has actually been enqueued — i.e., there is a real
+     * verdict in flight. The Room collector uses it to tell "a negative
+     * verdict just landed" (nothing else will ever stop the "Syncing…"
+     * indicator) from "this video was already checked in a past session"
+     * (the flow's FIRST emission must not stop the spinner the live engine
+     * is honestly earning). Reset on video switch and on every verdict.
+     */
+    private var syncAwaitingBackgroundVerdict = false
+
     /** Cumulative manual nudge in ms (persisted in Room). */
     private var manualNudgeMs by mutableStateOf(0L)
 
@@ -484,9 +495,29 @@ class PlayerActivity : ComponentActivity() {
                 app.stateStore.getAsFlow(uri).collect { st ->
                     val s = st ?: return@collect
                     if (s.autoSyncOffsetMs == 0L && s.autoSyncSpeedFactor == 1f) {
+                        // v0.7.4 P1-2: a row change carrying the no-lock
+                        // SENTINEL with a checked timestamp is the engine's
+                        // NEGATIVE verdict landing while we watch (refused
+                        // fit, or a no-usable-subtitle file at first open).
+                        // Nothing will ever produce a lock for this video on
+                        // its own — stop the "Syncing…" indicator instead of
+                        // burning it forever. GATED on a verdict we actually
+                        // scheduled: an ALREADY-checked video's first flow
+                        // emission must not preempt the live engine's own
+                        // honest attempt. Force "Resync now" re-arms.
+                        if (syncAwaitingBackgroundVerdict) {
+                            syncAwaitingBackgroundVerdict = false
+                            if (s.autoSyncCheckedAtMs != 0L && subSyncRunning) {
+                                withContext(Dispatchers.Main) {
+                                    if (uri == currentUriStr) subSyncRunning = false
+                                }
+                            }
+                        }
                         return@collect
                     }
                     if (!currentSettings.subtitleAutoSyncEnabled) return@collect
+                    // The verdict we were waiting for (if any) is this lock.
+                    syncAwaitingBackgroundVerdict = false
                     withContext(Dispatchers.Main) {
                         if (uri != currentUriStr) return@withContext
                         AnonrodeApp.get(this@PlayerActivity).engine
@@ -930,6 +961,10 @@ class PlayerActivity : ComponentActivity() {
         openGeneration++
         val gen = openGeneration
         currentUriStr = uriStr
+        // v0.7.4 P1-2: a background verdict for the PREVIOUS video can no
+        // longer reach this session — disarm the collector's verdict gate so
+        // the fresh video's own scheduling arms it anew.
+        syncAwaitingBackgroundVerdict = false
         // Kick off the MediaStore aspect lookup off the main thread so the
         // next PiP enter has a cached (w,h) and never blocks on a query.
         refreshPipAspectAsync(uriStr)
@@ -1049,8 +1084,16 @@ class PlayerActivity : ComponentActivity() {
                     AppLog.d(
                         "PLAY",
                         "scheduling fingerprint: toggleOn=$userToggleOn " +
-                            "noLock=$noPersistedLock checked=$alreadyChecked choice='$choice'"
+                            "noLock=$noPersistedLock checked=$alreadyChecked choice='$choice'",
                     )
+                    // v0.7.4 P1-2: a background verdict is now genuinely in
+                    // flight for this video — arm the collector gate so its
+                    // sentinel+checked emission (refused fit / no usable
+                    // subtitle) can stop the "Syncing…" indicator. (The
+                    // log line above had a missing comma in the concat; the
+                    // 09-13 Anon incident taught us a missing comma eats the
+                    // NEXT call separator, so brace-check after this.)
+                    syncAwaitingBackgroundVerdict = true
                     SyncFingerprint.schedule(applicationContext, uriStr)
                 }
 
@@ -2008,6 +2051,12 @@ class PlayerActivity : ComponentActivity() {
             // starts evaluating at the next slot; a persisted lock (if
             // one lands from the background job) clears this via the Room
             // collector + onLiveSyncLocked.
+            // v0.7.4 P1-2: scheduleSyncNowIfCuesMissing -> schedule-
+            // FingerprintIfNeverChecked reads the store itself, so it both
+            // kicks the background pass AND applies (and stops the spinner
+            // for) a lock that was already in the DB — the Room collector
+            // only re-fires on a ROW CHANGE, so the pre-session lock is
+            // applied there, not by a second read from here.
             scheduleSyncNowIfCuesMissing()
         }
         lifecycleScope.launch {
@@ -2080,10 +2129,37 @@ class PlayerActivity : ComponentActivity() {
                 (st.autoSyncOffsetMs != 0L || st.autoSyncSpeedFactor != 1f)
             if (checked || hasLock) {
                 AppLog.d("SYNC", "fingerprint not rescheduled (checked=$checked lock=$hasLock)")
-                if (keepSpinner) handler.post { subSyncRunning = false }
+                // v0.7.4 P1-2: this branch is ALSO reached from the toggle-ON
+                // path (keepSpinner=false) — and there it was a trap: the
+                // spinner set in onSetSubSyncEnabled had nothing left to
+                // clear it. The Room collector only re-fires on a ROW
+                // CHANGE, and a fingerprint lock stored BEFORE this session
+                // (toggle was OFF at open, so play() skipped applying it)
+                // never changes. The branch that knows the outcome must
+                // finish the job: apply the stored lock, then stop the
+                // spinner. A checked-without-lock verdict (job refused every
+                // source, or the file has no usable subtitles) likewise has
+                // nothing pending — the indicator must not burn forever.
+                syncAwaitingBackgroundVerdict = false
+                handler.post {
+                    if (st != null && hasLock && currentSettings.subtitleAutoSyncEnabled &&
+                        uri == currentUriStr
+                    ) {
+                        AnonrodeApp.get(this@PlayerActivity).engine
+                            .applyPersistedLock(st.autoSyncOffsetMs, st.autoSyncSpeedFactor)
+                        piecewiseSegments = parsePiecewise(st.autoSyncPiecewise)
+                    }
+                    subSyncRunning = false
+                }
                 return@launch
             }
             AppLog.d("SYNC", "scheduling fingerprint for current video")
+            // v0.7.4 P1-2: we are now genuinely waiting on a background
+            // verdict — arm the collector so its sentinel+checked emission
+            // (a refused fit / no-usable-subtitle) stops the spinner, while
+            // the very first emission for an ALREADY-checked video (nothing
+            // scheduled here) stays gated off.
+            syncAwaitingBackgroundVerdict = true
             if (keepSpinner) handler.post { subSyncRunning = true }
             SyncFingerprint.scheduleSuspending(applicationContext, uri, force = false)
         }

@@ -62,6 +62,27 @@ object SpeechCorrelator {
     }
 
     /**
+     * Outcome of one correlation attempt (v0.7.4). The caller MUST be able
+     * to distinguish "this slot could not be judged at all" (window not
+     * armed, too few cues, <3 s of detected speech) from "the full ±40 s
+     * shift scan ran and the gates refused it" — only the latter is
+     * evidence against the cue track and may consume the processor's
+     * give-up budget. The livesim (S5) proved charging both starves
+     * sparse-dialogue content: a track that first passes every gate at
+     * t≈60 s dies at t=30 s on 22 "failures" that never matched anything.
+     */
+    sealed class Outcome {
+        /** Not enough data to judge this slot — retry on the next one. */
+        object NotReady : Outcome()
+
+        /** Correlation ran; one of the four gates refused the result. */
+        object NoMatch : Outcome()
+
+        /** All four gates passed. */
+        data class Match(val result: Result) : Outcome()
+    }
+
+    /**
      * @param audio soft speech values per 0.1s bin; index 0 is the window
      *              start, i.e. bin i covers media time
      *              baseSeconds + i*0.1s (the processor slides the window
@@ -76,9 +97,9 @@ object SpeechCorrelator {
         cues: List<SubtitleCue>,
         maxOffsetSec: Double = MAX_OFFSET_SEC,
         baseSeconds: Double = 0.0,
-    ): Result? {
-        if (binCount < (MIN_AUDIO_SECONDS / ALIGN_BIN).toInt()) return null
-        if (cues.size < 3) return null
+    ): Outcome {
+        if (binCount < (MIN_AUDIO_SECONDS / ALIGN_BIN).toInt()) return Outcome.NotReady
+        if (cues.size < 3) return Outcome.NotReady
         val total = audio.size
 
         // ── VAD: hard binary decision on the soft speech track ─────
@@ -90,7 +111,7 @@ object SpeechCorrelator {
                 mass++
             }
         }
-        if (mass < MIN_SPEECH_BINS) return null // <3s of detected speech
+        if (mass < MIN_SPEECH_BINS) return Outcome.NotReady // <3s of detected speech
 
         // ── subtitle track B on the same grid ──────────────────────
         val b = ByteArray(total)
@@ -184,8 +205,10 @@ object SpeechCorrelator {
         // Renderer convention: applied offset = −peak (subs late → negative).
         val offset = -bestShift * ALIGN_BIN
         return if (lockable) {
-            Result(offsetSeconds = offset, score = bestScore.toDouble(),
-                margin = margin.toDouble(), containment = containment.toDouble())
-        } else null
+            Outcome.Match(
+                Result(offsetSeconds = offset, score = bestScore.toDouble(),
+                    margin = margin.toDouble(), containment = containment.toDouble())
+            )
+        } else Outcome.NoMatch
     }
 }

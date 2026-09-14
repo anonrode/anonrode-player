@@ -33,6 +33,19 @@ class DriftTracker {
     }
 
     /**
+     * Drops all history (v0.7.4 P1-4). Without this the tracker survived
+     * [AudioSyncProcessor.resetWindow], so the six points a post-seek /
+     * post-episode-switch lock fits can straddle the boundary: the span
+     * then easily clears [MIN_DRIFT_SPAN_SEC], the LSQ fit "discovers" a
+     * huge rate from the offset jump, the clamp turns it into ±2.5 %, and
+     * a ~9-second-per-minute subtitle speed error gets persisted as if
+     * measured.
+     */
+    fun reset() {
+        points.clear()
+    }
+
+    /**
      * Least-squares fit: offset(t) = a + b×t
      * Returns (baseOffset, driftRatePerSecond) or null if insufficient data.
      */

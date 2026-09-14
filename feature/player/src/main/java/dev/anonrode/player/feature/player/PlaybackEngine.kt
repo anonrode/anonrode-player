@@ -130,6 +130,15 @@ class PlaybackEngine(
 
     private val syncProcessor = AudioSyncProcessor(this)
 
+    /**
+     * The cue list currently in [syncProcessor], mirrored here so a decoder
+     * rebuild can re-grant it. Releasing the old player runs
+     * AudioProcessor.reset(), which wipes the processor's cues, and the
+     * rebuild path never re-attached them (v0.7.4 P1-1): one decoder-chip
+     * tap silently killed the live sync engine for the rest of the episode.
+     */
+    @Volatile private var lastSyncCues: List<SubtitleCue> = emptyList()
+
     /** VLC-style gain stage after the sync analyzer (see its KDoc). */
     private val boostProcessor = VolumeBoostProcessor()
 
@@ -154,6 +163,18 @@ class PlaybackEngine(
      */
     fun setSubSyncEnabled(enabled: Boolean) {
         syncProcessor.setEnabled(enabled)
+        if (!enabled) {
+            // P1-6: turning the flagship feature OFF must actually take
+            // effect on the rendered subs NOW. Previously the applied auto
+            // offset stayed on screen until the next play() — the user
+            // turned sync off and subtitles kept the synced timing. Reset
+            // only the APPLIED values; [persistedAutoMs] is deliberately
+            // left intact so the fingerprint lock survives the toggle and
+            // [onSyncNoMatch] can still restore it if the live pass gives
+            // up after a re-enable.
+            subtitleOffsetMs = manualDelayMs
+            subtitleSpeedFactor = 1f
+        }
         AppLog.d("ENGINE", "sub sync enabled=$enabled")
     }
 
@@ -399,6 +420,7 @@ class PlaybackEngine(
 
     /** Point the sync engine at the new episode's cues; anchor media time. */
     fun attachSyncProcessor(cues: List<SubtitleCue>, startPositionMs: Long) {
+        lastSyncCues = cues
         syncProcessor.setCues(cues)
         syncProcessor.setStartPosition(startPositionMs)
     }
@@ -422,10 +444,12 @@ class PlaybackEngine(
      * (or, closer to 0, found one that was wrong by the anchor error).
      */
     fun attachSyncCues(cues: List<SubtitleCue>) {
+        lastSyncCues = cues
         syncProcessor.setCues(cues)
     }
 
     fun detachSyncProcessor() {
+        lastSyncCues = emptyList()
         syncProcessor.setCues(emptyList())
         subtitleOffsetMs = manualDelayMs
     }
@@ -613,6 +637,14 @@ class PlaybackEngine(
         listenersToReattach.forEach { newPlayer.addListener(it) }
 
         if (item != null) {
+            // P1-1: the old player's release() ran AudioProcessor.reset(),
+            // clearing syncProcessor's cue list; without re-granting it here
+            // the live sync engine would be silently dead for the rest of the
+            // episode after any decoder-mode switch. Re-attach BEFORE
+            // prepare() so the first audio buffer already has cues to
+            // correlate against (setCues also re-arms the give-up budget when
+            // enabled, which is exactly the fresh-listening we want).
+            syncProcessor.setCues(lastSyncCues)
             // Same order as [play]: setMediaItem → seekTo → prepare, so the
             // rebuilt player starts buffering at the old position instead of
             // flashing frame 0 before a post-prepare seek lands.

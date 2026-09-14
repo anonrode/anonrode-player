@@ -65,6 +65,16 @@ object SyncFingerprint {
             false
         }
         if (!enabled) return
+        // v0.7.4 P1-3: an explicit "Resync now" must not sit blocked in
+        // WorkManager because the battery happens to be low — the user is
+        // watching, waiting, and pressed the button on purpose, and the
+        // whole-file decode can take minutes with no progress notification.
+        // batteryNotLow stays on the BACKGROUND auto-schedule (defer the
+        // CPU-heavy pass until the phone is healthy), but a forced run drops
+        // all constraints so it executes immediately.
+        val constraints = Constraints.Builder()
+            .apply { if (!force) setRequiresBatteryNotLow(true) }
+            .build()
         val request = OneTimeWorkRequestBuilder<SyncFingerprintJob>()
             .setInputData(
                 workDataOf(
@@ -78,11 +88,7 @@ object SyncFingerprint {
             // background auto-schedule keeps the 90s delay so the decode
             // pass doesn't fight the viewing session for CPU/IO.
             .setInitialDelay(if (force) 0 else 90, TimeUnit.SECONDS)
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiresBatteryNotLow(true)
-                    .build()
-            )
+            .setConstraints(constraints)
             .addTag(WORK_TAG)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(

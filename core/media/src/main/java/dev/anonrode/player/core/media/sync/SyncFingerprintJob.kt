@@ -108,6 +108,12 @@ class SyncFingerprintJob(
             val choice = existing?.subtitleChoice.orEmpty()
             if (choice == "none") {
                 AppLog.d("SYNC_JOB", "subtitles disabled for this video, nothing to sync")
+                // v0.7.4 P0-1: this is a verdict about this video's current
+                // state — record it so the player's auto-schedule stops
+                // re-enqueuing a 90 s-delayed no-op on every open. Changing
+                // the subtitle choice clears the mark; "Resync now" ignores
+                // it.
+                store.markAutoSyncChecked(videoUri)
                 return@withContext Result.success()
             }
 
@@ -117,6 +123,7 @@ class SyncFingerprintJob(
                 )
                 if (resolved.size < 10) {
                     AppLog.d("SYNC_JOB", "choice '$choice' gave ${resolved.size} cues, skipping")
+                    store.markAutoSyncChecked(videoUri)
                     return@withContext Result.success()
                 }
                 AppLog.d("SYNC_JOB", "syncing chosen source: $choice (${resolved.size} cues)")
@@ -136,10 +143,12 @@ class SyncFingerprintJob(
                     val parsed = SubtitleParser.parse(sub.first, sub.second)
                     if (parsed.size < 10) {
                         AppLog.d("SYNC_JOB", "too few cues (${parsed.size}), skipping")
+                        store.markAutoSyncChecked(videoUri)
                         return@withContext Result.success()
                     }
                     parsed
                 } else {
+                    var probeFailed = false
                     val embedded: List<SubtitleCue> = try {
                         val tracks = SubtitleSourceResolver.listEmbedded(
                             applicationContext, videoUri, videoPath,
@@ -150,11 +159,22 @@ class SyncFingerprintJob(
                             "embedded:${tracks.first().index}",
                         ).sortedBy { it.start }
                     } catch (t: Throwable) {
+                        probeFailed = true
                         AppLog.e("SYNC_JOB", "embedded subtitle probe failed", t)
                         emptyList()
                     }
                     if (embedded.size < 10) {
                         AppLog.d("SYNC_JOB", "no sidecar and no embedded track, nothing to sync")
+                        // v0.7.4 P0-1: a DEFINITE "this video has no usable
+                        // subtitle source" verdict is marked checked like any
+                        // other, so the every-open 90 s-delayed no-op enqueue
+                        // storm ends (a sidecarless file can never sync by
+                        // definition — the live engine has nothing either).
+                        // A PROBE FAILURE is not a verdict — leave it
+                        // unmarked so the next open retries. Recovery when a
+                        // sidecar appears later: the subtitle-choice setter
+                        // clears the mark, and "Resync now" ignores it.
+                        if (!probeFailed) store.markAutoSyncChecked(videoUri)
                         return@withContext Result.success()
                     }
                     AppLog.d("SYNC_JOB", "syncing embedded track (${embedded.size} cues)")
@@ -220,7 +240,15 @@ class SyncFingerprintJob(
             AppLog.e("SYNC_JOB", "fingerprint failed", t)
             // Each attempt is a full MediaCodec decode + Silero VAD pass; a
             // poisoned file must not retry forever on exponential backoff.
-            if (runAttemptCount >= 3) Result.failure() else Result.retry()
+            if (runAttemptCount >= 3) {
+                // v0.7.4 P1-5: this was the LAST allowed attempt — without
+                // the checked mark the player's Policy A would re-enqueue
+                // this entire doomed 3-attempt chain on every single open
+                // of the video. Record the giving-up verdict; editing the
+                // subtitle choice or "Resync now" re-arms/re-ignores it.
+                try { store.markAutoSyncChecked(videoUri) } catch (_: Throwable) {}
+                Result.failure()
+            } else Result.retry()
         }
     }
 
