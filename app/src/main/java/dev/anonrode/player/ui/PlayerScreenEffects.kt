@@ -179,18 +179,25 @@ internal fun InitialSleepTimerEffect(initialSleepTimerMinutes: Int, sleep: Sleep
     }
 }
 
-/** HUD auto-hide while playing. */
+/**
+ * HUD auto-hide while playing. v0.7.3: the old extra brake was
+ * `menuOpen` — a flag NOBODY ever set (its toggle lived in a deleted
+ * dropdown), so it was permanently false and chrome faded out under the
+ * open overflow sheet / sync popover / subtitle dropdown. `stayAwake`
+ * replaces it with the real union of every open surface, computed by
+ * PlayerScreen.
+ */
 @Composable
 internal fun AutoHideControlsEffect(
     controlsVisible: Boolean,
     isPlaying: Boolean,
     locked: Boolean,
-    menuOpen: Boolean,
+    stayAwake: Boolean,
     autoHideControlsMs: Long,
     onHide: () -> Unit,
 ) {
-    LaunchedEffect(controlsVisible, isPlaying, locked, menuOpen, autoHideControlsMs) {
-        if (controlsVisible && isPlaying && !locked && !menuOpen) {
+    LaunchedEffect(controlsVisible, isPlaying, locked, stayAwake, autoHideControlsMs) {
+        if (controlsVisible && isPlaying && !locked && !stayAwake) {
             delay(autoHideControlsMs)
             onHide()
         }

@@ -36,7 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/* ── Rotate button (bottom-right of the new transport dock) ───────────────
+/* ── Rotate button (last cell of the dock's utility row, v0.7.3) ──────────
  * Three states, cycled by tap:
  *
  *   SENSOR         — free rotation (default; what the system + sensor would

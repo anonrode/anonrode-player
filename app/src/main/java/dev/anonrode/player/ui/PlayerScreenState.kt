@@ -48,11 +48,22 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
      */
     val boostActive = mutableStateOf(false)
     val showCC = mutableStateOf(true)
-    val menuOpen = mutableStateOf(false)
 
     /** Index into [ZoomModes]: FIT → CROP → STR → 16:9 → 4:3. */
     val zoomIdx = mutableIntStateOf(0)
     val playerViewRef = mutableStateOf<PlayerView?>(null)
+
+    /**
+     * Measured heights (px) of the top bar and the bottom chrome block,
+     * v0.7.3 overlay anchoring. Overlays (A-B chip, toast, Up Next pill,
+     * sync popover) sit off these numbers instead of the old hand-tuned
+     * `top = 70 / bottom = 140 / 210` dp magic that collided with the
+     * chrome and broke on every shape change. Bars publish into them via
+     * onSizeChanged and NEVER shrink them back to 0 (the values stay stale
+     * while the chrome auto-hides so anchored overlays don't jump).
+     */
+    val topBarHeightPx = mutableIntStateOf(0)
+    val bottomBarHeightPx = mutableIntStateOf(0)
 
     /**
      * First-frame poster. Drawn over the player view so the gap between
@@ -80,12 +91,6 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
 
     /** -1 left, +1 right, 0 none — double-tap seek flash side. */
     val flashSide = mutableIntStateOf(0)
-
-    /**
-     * Rotation-lock flag mirrored into the activity orientation by
-     * RotationLockEffect. Kept for parity with the pre-split state set.
-     */
-    val rotationLocked = mutableStateOf(false)
 }
 
 /**
@@ -236,35 +241,28 @@ internal class GestureUiState {
  * observable side-effect on tap (toast / overlay / log line) so the user
  * can tell the click registered.
  *
- * Marked [Stable] — the PlayerQuickRow reads chips (equalizerOn, castRouteName,
- * etc.) directly off this holder; stability means a chip flipping doesn't
- * recompose its unrelated neighbours.
+ * Marked [Stable] — the dock's utility row reads these directly; stability
+ * means a chip flipping doesn't recompose its unrelated neighbours.
+ *
+ * v0.7.3 purge: `eqPanelOpen` (never read — the EQ panel is a host sheet),
+ * `portraitForced` + the legacy two-state rotation path (the 3-state
+ * [rotateMode] is the single source of truth), and `audioTrackToast`
+ * (never read) are gone.
  */
 @Stable
 internal class QuickRowUiState(initialHwDecoder: Boolean) {
     val equalizerOn = mutableStateOf(false)
-
-    /** When true, shows the EqualizerPanelSheet with band sliders. */
-    val eqPanelOpen = mutableStateOf(false)
-    val headphonesOn = mutableStateOf(false)
     val hwDecoder = mutableStateOf(initialHwDecoder)
 
-    /** True = locked to portrait, false = sensor/landscape. */
-    val portraitForced = mutableStateOf(false)
-
     /**
-     * Three-state rotation mode (sensor / landscape / portrait). Set by
-     * the right-rail rotate button (cycle on tap, jump on long-press).
-     * When the user is in [RotateMode.PORTRAIT] this stays in sync with
-     * [portraitForced]; [RotateMode.LANDSCAPE] is the new state the
-     * redesigned rail introduces.
+     * Three-state rotation mode (sensor / landscape / portrait) — the
+     * single rotation truth. The dock's rotate button cycles on tap and
+     * jumps on long-press; RotationLockEffect mirrors it into the activity
+     * orientation.
      */
     val rotateMode = mutableStateOf(RotateMode.SENSOR)
 
     val showSyncPopover = mutableStateOf(false)
-
-    /** The currently active audio track label, for the audio-track popover. */
-    val audioTrackToast = mutableStateOf<String?>(null)
 
     /**
      * User-driven subtitle sync toggle. Mirrors
@@ -275,10 +273,10 @@ internal class QuickRowUiState(initialHwDecoder: Boolean) {
     val subSyncEnabled = mutableStateOf(false)
 
     /**
-     * True while a live re-lock is in progress. Drives the spinning ring
-     * on the right-rail sync icon. Set by the Activity's openVideo path
-     * around the AudioSyncProcessor's setCues call; cleared when the
-     * first lock lands or the engine gives up.
+     * True while a sync pass is actually working (live correlation window
+     * or a running fingerprint). Drives the sync hero chip's "Syncing…"
+     * state. Set by the host; cleared when a lock lands or the engine
+     * gives up — never decorative.
      */
     val subSyncRunning = mutableStateOf(false)
 }

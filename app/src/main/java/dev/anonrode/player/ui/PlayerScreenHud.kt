@@ -1,8 +1,6 @@
 package dev.anonrode.player.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,7 +21,6 @@ import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -31,12 +28,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -224,40 +219,10 @@ internal fun NextCountdownOverlay(
     }
 }
 
-/* ── Calibration banner (auto-runs once per session, mirrors mockup) ────── */
-@Composable
-internal fun CalibrationBanner(
-    visible: Boolean,
-    accent: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    AnimatedVisibility(visible = visible, modifier = modifier) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color(0xFF0D0F16).copy(alpha = 0.92f))
-                .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
-                .clickable(onClick = onClick)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            val rotation by animateFloatAsState(
-                targetValue = if (visible) 360f else 0f,
-                animationSpec = tween(1500),
-                label = "calib-spin",
-            )
-            Icon(Icons.Filled.Tune, null, tint = accent,
-                modifier = Modifier
-                    .size(20.dp)
-                    .graphicsLayer { rotationZ = rotation })
-            Text("Listening for the speech track…",
-                color = Color.White, style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold)
-        }
-    }
-}
+/* ── Calibration banner: RETIRED (v0.7.3). Its whole job — "the engine is
+ * working right now" — is carried by the sync HERO chip's "Syncing…" state
+ * in the dock; it used to render at the exact same top=70/start=14 slot as
+ * the (also retired) SYNCED chip and the two could stack on each other. ── */
 
 /* ── Transient toast banner inside the player overlay ───────────────────── */
 @Composable

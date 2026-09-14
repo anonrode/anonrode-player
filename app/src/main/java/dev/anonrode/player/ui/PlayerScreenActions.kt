@@ -3,7 +3,6 @@ package dev.anonrode.player.ui
 import android.app.Activity
 import android.content.ContentValues
 import android.content.Context
-import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.media.AudioManager
 import android.os.Build
@@ -103,18 +102,8 @@ internal class PlayerScreenActions(
         ui.showCC.value = !ui.showCC.value
     }
 
-    fun toggleMenu() {
-        ui.menuOpen.value = !ui.menuOpen.value
-        if (ui.menuOpen.value) quick.showSyncPopover.value = false
-    }
-
-    fun closeMenu() {
-        ui.menuOpen.value = false
-    }
-
     fun openSyncPopover() {
         quick.showSyncPopover.value = true
-        ui.menuOpen.value = false
     }
 
     fun closeSyncPopover() {
@@ -133,38 +122,6 @@ internal class PlayerScreenActions(
             if (actual) "Equalizer on"
             else "Equalizer off"
         )
-    }
-
-    fun toggleHeadphones() {
-        view.haptic()
-        // The previous version forced AudioManager.MODE_IN_COMMUNICATION,
-        // which is the PHONE-CALL audio mode and breaks media playback
-        // (no music stream, mic open). Replaced with a safe, read-only
-        // detection: ask the system whether a Bluetooth A2DP output is
-        // currently connected and report it. The chip's `active` state
-        // mirrors that detection rather than a user-toggled boolean.
-        val btOn = try { audioManager.isBluetoothA2dpOn } catch (e: Throwable) { false }
-        val wiredOn = try { audioManager.isWiredHeadsetOn } catch (e: Throwable) { false }
-        quick.headphonesOn.value = btOn
-        val label = when {
-            btOn && wiredOn -> "Bluetooth + wired headset connected"
-            btOn -> "Bluetooth headset connected"
-            wiredOn -> "Wired headset connected"
-            else -> "No external audio output detected"
-        }
-        AppLog.d("PLAYER", "headphones detect: bt=" + btOn + " wired=" + wiredOn)
-        showTransientToast(label)
-    }
-
-    fun openAudioOutputPicker() {
-        // The previous implementation toggled AudioManager.isSpeakerphoneOn,
-        // which requires MODIFY_AUDIO_SETTINGS (not declared) → guaranteed
-        // SecurityException on every tap, and did nothing useful for the
-        // music stream anyway. The MediaRouter sheet already covers every
-        // real output (speaker / Bluetooth / Cast / HDMI / wired), so the
-        // chip now just opens it. (Haptic fires inside QuickRowChip.)
-        AppLog.d("PLAYER", "output: opening route picker")
-        onOpenCastPicker()
     }
 
     fun openCastPicker() {
@@ -189,17 +146,6 @@ internal class PlayerScreenActions(
         onRebuildDecoder(newHw)
     }
 
-    fun toggleRotation() {
-        quick.portraitForced.value = !quick.portraitForced.value
-        activity?.requestedOrientation = if (quick.portraitForced.value) {
-            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        } else {
-            ActivityInfo.SCREEN_ORIENTATION_SENSOR
-        }
-        AppLog.d("PLAYER", "rotate portraitForced=" + quick.portraitForced.value)
-        showTransientToast(if (quick.portraitForced.value) "Portrait" else "Auto-rotate")
-    }
-
     /** Step the 3-state rotation mode forward (sensor → landscape →
      *  portrait → sensor). The activity orientation is reapplied by
      *  RotationLockEffect, which is keyed on this state. */
@@ -215,10 +161,6 @@ internal class PlayerScreenActions(
 
     private fun applyRotateMode(mode: RotateMode) {
         quick.rotateMode.value = mode
-        // Keep the legacy portraitForced boolean in sync so any older
-        // code paths that still read it (gesture handlers, overflow menu
-        // labels) see the right value.
-        quick.portraitForced.value = mode == RotateMode.PORTRAIT
         AppLog.d("PLAYER", "rotate mode=" + mode)
         showTransientToast(
             when (mode) {
@@ -277,22 +219,37 @@ internal class PlayerScreenActions(
 
     fun selectSleep(opt: SleepOption) = sleep.selectSleep(opt)
 
-    fun cycleSpeed() {
-        speedIdx.intValue = (speedIdx.intValue + 1) % speeds.size
-        val sp = speeds[speedIdx.intValue]
+    /**
+     * Pick an exact playback rate (v0.7.3): the speed pill's dropdown and
+     * the Control Center both set a VALUE now instead of blindly cycling
+     * (a 0.5→2.0 cycle through six stops made "what am I at?" a lookup
+     * task). Applies live, persists per-video via the host, flips the
+     * pill's index.
+     */
+    fun setSpeed(sp: Float) {
+        val idx = speeds.indexOfFirst { abs(it - sp) < 0.05f }
+        if (idx < 0) return
+        speedIdx.intValue = idx
         livePlayer.setPlaybackSpeed(sp)
         onSpeedChanged(sp)
+        showTransientToast("Speed " + speedLabel(sp))
     }
 
-    fun cycleZoom() {
-        ui.zoomIdx.intValue = (ui.zoomIdx.intValue + 1) % ZoomModes.size
-        onZoomChanged(ui.zoomIdx.intValue)
-        showHud(Icons.Filled.AspectRatio, ZoomModes[ui.zoomIdx.intValue].abbreviation)
+    /**
+     * Pick an exact zoom/aspect mode (v0.7.3): direct mode selection from
+     * the aspect pill's dropdown replaces the old double-blind cycle — and
+     * the HUD pill still flashes the abbreviation for touch feedback.
+     */
+    fun setZoom(idx: Int) {
+        if (idx !in ZoomModes.indices || idx == ui.zoomIdx.intValue) return
+        ui.zoomIdx.intValue = idx
+        onZoomChanged(idx)
+        showHud(Icons.Filled.AspectRatio, ZoomModes[idx].abbreviation)
     }
 
     /**
      * Step the zoom mode by [dir] (+1 / -1), clamped to the mode list. Used
-     * by the pinch gesture; a no-op at either end. Persists like [cycleZoom].
+     * by the pinch gesture; a no-op at either end. Persists like [setZoom].
      */
     fun zoomBy(dir: Int) {
         val next = (ui.zoomIdx.intValue + dir).coerceIn(0, ZoomModes.size - 1)

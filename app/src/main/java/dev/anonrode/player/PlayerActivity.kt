@@ -148,6 +148,12 @@ class PlayerActivity : ComponentActivity() {
     private var positionSec by positionState
     private var durationSec by durationState
 
+    /** Buffered position (seconds) — the v0.7.3 seek bar's second track.
+     *  Written from the same render tick; equal-value writes to a float
+     *  state snapshot are no-ops, so the bar only recomposes when the
+     *  buffer actually advances. */
+    private val bufferedState = mutableFloatStateOf(0f)
+
     /** Playback speed applied to the current video (drives the speed button). */
     private var restoredSpeed by mutableFloatStateOf(1f)
 
@@ -247,10 +253,15 @@ class PlayerActivity : ComponentActivity() {
 
     /** Subtitle source picker (embedded / sidecar / online). */
     private var subtitlePickerOpen by mutableStateOf(false)
-
     /** Persisted subtitle choice grammar ("" auto / none / embedded:N /
      *  sidecar:name / online:name) for the playing video. */
     private var subtitleChoice by mutableStateOf("")
+
+    /** v0.7.3: number of supported text tracks in the current media,
+     *  refreshed on every onTracksChanged. ORed with "sidecar cues loaded"
+     *  into the dock CC chip's existence predicate (the old rail button
+     *  was keyed on the transient cue text and blinked between cues). */
+    private var subtitleTrackCount by mutableIntStateOf(0)
 
     /** Real file path of the playing video; null when unresolvable
      *  (SAF/network URIs), which disables embedded tracks + hash search. */
@@ -368,13 +379,22 @@ class PlayerActivity : ComponentActivity() {
             playbackError = friendlyPlaybackError(error)
         }
 
-        override fun onTracksChanged(tracks: Tracks) {
-            // One-shot restore of the persisted audio-track choice: a
-            // TrackSelectionOverride needs the real MediaTrackGroup, which
-            // only exists once the manifest is ready — hence here rather
-            // than at play() time. Index refers to the first audio group
-            // (virtually all files have exactly one).
-            val idx = pendingAudioTrackIdx ?: return
+    override fun onTracksChanged(tracks: Tracks) {
+        // v0.7.3: the dock's CC chip exists iff the media has subtitle
+        // TRACKS (the screen ORs in "a sidecar is loaded" itself). Before
+        // this, the rail's CC button was keyed on the on-screen cue text
+        // and vanished between cues — a control blinking out of existence
+        // mid-watch. Counted on EVERY tracks change (the audio-restore
+        // early-return below must not skip it).
+        subtitleTrackCount = tracks.groups.count {
+            it.type == androidx.media3.common.C.TRACK_TYPE_TEXT && it.isSupported
+        }
+        // One-shot restore of the persisted audio-track choice: a
+        // TrackSelectionOverride needs the real MediaTrackGroup, which
+        // only exists once the manifest is ready — hence here rather
+        // than at play() time. Index refers to the first audio group
+        // (virtually all files have exactly one).
+        val idx = pendingAudioTrackIdx ?: return
             pendingAudioTrackIdx = null
             val player = AnonrodeApp.get(this@PlayerActivity).engine.player
             for (group in player.currentTracks.groups) {
@@ -568,6 +588,7 @@ class PlayerActivity : ComponentActivity() {
                             // whole PlayerScreen body.
                             positionSec = positionState,
                             durationSec = durationState,
+                            bufferedSec = bufferedState,
                             onBack = { finish() },
                             initialSpeed = restoredSpeed,
                             onSpeedChanged = { speed ->
@@ -647,6 +668,29 @@ class PlayerActivity : ComponentActivity() {
                             subtitleStyle = subStyle,
                             onSubtitleStyleChanged = { applySubtitleStyle(it) },
                             seekIncrementSec = settings.seekIncrementSec,
+                            // v0.7.3 dock wiring: the CC chip exists iff the
+                            // media has subtitle tracks OR a sidecar is
+                            // loaded; every host sheet pauses auto-hide; the
+                            // Subtitle-source tile shows the ACTIVE choice.
+                            hasSubtitleTrack = subtitleTrackCount > 0 ||
+                                lastCues.isNotEmpty(),
+                            hostSheetOpen = castPickerOpen || eqPanelOpen ||
+                                audioTrackPickerOpen || subStyleSheetOpen ||
+                                subtitlePickerOpen,
+                            subtitleChoiceLabel = when {
+                                subtitleChoice.isEmpty() -> "Auto"
+                                subtitleChoice == "none" -> "None"
+                                subtitleChoice.startsWith("embedded") -> "Embedded"
+                                subtitleChoice.startsWith("sidecar") -> "Sidecar file"
+                                else -> "Downloaded"
+                            },
+                            onSkipLengthChanged = { s ->
+                                lifecycleScope.launch {
+                                    app.playerSettingsDataStore.updateData {
+                                        it.copy(seekIncrementSec = s)
+                                    }
+                                }
+                            },
                             doubleTapSeekEnabled = settings.doubleTapSeek,
                             swipeToSeekEnabled = settings.swipeToSeek,
                             volumeGestureEnabled = settings.volumeGesture,
@@ -893,6 +937,10 @@ class PlayerActivity : ComponentActivity() {
         // Fresh UI state for the new media item.
         cueText = null
         positionSec = 0f
+        // v0.7.3: the new media's onTracksChanged repopulates this; zero it
+        // at open so the CC chip doesn't inherit the previous file's
+        // subtitle tracks until the fresh manifest arrives.
+        subtitleTrackCount = 0
         durationSec = 0f
         title = displayTitle
         resumePromptMs = null
@@ -1708,6 +1756,10 @@ class PlayerActivity : ComponentActivity() {
                 val p = engine.player
                 positionSec = p.currentPosition / 1000f
                 durationSec = (p.duration.takeIf { it > 0 } ?: 0L) / 1000f
+                // v0.7.3 buffered track: read every tick, published only
+                // when it actually moved (equal float writes are snapshot
+                // no-ops) — the slider's thin white progress-under-fill.
+                bufferedState.floatValue = p.bufferedPosition / 1000f
                 // A-B repeat: snap back to A the moment B is reached. The
                 // boundary scheduling below also treats B as a wake point,
                 // so overshoot stays within one short tick.

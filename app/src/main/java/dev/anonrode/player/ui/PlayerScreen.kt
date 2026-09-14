@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
@@ -30,27 +32,39 @@ import dev.anonrode.player.feature.player.PlaybackEngine
 import kotlin.math.abs
 
 /**
- * Full-bleed MX-style player: top row (back, title, audio/CC/HW/overflow),
- * quick-action row (equalizer, cast, headphones, speaker, speed pill,
- * chevron), and a bottom block (lock · ⏪10 · prev · BIG play · next ·
- * ⏩10 · PiP · aspect) over gradient scrims. Auto-hide while playing,
- * double-tap ±10s with flash, left/right vertical swipe = brightness/volume
- * with HUD pill, horizontal swipe = live seek.
+ * Full-bleed video player — v0.7.3 curated-dock chrome.
  *
- * The subtitle cue is MX-outlined (bold + black outline, no box) and can be
- * long-press dragged anywhere; its position persists per video with a
- * global default fallback (see [dev.anonrode.player.PlayerPrefs]). The
- * overflow menu hosts the sleep timer, aspect cycling, and rotation lock;
- * the resize button cycles FIT → CROP → STR. While in PiP ([isPipMode])
- * every overlay (controls, subtitles, badges) hides.
+ *   Top bar (auto-hide)   ‹  Title                     ⧉   🔒   ⋮
+ *   Seek row (ALWAYS)     04:12 ━━━━━●━━━━━━━━ 18:30   (buffered shown,
+ *                                                     tap time to flip)
+ *   Transport (auto-hide)      ‹N  ⏮  ▶(64)  ⏭  N›
+ *   Utility  (auto-hide)  [✨ sync]  [speed]  CC  ♫  [aspect]  ↻
+ *
+ * Layout principles enforced by this redesign (each was a real defect in
+ * v0.7.2's chrome — see the round's audit):
+ *   • ONE home per control: the right-edge rail, the duplicated rotate /
+ *     sync / more buttons, and the Aspect ≡ Zoom sheet aliases are gone.
+ *   • ONE layout at every width: no more 540dp two-branch row that
+ *     reordered controls by device class and overflowed portrait phones.
+ *   • Labeled where it matters: sync (the flagship) carries its state as
+ *     text; speed/aspect show their current values; skip pills show the
+ *     REAL configured step.
+ *   • Real safe-area handling (statusBar / navBar / displayCutout) — the
+ *     build is edge-to-edge on targetSdk 37.
+ *   • Overlays anchor off the MEASURED chrome heights instead of the old
+ *     hand-tuned `top = 70 / bottom = 140 / 210` dp magic that collided.
+ *
+ * The subtitle cue is MX-outlined (bold + black outline, no box) and can
+ * be long-press dragged anywhere; its position persists per video with a
+ * global default fallback (see [dev.anonrode.player.PlayerPrefs]). While
+ * in PiP ([isPipMode]) every overlay hides; while controls are locked
+ * only the lock badge stays (long-press anywhere unlocks — unchanged).
  *
  * Structure: this function is the orchestrator only. State lives in the
  * remembered holders in PlayerScreenState.kt, callbacks in
  * PlayerScreenActions.kt, side-effects in PlayerScreenEffects.kt, gestures
  * in PlayerScreenGestures.kt, and each visual chunk in its own file
- * (Video / Subtitles / Controls / Hud / Sheets) — so no single composable
- * captures dozens of locals and the compiler/JIT stay cheap on low-end
- * devices.
+ * (Video / Subtitles / Controls / BottomBar / Chips / Hud / Sheets).
  */
 @UnstableApi
 @Composable
@@ -72,12 +86,14 @@ fun PlayerScreen(
      * Live playback position (seconds) and duration, as STATE — v0.7.1 perf
      * pass. Plain Float params made every 10Hz render-tick write a new value
      * into the whole 65-parameter PlayerScreen body, recomposing top bar,
-     * rail, sheets and pills 10x/second. As State params, a tick recomposes
-     * ONLY the composables that read .value (the seek bar + its labels);
-     * everything else stays skipped.
+     * dock and pills 10x/second. As State params, a tick recomposes ONLY the
+     * composables that read .value (the seek bar + its labels); everything
+     * else stays skipped.
      */
     positionSec: State<Float>,
     durationSec: State<Float>,
+    /** Buffered position (seconds) — the seek bar's second track (v0.7.3). */
+    bufferedSec: State<Float>,
     onBack: () -> Unit,
     initialSpeed: Float = 1f,
     onSpeedChanged: (Float) -> Unit = {},
@@ -100,58 +116,57 @@ fun PlayerScreen(
     liveOffsetMs: Long = 0L,
     /**
      * v0.7.1: true while the sync engine is actually working (live
-     * correlation in flight or a forced fingerprint running). Drives the
-     * bottom-row toggle spinner and the SYNCED chip's honest visibility.
+     * correlation in flight or a forced fingerprint running). v0.7.3:
+     * merged with [isCalibrating] into the sync hero chip's "Syncing…"
+     * state (the old top-left banner is retired).
      */
     subSyncRunning: Boolean = false,
     /** True while a fresh calibration pass is running. */
     isCalibrating: Boolean = false,
-    /** Start a new calibration pass (CALIB button in the sync popover). */
+    /** Start a new calibration pass (popover's RE-SYNC row). */
     onStartCalibration: () -> Unit = {},
     /** Apply a manual ±0.1s nudge to the subtitle offset. */
     onNudgeSubtitle: (Long) -> Unit = { _ -> },
     /**
      * v0.6.2 sub-sync UX pass: persist the user-facing sync toggle
-     * (DataStore + fingerprint job gate). The toggle's icon flips
+     * (DataStore + fingerprint job gate). The hero chip's state flips
      * instantly via [quick.subSyncEnabled]; this callback is for
      * persistence and the gate side-effects (cancel pending jobs when
      * turning OFF; schedule one when turning ON).
      */
     onSetSubSyncEnabled: (Boolean) -> Unit = {},
-    /** Long-press on the sync toggle: "Resync now". */
+    /** Long-press on the sync hero chip: "Resync now". */
     onResyncNow: () -> Unit = {},
     /**
      * Request a real HW/SW decoder swap. The host rebuilds the ExoPlayer
      * via [dev.anonrode.player.feature.player.PlaybackEngine.rebuild] and
      * returns the new audio session id (0 if the swap is still in flight).
-     * The screen keeps the [hwDecoder] state in sync with the requested
-     * value and shows a transient "Rebuilding…" banner until the host
-     * confirms the new player is ready.
+     * The screen keeps the [quick.hwDecoder] state in sync with the
+     * requested value and shows a transient "Rebuilding…" banner until the
+     * host confirms the new player is ready.
      */
     onRebuildDecoder: (Boolean) -> Int = { _ -> 0 },
     /**
-     * Toggle the system equalizer. Called when the EQ quick-row chip is
-     * tapped. The host creates / enables / disables the
-     * [android.media.audiofx.Equalizer] bound to the current audio session
-     * and reports back the new on/off state. The screen mirrors the
-     * returned value into [equalizerOn] for the chip's visual.
+     * Toggle the system equalizer (Control Center tile). The host creates /
+     * enables / disables the [android.media.audiofx.Equalizer] bound to the
+     * current audio session and reports back the new on/off state; the
+     * screen mirrors it into [quick.equalizerOn] for the tile's visual.
      */
     onToggleEqualizer: (Boolean) -> Boolean = { it },
     /**
-     * Open the Cast (MediaRouter) route picker. The host shows a bottom
-     * sheet of available routes and calls [mediaRouter] select on pick.
+     * Open the Cast (MediaRouter) route picker — the Control Center's one
+     * "Audio output" tile (the old Cast + Speaker + Headphones triple is
+     * merged; MediaRouter covers every real output).
      */
     onOpenCastPicker: () -> Unit = {},
     /**
-     * Open the 5-band equalizer panel. The host (PlayerActivity) shows
-     * [EqualizerPanelSheet] when this is invoked. Tap on the EQ quick-row
-     * chip toggles on/off; long-press opens the panel.
+     * Open the 5-band equalizer panel (Control Center EQ tile long-press).
+     * Dead end no more: wired since v0.6, never reachable since.
      */
     onOpenEqPanel: () -> Unit = {},
     /**
-     * Open the subtitle style picker (size/position/color). The host shows
-     * a bottom sheet that mutates the live subtitle style and persists
-     * via PlayerSettings DataStore.
+     * Open the subtitle style picker (size/position/color) — Control
+     * Center Subtitles section.
      */
     onOpenSubStyle: () -> Unit = {},
     /**
@@ -169,18 +184,25 @@ fun PlayerScreen(
     onSubtitleStyleChanged: (SubtitleStyle) -> Unit = {},
     /**
      * Open the subtitle source picker (embedded tracks / sidecar files /
-     * downloaded / online search). The host shows SubtitlePickerSheet and
-     * reloads the chosen source.
+     * downloaded / online search) — Control Center Subtitles section.
      */
     onOpenSubtitlePicker: () -> Unit = {},
+    /** Label of the active subtitle source choice ("" = none) — renders
+     *  the Subtitle-source tile's current value honestly. */
+    subtitleChoiceLabel: String = "",
     /**
      * Open the audio track picker. The host reads [Player.getCurrentTracks]
      * and shows a bottom sheet of available audio tracks for the current
      * media.
      */
     onOpenAudioTrackPicker: () -> Unit = {},
-    /** Seek step (seconds) for the ±seek buttons and double-tap seek. */
+    /** Seek step (seconds) for the ±skip buttons and double-tap seek. */
     seekIncrementSec: Int = 10,
+    /**
+     * Control Center "Skip length" cycle: report a new 5/10/15/30 step so
+     * the host persists it; the pill labels re-render on the way back.
+     */
+    onSkipLengthChanged: (Int) -> Unit = {},
     /** Settings gates: each mirrors a PlayerSettings toggle. */
     doubleTapSeekEnabled: Boolean = true,
     swipeToSeekEnabled: Boolean = true,
@@ -191,10 +213,21 @@ fun PlayerScreen(
     /**
      * v0.6.2 sub-sync UX pass: the persisted subtitle auto-sync toggle,
      * flowed from the host's DataStore. Mirrored into
-     * [quick.subSyncEnabled] below so the bottom-bar chip reflects
-     * restarts / external Settings edits immediately.
+     * [quick.subSyncEnabled] below so the hero chip reflects restarts /
+     * external Settings edits immediately.
      */
     subtitleAutoSyncEnabled: Boolean = false,
+    /**
+     * True while ANY host-owned sheet is open (cast picker, EQ panel, audio
+     * track, subtitle style, subtitle source, settings). The chrome's
+     * auto-hide pauses while this holds — v0.7.2 only honored a
+     * permanently-false menuOpen, so chrome faded out under open sheets.
+     */
+    hostSheetOpen: Boolean = false,
+    /** True when the media carries any subtitle source (track or sidecar).
+     *  Drives the CC chip's existence — was keyed on "a cue is on screen",
+     *  making the toggle blink out between cues. */
+    hasSubtitleTrack: Boolean = false,
     /** HUD auto-hide delay while playing (ms). */
     autoHideControlsMs: Long = 3500L,
     /** Sleep timer armed from the settings screen (0=off, -1=end of episode). */
@@ -203,15 +236,15 @@ fun PlayerScreen(
     fastSeekThresholdSec: Long = 120L,
     /**
      * Per-video zoom mode (index into the screen's ZoomModes), persisted by
-     * the host via Room. Restored on entry; [onZoomChanged] reports cycles.
+     * the host via Room. Restored on entry; [onZoomChanged] reports picks.
      */
     initialZoomIdx: Int = 0,
     onZoomChanged: (Int) -> Unit = {},
-    /** Volume boost over system max (0/50/100/200 %); cycled in the menu. */
+    /** Volume boost over system max (0/50/100/200 %); cycled in the sheet. */
     volumeBoostPct: Int = 0,
     onVolumeBoostCycle: () -> Unit = {},
     /**
-     * Overflow-sheet "Sync log" tile: the host shares the app's own file log
+     * Control Center "Sync log" tile: the host shares the app's own file log
      * filtered to the subtitle-sync decisions of this session
      * ([dev.anonrode.player.SyncLogShare]). Deliberately host-owned — it is
      * the only place that can read app-private storage and it needs the
@@ -226,9 +259,9 @@ fun PlayerScreen(
     abStartMs: Long? = null,
     abEndMs: Long? = null,
     onAbRepeatTap: () -> Unit = {},
-    /** True if a decoder swap is currently in flight; hides the HW chip. */
+    /** True if a decoder swap is currently in flight; the tile dims. */
     isRebuildingDecoder: Boolean = false,
-    /** Name of the currently selected Cast route, for the chip tooltip. */
+    /** Name of the currently selected Cast route, for the output tile. */
     castRouteName: String? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -249,28 +282,15 @@ fun PlayerScreen(
     val quick = remember { QuickRowUiState(initialHwDecoder = engine?.isHw ?: true) }
 
     val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
-    // Keyed on initialSpeed so the button re-syncs when the activity restores
+    // Keyed on initialSpeed so the pill re-syncs when the activity restores
     // a different persisted speed (e.g. after an auto-advance episode switch).
     val speedIdx = remember(initialSpeed) {
         mutableIntStateOf(speeds.indexOfFirst { abs(it - initialSpeed) < 0.05f }.takeIf { it >= 0 } ?: 2)
     }
 
-    // Shared "more" state — both the top-bar "more" and the right-rail
-    // "more" buttons open the same overflow sheet. One state, two call
-    // sites; the sheet reads the same flag.
+    // Shared "more" state — the top bar's ⋮ opens the Control Center
+    // (v0.7.3: the rail's second "more" is deleted, this is the only one).
     val overflowOpen = remember { mutableStateOf(false) }
-
-    // Sync toggle slot for the rail: DEFINED BELOW, next to [actions]
-    // (which it needs). It used to be an empty placeholder — "agent-5
-    // fills" — so the rail rendered a dead circle and the sub-sync toggle
-    // existed only in the transport row, which overflows a portrait phone
-    // (see PlayerScreenBottomBar).
-
-    // Rotation mode (3-state: sensor / landscape / portrait). Stored on
-    // QuickRowUiState so the button's tap cycle + long-press menu both
-    // see the same value. The activity orientation is reapplied by
-    // RotationLockEffect below whenever this changes.
-    val rotateMode = quick.rotateMode
 
     // Action surface — INTENTIONALLY REMEMBERED on (livePlayer, engine, ui,
     // hud, sleep, gestures, quick, captureScope). The holder fields above are
@@ -323,30 +343,6 @@ fun PlayerScreen(
         )
     }
 
-    // Rail sync toggle (v0.7.2 device-fix round): the real
-    // [PlayerSubSyncToggle] in the rail's 48dp cell, without the status
-    // label. Same live state and same callbacks as the bottom-row toggle
-    // (both read [QuickRowUiState]'s subSyncEnabled / subSyncRunning), so
-    // the two never disagree about what the engine is doing. This is the
-    // portrait-reachable home for the control: the rail sits on the
-    // right edge of the frame instead of competing for the bottom row's
-    // width, and it auto-hides with the rest of the chrome on exactly the
-    // same tap.
-    val syncSlot: SyncSlot = remember(actions) {
-        { mod, ac ->
-            PlayerSubSyncToggle(
-                enabled = actions.quick.subSyncEnabled.value,
-                running = actions.quick.subSyncRunning.value,
-                accent = ac,
-                onSetEnabled = { actions.setSubSyncEnabled(it) },
-                onResync = { actions.resyncNow() },
-                modifier = mod,
-                size = PlayerDimens.chipMd,
-                showStatusLabel = false,
-            )
-        }
-    }
-
     // ── side-effects: same keys and order as before the split ──
     ZoomRestoreEffect(initialZoomIdx, ui)
     // Mirror the restored speed into the player; the livePlayer key re-runs
@@ -361,7 +357,7 @@ fun PlayerScreen(
         livePlayer.setPlaybackSpeed(speeds[speedIdx.intValue])
     }
     // v0.6.2 sub-sync UX pass: mirror the live DataStore toggle into the
-    // Compose state the bottom-bar reads from. The host writes through
+    // Compose state the hero chip reads from. The host writes through
     // [onSetSubSyncEnabled] on tap; this collector ensures a process
     // restart (or an external DataStore edit from Settings) is picked up
     // immediately, without waiting for the next tap.
@@ -369,10 +365,12 @@ fun PlayerScreen(
         quick.subSyncEnabled.value = subtitleAutoSyncEnabled
     }
     // v0.7.1: mirror the host's sync-running signal into the Compose state
-    // the bottom-bar spinner reads. The host sets it around the live
+    // the hero chip's spinner reads. The host sets it around the live
     // correlation window and while a forced fingerprint is queued/running.
-    LaunchedEffect(subSyncRunning) {
-        quick.subSyncRunning.value = subSyncRunning
+    // v0.7.3: the separate calibration banner is retired — the manual
+    // calibration window keeps the SAME "Syncing…" state alive.
+    LaunchedEffect(subSyncRunning, isCalibrating) {
+        quick.subSyncRunning.value = subSyncRunning || isCalibrating
     }
     ZoomApplyEffect(ui.zoomIdx.intValue, ui)
     RotationLockEffect(activity, quick.rotateMode.value)
@@ -385,11 +383,15 @@ fun PlayerScreen(
         onHoldAutoAdvance = onHoldAutoAdvance,
     )
     InitialSleepTimerEffect(initialSleepTimerMinutes, sleep)
+    // v0.7.3 auto-hide gate: the old menuOpen brake was permanently false
+    // (nobody set it), so chrome faded under open sheets. stayAwake unions
+    // every surface that can be open right now.
     AutoHideControlsEffect(
         controlsVisible = ui.controlsVisible.value,
         isPlaying = ui.isPlaying.value,
         locked = ui.locked.value,
-        menuOpen = ui.menuOpen.value,
+        stayAwake = overflowOpen.value || quick.showSyncPopover.value ||
+            gestures.subStyleMenuOpen.value || hostSheetOpen,
         autoHideControlsMs = autoHideControlsMs,
         onHide = { ui.controlsVisible.value = false },
     )
@@ -399,6 +401,13 @@ fun PlayerScreen(
     FirstFramePosterEffect(mediaId, context, ui)
     // v0.7.1: throttled frame previews for the MX-style scrub bubble.
     ScrubPreviewEffect(mediaId, context, ui, gestures)
+
+    // Overlays anchor off the MEASURED chrome heights (see the bars'
+    // onSizeChanged publishers) — never below the status bar, never under
+    // the dock, with no magic dp coupling to the bars' internal composition.
+    val density = LocalDensity.current
+    val topAnchor = with(density) { ui.topBarHeightPx.intValue.toDp() } + PlayerDimens.gapSm
+    val bottomAnchor = with(density) { ui.bottomBarHeightPx.intValue.toDp() } + PlayerDimens.gapSm
 
     Box(
         modifier = modifier
@@ -467,31 +476,37 @@ fun PlayerScreen(
             BufferingSpinner(modifier = Modifier.align(Alignment.Center), accent = accent)
         }
 
-        // ── lock badge ──
+        // ── lock badge — the ONLY chrome that survives locking; it lives
+        //    where the top bar was, so it carries the status-bar inset. ──
         if (ui.locked.value && !isPipMode) {
             LockBadge(
-                modifier = Modifier.align(Alignment.TopStart),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .displayCutoutPadding(),
                 accent = accent,
                 onUnlock = { ui.locked.value = false },
             )
         }
 
         // ── controls overlay — the seek bar row inside stays visible even
-        //    when the chrome is hidden (see UI-4 fix in PlayerScreenControls);
-        //    hidden entirely only while in PiP / locked.
+        //    when the chrome is hidden (UI-4 fix); hidden entirely only
+        //    while in PiP / locked.
         PlayerControlsOverlay(
             visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
             showSeekBar = !ui.locked.value && !isPipMode,
             title = title,
             accent = accent,
-            currentPositionMs = livePlayer.currentPosition,
             positionSec = positionSec,
             durationSec = durationSec,
-            localSeek = ui.localSeek,            isPlaying = ui.isPlaying.value,
-            locked = ui.locked.value,
+            bufferedSec = bufferedSec,
+            localSeek = ui.localSeek,
+            isPlaying = ui.isPlaying.value,
             hasPreviousEpisode = hasPreviousEpisode,
             hasNextEpisode = hasNextEpisode,
             seekIncrementSec = seekIncrementSec,
+            hasSubtitleTrack = hasSubtitleTrack,
+            liveOffsetMs = liveOffsetMs,
             actions = actions,
             onBack = onBack,
             onPlayPrevious = onPlayPrevious,
@@ -499,93 +514,55 @@ fun PlayerScreen(
             onMore = { overflowOpen.value = true },
         )
 
-        // ── right-edge vertical action rail (CC / audio / sync slot /
-        //    rotate / more). Sibling of the controls overlay so the
-        //    rail can be tuned independently of the top+bottom bars.
-        //    Auto-hides with the chrome (same condition as the overlay),
-        //    so when the user taps once to show controls, the rail
-        //    appears too — but the seek bar underneath stays.
-        androidx.compose.animation.AnimatedVisibility(
-            visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
-            enter = androidx.compose.animation.fadeIn(
-                animationSpec = androidx.compose.animation.core.tween(220)) +
-                androidx.compose.animation.slideInHorizontally(
-                    animationSpec = androidx.compose.animation.core.tween(220)) { it / 3 },
-            exit = androidx.compose.animation.fadeOut(
-                animationSpec = androidx.compose.animation.core.tween(220)) +
-                androidx.compose.animation.slideOutHorizontally(
-                    animationSpec = androidx.compose.animation.core.tween(220)) { it / 3 },
-        ) {
-            PlayerScreenActionRail(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 8.dp),
-                accent = accent,
-                showCC = ui.showCC.value,
-                hasSubtitle = cueText != null,
-                rotateMode = rotateMode.value,
-                onCycleRotate = { actions.cycleRotateMode() },
-                onSetRotate = { actions.setRotateMode(it) },
-                onSubtitleToggle = { actions.toggleShowCC() },
-                onAudioTrack = { actions.pickAudioTrack() },
-                onMore = { overflowOpen.value = true },
-                syncSlot = syncSlot,
-            )
-        }
-
-        // ── overflow sheet (bottom). Single destination for both
-        //    "more" buttons (top bar + rail). Renders the 11-tile
-        //    grid (Aspect, Zoom, AB-repeat, Sleep, Audio, Speed, EQ,
-        //    Cast, Headphones, Speaker, Capture frame) plus the PiP
-        //    tile. The sheet is opaque enough to read independently
-        //    of the underlying video frame.
-        PlayerOverflowSheet(
+        // ── Control Center (was the flat overflow sheet; v0.7.3 sectioned
+        //    hub with live values + the wired dead ends). Single "more"
+        //    destination: the top bar's ⋮.
+        PlayerControlCenterSheet(
             visible = overflowOpen.value,
-            state = OverflowState(
-                zoomAbbreviation = ZoomModes[ui.zoomIdx.intValue].abbreviation,
-                showCC = ui.showCC.value,
+            state = ControlCenterState(
                 abStartMs = abStartMs,
                 abEndMs = abEndMs,
                 sleep = sleep,
-                speedLabelText = speedLabel(speeds[speedIdx.intValue]),
+                skipIncrementSec = seekIncrementSec,
                 equalizerOn = quick.equalizerOn.value,
-                headphonesOn = quick.headphonesOn.value,
                 castRouteName = castRouteName,
+                subtitleChoiceLabel = subtitleChoiceLabel,
                 decoderModeLabel = engine?.decoderModeLabel ?: "HW+SW",
                 rebuildingDecoder = isRebuildingDecoder,
                 volumeBoostPct = volumeBoostPct,
             ),
+            accent = accent,
             onDismiss = { overflowOpen.value = false },
-            onAspect = { actions.cycleZoom() },
-            onZoom = { actions.cycleZoom() },
             onAbRepeat = onAbRepeatTap,
-            onSleep = {
-                // Cycles Off → end-of-episode. The detail list lives in
-                // the legacy menu — this entry-point is the rail /
-                // overflow tap.
-                val next = if (sleep.active) SleepOptions.first()
-                else SleepOptions.last()
-                actions.selectSleep(next)
+            onSkipLengthCycle = {
+                // Same four steps the Settings screen offers. Stays open so
+                // the pill's value visibly advances.
+                val steps = listOf(5, 10, 15, 30)
+                val next = steps.firstOrNull { it > seekIncrementSec } ?: steps.first()
+                onSkipLengthChanged(next)
             },
+            onSleepOption = { opt -> actions.selectSleep(opt) },
+            onEqualizerToggle = { actions.toggleEqualizer() },
+            onOpenEqPanel = onOpenEqPanel,
             onAudioTrack = { actions.pickAudioTrack() },
-            onSpeed = { actions.cycleSpeed() },
-            onEqualizer = { actions.toggleEqualizer() },
-            onCast = { actions.openCastPicker() },
-            onHeadphones = { actions.toggleHeadphones() },
-            onSpeaker = { actions.openAudioOutputPicker() },
-            onCaptureFrame = { actions.captureFrame() },
-            // v0.7.1: real actions for the previously-dead decoder/boost
-            // tiles — the host cycles the 3 engine profiles / boosts gain.
-            onDecoder = { actions.toggleHwDecoder() },
+            onAudioOutput = { actions.openCastPicker() },
             onVolumeBoost = onVolumeBoostCycle,
+            onCaptureFrame = { actions.captureFrame() },
+            onDecoder = { actions.toggleHwDecoder() },
+            onSubtitleSource = onOpenSubtitlePicker,
+            onSubtitleStyle = onOpenSubStyle,
             // v0.7.2: shares the device's own sync decisions (see SyncLogShare).
             onShareSyncLog = onShareSyncLog,
+            onOpenSettings = onOpenSettings,
         )
 
         // ── A-B repeat chip (tap advances the cycle: set B / clear) ──
         if (!isPipMode && abStartMs != null) {
             AbRepeatChip(
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 72.dp),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = topAnchor),
                 abStartMs = abStartMs,
                 abEndMs = abEndMs,
                 accent = accent,
@@ -596,16 +573,15 @@ fun PlayerScreen(
         // ── Up Next pill (final 30 s of an episode) ──
         // Reads the position STATE: recomposes only in the final 30s window
         // (the condition itself gates it — Compose skips until the boolean
-        // flips, not on every tick).
+        // flips, not on every tick). Anchored off the measured dock height,
+        // never a magic 140dp again.
         if (!isPipMode && hasNextEpisode && durationSec.value > 0f &&
             durationSec.value - positionSec.value <= NEXT_BUTTON_WINDOW_SEC && nextCountdownSec < 0
         ) {
             UpNextPill(
-                // Sits above the new two-row bottom block
-                // (seekbar + transport, ~140dp). Previous layout used
-                // 130dp — bumped to 140dp so the pill clears the new
-                // 72dp BIG play button without colliding with it.
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 140.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = bottomAnchor),
                 upNextTitle = upNextTitle,
                 accent = accent,
                 onClick = onPlayNext,
@@ -622,39 +598,17 @@ fun PlayerScreen(
             )
         }
 
-        // ── SYNCED chip + sync popover (top-left, just below the top bar) ──
-        // Truthful visibility: the chip is a "locked" signal, not wallpaper.
-        // It appears only when a real offset exists (persisted lock applied
-        // or live lock landed) OR the user's manual nudges moved it — a
-        // zero offset on a never-synced video renders nothing. v0.7.1: the
-        // chip fades/slides in when a lock lands instead of popping.
-        if (!isPipMode) {
-            androidx.compose.animation.AnimatedVisibility(
-                visible = liveOffsetMs != 0L || subSyncRunning,
-                enter = androidx.compose.animation.fadeIn(
-                    animationSpec = androidx.compose.animation.core.tween(300)) +
-                    androidx.compose.animation.slideInVertically(
-                        animationSpec = androidx.compose.animation.core.tween(300)) { -it / 2 },
-                exit = androidx.compose.animation.fadeOut(
-                    animationSpec = androidx.compose.animation.core.tween(300)),
-                modifier = Modifier.align(Alignment.TopStart).padding(top = 70.dp, start = 14.dp),
-            ) {
-                SyncedChip(
-                    offsetMs = liveOffsetMs,
-                    accent = accent,
-                    onClick = { actions.openSyncPopover() },
-                )
-            }
-        }
+        // ── sync popover (nudge / re-sync / style) — opens ONLY from the
+        //    hero chip in the dock, so it anchors directly above that row.
+        //    The old top-left SYNCED chip + calibration banner layers are
+        //    retired: the chip IS the status now. ──
         if (quick.showSyncPopover.value && !isPipMode) {
             SyncPopover(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    // Sits above the new two-row bottom block
-                    // (seekbar + transport, ~140dp) with clearance.
-                    .padding(bottom = 210.dp)
+                    .padding(bottom = bottomAnchor + PlayerDimens.gapMd)
                     .widthIn(max = 360.dp)
-                    .padding(horizontal = 14.dp),
+                    .padding(horizontal = PlayerDimens.gapLg),
                 offsetMs = liveOffsetMs,
                 accent = accent,
                 onNudge = { actions.nudgeSubtitle(it) },
@@ -666,24 +620,21 @@ fun PlayerScreen(
                     actions.closeSyncPopover()
                     onOpenSubStyle()
                 },
+                onDisable = {
+                    actions.closeSyncPopover()
+                    actions.setSubSyncEnabled(false)
+                },
                 onDismiss = { actions.closeSyncPopover() },
-            )
-        }
-
-        // ── calibration banner (auto / manual) ──
-        if (isCalibrating && !isPipMode) {
-            CalibrationBanner(
-                modifier = Modifier.align(Alignment.TopStart).padding(top = 70.dp, start = 14.dp, end = 14.dp),
-                visible = true,
-                accent = accent,
-                onClick = { onStartCalibration() },
             )
         }
 
         // ── transient toast (in-overlay feedback) ──
         if (hud.transientToast.value != null && !isPipMode) {
             PlayerOverlayToast(
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 70.dp),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = topAnchor),
                 message = hud.transientToast.value,
                 accent = accent,
             )

@@ -2,9 +2,12 @@ package dev.anonrode.player.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,25 +15,24 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.ClosedCaptionDisabled
 import androidx.compose.material.icons.filled.Equalizer
-import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.Speaker
-import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.filled.ZoomOutMap
+import androidx.compose.material.icons.automirrored.filled.VolumeSelect
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +40,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,73 +54,68 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/* ── Overflow sheet (the "more" destination) ──────────────────────────────
- * Single destination for both the top-bar "more" and the right-rail "more"
- * buttons. Two-column scrollable grid; each tile = icon + label + state
- * chip for the selects. Tap fires the callback and dismisses the sheet.
+/* ── Control Center (was "the overflow sheet") — v0.7.3 ──────────────────
+ * The old sheet was a FLAT 14-tile grid with three tiles that all opened
+ * the same thing (Cast / Speaker / Headphones), two that ran the SAME
+ * action (Aspect ≡ Zoom), a blind cycler for speed (now a labeled pill in
+ * the dock), a sleep timer that could only pick Off↔end-episode, and —
+ * worst — it did NOT contain the app's three dead-end surfaces: the
+ * subtitle source picker, the 5-band EQ panel and subtitle style editor
+ * were wired from PlayerActivity but had no entry point anywhere.
  *
- * Rows (per design):
- *   1.  Aspect ratio        (cycles FIT/CROP/STR/16:9/4:3)
- *   2.  Zoom                (currently same as aspect — alias entry)
- *   3.  AB-repeat           (set A → set B → clear cycle)
- *   4.  Sleep timer         (opens sub-menu; for now, cycles Off → end)
- *   5.  Audio track         (opens the host track picker)
- *   6.  Speed               (cycles 0.5x → 2x)
- *   7.  Equalizer           (toggle)
- *   8.  Cast                (opens the MediaRouter picker)
- *   9.  Headphones          (BT/wired detect — see [PlayerScreenActions])
- *   10. Speaker             (output picker — alias of Cast route picker)
- *   11. Capture frame       (PixelCopy → PNG to Pictures/AnonPlayer)
- *   12. Sync log            (share the app's own file log, focused on the
- *                            subtitle-sync decisions of this session — the
- *                            device-side ground truth when sync misbehaves;
- *                            see [dev.anonrode.player.SyncLogShare])
+ * This rewrite is sectioned (Playback / Picture / Audio / Subtitles) with
+ * every tile showing its live current value, active state in the SKIN
+ * accent (the hardcoded MxGreen is gone), and the dead ends wired:
+ * subtitle source, subtitle style, the EQ panel, the full sleep option
+ * list, and Settings as a footer.
  *
- * PiP is intentionally NOT in this sheet — it lives in the transport row
- * (between ⏩10 and the lock), where it's adjacent to the time-seek controls
- * the user is more likely to combine it with.
+ * Speed and aspect deliberately do NOT appear here — they live in the dock
+ * as labeled pills with direct-pick dropdowns (one home per control is
+ * the rule this round enforces). PiP and lock live in the top bar.
  * ------------------------------------------------------------------------- */
 
-/** Inputs the overflow tiles need to render their current state. */
-internal data class OverflowState(
-    val zoomAbbreviation: String,
-    val showCC: Boolean,
+/** Inputs the tiles need to render their current state. */
+internal data class ControlCenterState(
     val abStartMs: Long?,
     val abEndMs: Long?,
     val sleep: SleepTimerUiState,
-    val speedLabelText: String,
+    val skipIncrementSec: Int,
     val equalizerOn: Boolean,
-    val headphonesOn: Boolean,
     val castRouteName: String?,
-    /** v0.7.1 decoder + boost tiles (were unreachable before). */
+    /** The active subtitle source choice ("" = none) — labels the tile. */
+    val subtitleChoiceLabel: String,
     val decoderModeLabel: String = "HW+SW",
     val rebuildingDecoder: Boolean = false,
     val volumeBoostPct: Int = 0,
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-internal fun PlayerOverflowSheet(
+internal fun PlayerControlCenterSheet(
     visible: Boolean,
-    state: OverflowState,
+    state: ControlCenterState,
+    accent: Color,
     onDismiss: () -> Unit,
-    onAspect: () -> Unit,
-    onZoom: () -> Unit,
     onAbRepeat: () -> Unit,
-    onSleep: () -> Unit,
+    onSkipLengthCycle: () -> Unit,
+    onSleepOption: (SleepOption) -> Unit,
+    onEqualizerToggle: () -> Unit,
+    onOpenEqPanel: () -> Unit,
     onAudioTrack: () -> Unit,
-    onSpeed: () -> Unit,
-    onEqualizer: () -> Unit,
-    onCast: () -> Unit,
-    onHeadphones: () -> Unit,
-    onSpeaker: () -> Unit,
+    onAudioOutput: () -> Unit,
+    onVolumeBoost: () -> Unit,
     onCaptureFrame: () -> Unit,
-    onDecoder: () -> Unit = {},
-    onVolumeBoost: () -> Unit = {},
-    onShareSyncLog: () -> Unit = {},
+    onDecoder: () -> Unit,
+    onSubtitleSource: () -> Unit,
+    onSubtitleStyle: () -> Unit,
+    onShareSyncLog: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     if (!visible) return
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Sleep expands IN PLACE — the old "cycles Off ↔ end" tile is gone;
+    // the full SleepOptions list is reachable.
+    var sleepExpanded by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -123,8 +124,6 @@ internal fun PlayerOverflowSheet(
         contentColor = Color.White,
         scrimColor = Color.Black.copy(alpha = 0.55f),
         dragHandle = {
-            // Default drag handle is fine — Material renders a 32×4dp bar
-            // automatically; the explicit null would suppress it.
             Box(
                 modifier = Modifier
                     .padding(top = 10.dp, bottom = 4.dp)
@@ -137,10 +136,12 @@ internal fun PlayerOverflowSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = 600.dp)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // Header — title + close affordance (also implicit from drag).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -148,228 +149,304 @@ internal fun PlayerOverflowSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "Options",
+                    "Control Center",
                     color = Color.White,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    if (state.castRouteName != null) "Casting: ${state.castRouteName}"
-                    else "Tap to toggle",
+                    state.subtitleChoiceLabel,
                     color = Color.White.copy(alpha = 0.5f),
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Spacer(Modifier.height(4.dp))
 
-            // Two-column scrollable grid. The LazyVerticalGrid handles the
-            // scroll for us so we don't need a manual Column + verticalScroll.
-            // 11 rows in 2 columns → 6 rows, last row has 1 item centered.
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
+            // ── Playback ──
+            SectionHeader("Playback")
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                val abActive = state.abStartMs != null
+                CenterTile(
+                    icon = Icons.Filled.Repeat,
+                    label = "A-B repeat",
+                    value = when {
+                        state.abStartMs == null -> "Off"
+                        state.abEndMs == null -> "A set"
+                        else -> fmtTime(state.abStartMs!!) + "–" +
+                            fmtTime(state.abEndMs!!)
+                    },
+                    active = abActive,
+                    accent = accent,
+                    onClick = { onAbRepeat(); onDismiss() },
+                )
+                CenterTile(
+                    icon = Icons.Filled.Timelapse,
+                    label = "Skip length",
+                    value = state.skipIncrementSec.toString() + "s",
+                    active = false,
+                    accent = accent,
+                    onClick = onSkipLengthCycle, // stays open — cycle is visible
+                )
+                CenterTile(
+                    icon = Icons.Filled.Bedtime,
+                    label = "Sleep timer",
+                    value = state.sleep.selection.value.label,
+                    active = state.sleep.active,
+                    accent = accent,
+                    onClick = { sleepExpanded = !sleepExpanded },
+                )
+            }
+            if (sleepExpanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.04f))
+                        .padding(vertical = 4.dp),
+                ) {
+                    SleepOptions.forEach { opt ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSleepOption(opt)
+                                    sleepExpanded = false
+                                }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                opt.label,
+                                color = if (state.sleep.isSelected(opt)) accent else Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = if (state.sleep.isSelected(opt)) {
+                                    FontWeight.SemiBold
+                                } else {
+                                    FontWeight.Normal
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (state.sleep.isSelected(opt)) {
+                                Text("on", color = accent, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Picture ──
+            SectionHeader("Picture")
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CenterTile(
+                    icon = Icons.Filled.PhotoCamera,
+                    label = "Capture frame",
+                    value = "Save PNG",
+                    active = false,
+                    accent = accent,
+                    onClick = { onCaptureFrame(); onDismiss() },
+                )
+                CenterTile(
+                    icon = Icons.Filled.Memory,
+                    label = "Decoder",
+                    value = if (state.rebuildingDecoder) "Rebuilding…"
+                    else state.decoderModeLabel,
+                    active = false,
+                    accent = accent,
+                    onClick = { onDecoder(); onDismiss() },
+                )
+            }
+
+            // ── Audio ──
+            SectionHeader("Audio")
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CenterTile(
+                    icon = Icons.Filled.VolumeUp,
+                    label = "Volume boost",
+                    value = if (state.volumeBoostPct > 0) "+${state.volumeBoostPct}%" else "Off",
+                    active = state.volumeBoostPct > 0,
+                    accent = accent,
+                    onClick = onVolumeBoost, // stays open — value flips live
+                )
+                CenterTile(
+                    icon = Icons.Filled.Equalizer,
+                    label = "Equalizer",
+                    value = if (state.equalizerOn) "On" else "Off",
+                    active = state.equalizerOn,
+                    accent = accent,
+                    onClick = onEqualizerToggle,
+                    onLongClick = { onOpenEqPanel(); onDismiss() },
+                )
+                CenterTile(
+                    icon = Icons.Filled.MusicNote,
+                    label = "Audio track",
+                    value = "Pick…",
+                    active = false,
+                    accent = accent,
+                    onClick = { onAudioTrack(); onDismiss() },
+                )
+                // Cast + the old duplicate "Speaker" route alias merged
+                // into one honest entry (MediaRouter covers speaker/BT/
+                // cast/HDMI/wired).
+                CenterTile(
+                    icon = Icons.AutoMirrored.Filled.VolumeSelect,
+                    label = "Audio output",
+                    value = state.castRouteName ?: "This device",
+                    active = state.castRouteName != null,
+                    accent = accent,
+                    onClick = { onAudioOutput(); onDismiss() },
+                )
+            }
+
+            // ── Subtitles ──
+            SectionHeader("Subtitles")
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CenterTile(
+                    icon = Icons.Filled.ClosedCaptionDisabled,
+                    label = "Subtitle source",
+                    value = state.subtitleChoiceLabel,
+                    active = state.subtitleChoiceLabel != "None",
+                    accent = accent,
+                    onClick = { onSubtitleSource(); onDismiss() },
+                )
+                CenterTile(
+                    icon = Icons.Filled.Movie,
+                    label = "Subtitle style",
+                    value = "Size · color · spot",
+                    active = false,
+                    accent = accent,
+                    onClick = { onSubtitleStyle(); onDismiss() },
+                )
+                // v0.7.2 evidence channel: shares the device's own sync
+                // decisions so "it didn't lock" becomes an evidence
+                // question. Strictly manual; the log contains paths.
+                CenterTile(
+                    icon = Icons.Filled.BugReport,
+                    label = "Sync log",
+                    value = "Share what the engines did",
+                    active = false,
+                    accent = accent,
+                    onClick = { onShareSyncLog(); onDismiss() },
+                )
+            }
+
+            // ── Settings footer — the dead-end in-player settings screen,
+            //    wired again after two releases of being a no-op param. ──
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 120.dp, max = 520.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color.White.copy(alpha = 0.06f))
+                    .clickable { onOpenSettings(); onDismiss() }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                userScrollEnabled = true,
             ) {
-                // ── aspect / zoom ──
-                item(key = "aspect") {
-                    OverflowTile(
-                        icon = Icons.Filled.AspectRatio,
-                        label = "Aspect",
-                        subLabel = state.zoomAbbreviation,
-                        accent = Color.White,
-                        onClick = { onAspect(); onDismiss() },
-                    )
-                }
-                item(key = "zoom") {
-                    OverflowTile(
-                        icon = Icons.Filled.ZoomOutMap,
-                        label = "Zoom",
-                        subLabel = state.zoomAbbreviation,
-                        accent = Color.White,
-                        onClick = { onZoom(); onDismiss() },
-                    )
-                }
-                // ── a-b repeat + sleep timer ──
-                item(key = "ab") {
-                    val abActive = state.abStartMs != null
-                    OverflowTile(
-                        icon = Icons.Filled.Repeat,
-                        label = "A-B repeat",
-                        subLabel = when {
-                            state.abStartMs == null -> "Off"
-                            state.abEndMs == null -> "A set"
-                            else -> "${fmtTime(state.abStartMs)} – " +
-                                fmtTime(state.abEndMs)
-                        },
-                        accent = if (abActive) MxGreen else Color.White,
-                        onClick = { onAbRepeat(); onDismiss() },
-                    )
-                }
-                item(key = "sleep") {
-                    OverflowTile(
-                        icon = Icons.Filled.Bedtime,
-                        label = "Sleep timer",
-                        subLabel = state.sleep.selection.value.label,
-                        accent = if (state.sleep.active) MxGreen else Color.White,
-                        onClick = { onSleep(); onDismiss() },
-                    )
-                }
-                // ── audio track + speed ──
-                item(key = "audio") {
-                    OverflowTile(
-                        icon = Icons.Filled.MusicNote,
-                        label = "Audio track",
-                        subLabel = "Pick…",
-                        accent = Color.White,
-                        onClick = { onAudioTrack(); onDismiss() },
-                    )
-                }
-                item(key = "speed") {
-                    OverflowTile(
-                        icon = Icons.Filled.Speed,
-                        label = "Speed",
-                        subLabel = state.speedLabelText,
-                        accent = Color.White,
-                        onClick = { onSpeed(); onDismiss() },
-                    )
-                }
-                // ── equalizer + cast ──
-                item(key = "eq") {
-                    OverflowTile(
-                        icon = Icons.Filled.Equalizer,
-                        label = "Equalizer",
-                        subLabel = if (state.equalizerOn) "On" else "Off",
-                        accent = if (state.equalizerOn) MxGreen else Color.White,
-                        onClick = { onEqualizer(); onDismiss() },
-                    )
-                }
-                item(key = "cast") {
-                    OverflowTile(
-                        icon = Icons.Filled.Cast,
-                        label = "Cast",
-                        subLabel = state.castRouteName ?: "Off",
-                        accent = if (state.castRouteName != null) MxGreen
-                        else Color.White,
-                        onClick = { onCast(); onDismiss() },
-                    )
-                }
-                // ── headphones + speaker (output pickers) ──
-                item(key = "hp") {
-                    OverflowTile(
-                        icon = Icons.Filled.Headphones,
-                        label = "Headphones",
-                        subLabel = if (state.headphonesOn) "Connected" else "Detect",
-                        accent = if (state.headphonesOn) MxGreen else Color.White,
-                        onClick = { onHeadphones(); onDismiss() },
-                    )
-                }
-                item(key = "spk") {
-                    OverflowTile(
-                        icon = Icons.Filled.Speaker,
-                        label = "Speaker",
-                        subLabel = "Output…",
-                        accent = Color.White,
-                        onClick = { onSpeaker(); onDismiss() },
-                    )
-                }
-                // ── capture frame (single tile in last row) ──
-                item(key = "shot") {
-                    OverflowTile(
-                        icon = Icons.Filled.PhotoCamera,
-                        label = "Capture frame",
-                        subLabel = "Save PNG",
-                        accent = Color.White,
-                        onClick = { onCaptureFrame(); onDismiss() },
-                    )
-                }
-                // ── decoder profile + volume boost (UI-3: these were fully
-                //    engineered (engine.rebuildMode 3 profiles, boost
-                //    processor) but unreachable — the pre-redesign dropdown
-                //    that hosted them was deleted). ──
-                item(key = "decoder") {
-                    OverflowTile(
-                        icon = Icons.Filled.Memory,
-                        label = "Decoder",
-                        subLabel = state.decoderModeLabel,
-                        accent = if (state.rebuildingDecoder) Color.White.copy(alpha = 0.5f) else Color.White,
-                        onClick = { onDecoder(); onDismiss() },
-                    )
-                }
-                item(key = "boost") {
-                    OverflowTile(
-                        icon = Icons.Filled.VolumeUp,
-                        label = "Volume boost",
-                        subLabel = if (state.volumeBoostPct > 0) "+${state.volumeBoostPct}%" else "Off",
-                        accent = if (state.volumeBoostPct > 0) MxGreen else Color.White,
-                        onClick = { onVolumeBoost(); onDismiss() },
-                    )
-                }
-                // ── sync log (v0.7.2 device-fix round): shares the app's own
-                //    file log filtered to the subtitle-sync decisions of this
-                //    session, so "it didn't lock" on a real phone becomes an
-                //    evidence question instead of a guess. Strictly manual:
-                //    the log contains video paths and nothing leaves the
-                //    device without this tap plus the user choosing a
-                //    recipient in the system sheet.
-                item(key = "synclog") {
-                    OverflowTile(
-                        icon = Icons.Filled.BugReport,
-                        label = "Sync log",
-                        subLabel = "Share what the engines did",
-                        onClick = { onShareSyncLog(); onDismiss() },
-                    )
-                }
+                Icon(
+                    Icons.Filled.Settings, null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text(
+                    "Player settings",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "gestures · seek step · sync · style",
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 11.sp,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
 }
 
-/** One tile in the overflow grid: 88dp tall, frosted background, icon
- *  above label + state sub-label. */
 @Composable
-private fun OverflowTile(
+private fun SectionHeader(text: String) {
+    Text(
+        text.uppercase(),
+        color = Color.White.copy(alpha = 0.45f),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.2.sp,
+        modifier = Modifier.padding(top = 6.dp),
+    )
+}
+
+/**
+ * One Control Center tile: icon + label + LIVE current value. Tap fires
+ * (and typically dismisses, via the caller); optional long-press adds a
+ * secondary surface (EQ tile: tap toggles, long-press opens the panel).
+ * Active state colors with the user's SKIN accent — not the old
+ * hardcoded MX green.
+ */
+@Composable
+private fun CenterTile(
     icon: ImageVector,
     label: String,
-    subLabel: String,
+    value: String,
+    active: Boolean,
     accent: Color,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
 ) {
+    val tint = if (active) accent else Color.White
     Box(
         modifier = Modifier
-            .fillMaxWidth()
             .height(88.dp)
+            // Two tiles per sheet row: FlowRow + spacedBy(10dp) distributes
+            // the remainder, so 48% per tile fills exactly two columns.
+            .fillMaxWidth(0.48f)
             .clip(RoundedCornerShape(14.dp))
-            .background(Color.White.copy(alpha = 0.06f))
-            .clickable(onClick = onClick)
+            .background(
+                if (active) accent.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.06f)
+            )
+            .then(
+                if (onLongClick == null) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                },
+            )
             .padding(horizontal = 10.dp, vertical = 10.dp),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Box(
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(32.dp)
                     .clip(CircleShape)
                     .background(
-                        if (accent == MxGreen) accent.copy(alpha = 0.18f)
+                        if (active) accent.copy(alpha = 0.18f)
                         else Color.White.copy(alpha = 0.10f)
                     ),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    icon, null,
-                    tint = accent,
-                    modifier = Modifier.size(20.dp),
-                )
+                Icon(icon, null, tint = tint, modifier = Modifier.size(18.dp))
             }
             Text(
                 label,
@@ -380,7 +457,7 @@ private fun OverflowTile(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                subLabel,
+                value,
                 color = Color.White.copy(alpha = 0.6f),
                 fontSize = 11.sp,
                 maxLines = 1,
