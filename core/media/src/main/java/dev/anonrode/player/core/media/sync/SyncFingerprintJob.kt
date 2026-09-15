@@ -226,9 +226,60 @@ class SyncFingerprintJob(
             // SoCs and the partial onset set then "failed the gates" — a
             // false verdict), and the MediaCodec fallback can open the
             // content URI itself when the resolved path can't be read.
+            //
+            // v0.8.3 ACCURACY: extraction is now RESUMABLE via OnsetCache.
+            // The 09-15 device log shows each budget-truncated attempt
+            // re-decoding from zero (and never finishing the file), plus a
+            // process-death cancellation throwing away a completed
+            // extraction — locks were fitted on 24-44% of the episode and
+            // the slope extrapolated over the rest, the proven source of
+            // "it locks then drifts". Attempt k now resumes at the media
+            // time attempt k-1 reached, and the verdict is fitted on the
+            // union — 100% of the audio across a few resumable passes.
+            val cached = OnsetCache.load(applicationContext, videoUri, videoFile)
             val extractor = OnsetExtractor(applicationContext)
             extractor.decodeTimeoutMs = decodeBudgetMs(videoUri, videoPath)
-            val sources = extractor.extractSources(videoPath, Uri.parse(videoUri))
+            val sources: OnsetExtractor.OnsetSources
+            val extractionComplete: Boolean
+            if (cached != null && cached.complete) {
+                AppLog.d(
+                    "SYNC_JOB",
+                    "onset cache complete (${cached.silencedetect.size}+${cached.vad.size}) — skipping decode",
+                )
+                sources = cached.asSources()
+                extractionComplete = true
+            } else {
+                val resumeFrom = cached?.coveredSec ?: -1.0
+                if (resumeFrom > 0.0) {
+                    AppLog.d(
+                        "SYNC_JOB",
+                        "resuming decode at %.0fs (cached %.0f+%.0f onsets)".format(
+                            resumeFrom,
+                            cached?.silencedetect?.size?.toDouble() ?: 0.0,
+                            cached?.vad?.size?.toDouble() ?: 0.0,
+                        ),
+                    )
+                }
+                val fresh = extractor.extractSources(videoPath, Uri.parse(videoUri), resumeFrom)
+                extractionComplete = !extractor.lastDecodeTruncated
+                sources = if (resumeFrom > 0.0 && cached != null) {
+                    OnsetExtractor.OnsetSources(
+                        OnsetCache.mergeOnsets(cached.silencedetect, fresh.silencedetect),
+                        OnsetCache.mergeOnsets(cached.vad, fresh.vad),
+                    )
+                } else {
+                    fresh
+                }
+                OnsetCache.store(
+                    applicationContext, videoUri, videoFile,
+                    OnsetCache.Entry(
+                        silencedetect = sources.silencedetect,
+                        vad = sources.vad,
+                        coveredSec = extractor.lastCoveredSec,
+                        complete = extractionComplete,
+                    ),
+                )
+            }
             val candidates = mutableListOf("silencedetect" to sources.silencedetect)
             if (sources.vad.isNotEmpty()) {
                 candidates.add("hybrid" to sources.hybrid)
@@ -248,22 +299,26 @@ class SyncFingerprintJob(
             }
 
             if (lock == null) {
-                // v0.8 P2-2: a decode that stopped at the budget is NOT a
-                // verdict about the video — the onset set was cut short, so
-                // the gates refusing it proves nothing. Retry once (the pass
-                // may have been slowed by contention, not by the file) and
-                // only then, on the last attempt, fall through to the
+                // v0.8 P2-2 (v0.8.3: cache-resumed): a decode that stopped
+                // at the budget is NOT a verdict about the video — the
+                // onset set was cut short, so the gates refusing it proves
+                // nothing. Keep retrying while extraction can still grow
+                // (each retry RESUMES from the cached prefix, so a slow
+                // SoC finishes the file in a few passes instead of never),
+                // and only on the last attempt fall through to the
                 // checked-mark like any other no-lock outcome.
-                if (extractor.lastDecodeTruncated && runAttemptCount < 2) {
+                if (!extractionComplete && runAttemptCount < 3) {
                     AppLog.d(
                         "SYNC_JOB",
-                        "no lock BUT decode was truncated at budget — retrying, no verdict",
+                        "no lock AND decode was truncated at budget — resuming extraction, no verdict",
                     )
                     return@withContext Result.retry()
                 }
                 AppLog.d(
                     "SYNC_JOB",
-                    "no lock (fits attempted: $fitsAttempted/${candidates.size} sources)",
+                    "no lock (fits attempted: $fitsAttempted/${candidates.size} sources" +
+                        (if (extractionComplete) "" else ", STILL truncated after ${runAttemptCount + 1} passes") +
+                        ")",
                 )
                 // This is a verdict about the video's own data (the gates
                 // refused every usable source, or there was too little
@@ -275,6 +330,20 @@ class SyncFingerprintJob(
             }
 
             store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, lock.piecewise)
+            // v0.8.3: a lock fitted on a TRUNCATED extraction is persisted
+            // (better than nothing, the player applies it immediately) but
+            // is NOT the final word — the checked mark stays off, so the
+            // next attempt resumes extraction and refits (or the player
+            // re-schedules this same owed verdict on the next open if the
+            // retry chain dies). Only a fit on complete audio, or the last
+            // allowed attempt, is a verdict.
+            if (!extractionComplete && runAttemptCount < 3) {
+                AppLog.d(
+                    "SYNC_JOB",
+                    "LOCKED (provisional, ${lock.tag}) uri=$videoUri — extraction truncated, resuming to refit",
+                )
+                return@withContext Result.retry()
+            }
             // The verdict is final for this video (a lock now exists, so the
             // player's schedule gate stops anyway) — mark it explicitly so
             // the two gates can never disagree.

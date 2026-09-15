@@ -61,6 +61,17 @@ class OnsetExtractor(private val context: Context) {
     @Volatile var lastDecodeTruncated = false
         private set
 
+    /** v0.8.3: absolute media time (s) the last [extractSources] pass
+     *  covered, resumable or not. The fingerprint job stores it in the
+     *  onset cache so the NEXT attempt seeks straight to it instead of
+     *  re-decoding the first 15 minutes for the third time (09-15 log:
+     *  every budget-truncated attempt restarted the decode from zero, and
+     *  a process-death retry threw a finished extraction away entirely).
+     *  Meaningful only when [lastDecodeTruncated] is true; on a complete
+     *  pass the cache is flagged complete and this is ignored. */
+    @Volatile var lastCoveredSec = 0.0
+        private set
+
     /** Both onset sources from one pass over the file. */
     data class OnsetSources(
         val silencedetect: List<Double>,
@@ -82,11 +93,24 @@ class OnsetExtractor(private val context: Context) {
      * equivalent; VAD runs only when the Silero model asset is present.
      * [videoUri] (v0.8 P1-5) is the content:// fallback used for the
      * MediaCodec decode when the path is missing/unreadable.
+     *
+     * [resumeFromSec] (v0.8.3) seeks the MediaCodec pass straight to that
+     * absolute media time and shifts both detectors' onset clocks to match,
+     * so returned onsets are absolute despite the mid-file start. ffmpeg
+     * (no seek support here) is only used for cold passes; a resumed pass
+     * always takes the MediaCodec route. Callers merge with their cached
+     * prefix and dedupe the seam.
      */
-    fun extractSources(videoPath: String, videoUri: Uri? = null): OnsetSources {
-        val sil = resolveFfmpegPath()?.let {
+    fun extractSources(
+        videoPath: String,
+        videoUri: Uri? = null,
+        resumeFromSec: Double = -1.0,
+    ): OnsetSources {
+        lastDecodeTruncated = false
+        lastCoveredSec = 0.0
+        val sil = if (resumeFromSec < 0) resolveFfmpegPath()?.let {
             extractWithFfmpeg(it, videoPath, 0.0)
-        }
+        } else null
         val vadAvailable = SileroVad.modelAvailable(context)
         if (sil != null && !vadAvailable) {
             return OnsetSources(sil, emptyList())
@@ -95,7 +119,22 @@ class OnsetExtractor(private val context: Context) {
         // Single MediaCodec decode pass feeding both detectors.
         val silence = SilenceState()
         val vad = if (vadAvailable) SileroVad(context) else null
-        decodeAudio(videoPath, videoUri) { buf, sr, ch, isFloat ->
+        // The resumed segment's onset clock must start where the decoder
+        // actually begins emitting samples (post-seek pts of the FIRST
+        // output buffer), not at the nominal seek target — the detectors
+        // are created before the loop, so the offset is injected on the
+        // first callback below.
+        var offsetSec = 0.0
+        var offsetSet = false
+        decodeAudio(videoPath, videoUri, resumeFromSec) { buf, sr, ch, isFloat, ptsUs ->
+            if (!offsetSet) {
+                if (resumeFromSec >= 0.0) {
+                    offsetSec = if (ptsUs > 0L) ptsUs / 1_000_000.0 else resumeFromSec
+                    silence.onsetOffset = offsetSec
+                    vad?.onsetOffsetSec = offsetSec
+                }
+                offsetSet = true
+            }
             silence.process(buf, sr, ch, isFloat)
             vad?.processPcm(buf, sr, ch, isFloat)
             true
@@ -104,6 +143,7 @@ class OnsetExtractor(private val context: Context) {
         val vadOnsets = if (vad != null) {
             try { vad.finish() } finally { vad.close() }
         } else emptyList()
+        lastCoveredSec = silence.coveredSec()
         return OnsetSources(silOnsets, vadOnsets)
     }
 
@@ -119,7 +159,7 @@ class OnsetExtractor(private val context: Context) {
             AppLog.d("ONSET", "ffmpeg path failed, falling back to MediaCodec")
         }
         val silence = SilenceState(maxSeconds)
-        decodeAudio(videoPath, null) { buf, sr, ch, isFloat ->
+        decodeAudio(videoPath, null) { buf, sr, ch, isFloat, _ ->
             silence.process(buf, sr, ch, isFloat)
             !silence.limitReached
         }
@@ -184,14 +224,20 @@ class OnsetExtractor(private val context: Context) {
     /**
      * Decode the first audio track of [videoPath] to PCM, invoking
      * [onPcm] for every output buffer (positioned: offset applied,
-     * limit = end of valid data). Return false from [onPcm] to stop
-     * early. Runs the whole file; single-threaded, blocking — call from
-     * a background worker.
+     * limit = end of valid data, plus the buffer's presentation time in
+     * microseconds on the absolute media clock). Return false from
+     * [onPcm] to stop early. Runs the whole file; single-threaded,
+     * blocking — call from a background worker.
+     *
+     * [resumeFromSec] (v0.8.3) seeks the extractor to that absolute media
+     * time first; the loop itself is unchanged, so the resumed pass covers
+     * exactly the tail the previous budget-truncated pass could not.
      */
     private fun decodeAudio(
         videoPath: String?,
         videoUri: Uri?,
-        onPcm: (buf: ByteBuffer, sampleRate: Int, channels: Int, isFloat: Boolean) -> Boolean,
+        resumeFromSec: Double = -1.0,
+        onPcm: (buf: ByteBuffer, sampleRate: Int, channels: Int, isFloat: Boolean, ptsUs: Long) -> Boolean,
     ) {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
@@ -226,6 +272,17 @@ class OnsetExtractor(private val context: Context) {
             val format = extractor.getTrackFormat(track)
             val mime = format.getString(MediaFormat.KEY_MIME) ?: return
             extractor.selectTrack(track)
+            if (resumeFromSec >= 0.0) {
+                // SEEK_TO_CLOSEST_SYNC + a decoder flush: the first decoded
+                // output lands at (or just before) the seek target; the
+                // caller timestamps the resumed onsets from the first
+                // buffer's actual presentation time, not this nominal one.
+                try {
+                    extractor.seekTo((resumeFromSec * 1_000_000).toLong(), MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                } catch (t: Throwable) {
+                    AppLog.e("ONSET", "resume seek failed, decoding from start", t)
+                }
+            }
 
             // Null surface + releaseOutputBuffer(idx, false) means the
             // decoder is never paced to a render timeline — the loop below
@@ -283,7 +340,7 @@ class OnsetExtractor(private val context: Context) {
                         if (buf != null) {
                             buf.position(info.offset)
                             buf.limit(info.offset + info.size)
-                            if (!onPcm(buf, sampleRate, channels, isFloat)) {
+                            if (!onPcm(buf, sampleRate, channels, isFloat, info.presentationTimeUs)) {
                                 outputDone = true
                             }
                         }
@@ -321,6 +378,11 @@ class OnsetExtractor(private val context: Context) {
         val onsets = mutableListOf<Double>()
         private var sampleRate = 0
         private var channels = 0
+
+        /** v0.8.3: absolute media time the first decoded sample belongs to
+         *  (non-zero only on a resumed pass); added to every onset time so
+         *  they line up with the cached prefix. */
+        var onsetOffset = 0.0
 
         // 1-pole bandpass state per channel
         private var hpBeta = 0.0
@@ -391,7 +453,7 @@ class OnsetExtractor(private val context: Context) {
 
         private fun flushWindow() {
             val rms = sqrt(windowSumSq / windowN)
-            val wStart = monoSamples.toDouble() / sampleRate
+            val wStart = onsetOffset + monoSamples.toDouble() / sampleRate
             val wEnd = wStart + windowN.toDouble() / sampleRate
             monoSamples += windowN
             windowSumSq = 0.0
@@ -414,6 +476,10 @@ class OnsetExtractor(private val context: Context) {
             AppLog.d("ONSET", "silencedetect equivalent: ${onsets.size} onsets")
             return onsets
         }
+
+        /** Absolute media time (s) processed so far (call after [finish]). */
+        fun coveredSec(): Double =
+            if (sampleRate > 0) onsetOffset + monoSamples.toDouble() / sampleRate else onsetOffset
     }
 
     /**

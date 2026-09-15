@@ -18,3 +18,7 @@ __pycache__/
 *.pyc
 *.pkl
 .venv/
+
+# User Python workspace — read-only, never stage from here (rule since v0.7).
+# (22 engine-reference files already tracked remain visible to git.)
+/tools/

@@ -60,6 +60,11 @@ class SileroVad(context: Context) : AutoCloseable {
     private var chunkN = 0
     private val bins = ArrayList<Byte>(4096)
 
+    /** v0.8.3: absolute media time the first bin belongs to (non-zero only
+     *  on a resumed decode pass) — added to every onset time so the caller
+     *  can merge with the cached prefix. */
+    var onsetOffsetSec = 0.0
+
     // Reused direct buffers (ONNX requires direct FloatBuffers)
     private val inputBuf: ByteBuffer =
         ByteBuffer.allocateDirect((WINDOW + CONTEXT) * 4).order(ByteOrder.nativeOrder())
@@ -163,6 +168,9 @@ class SileroVad(context: Context) : AutoCloseable {
         return onsets
     }
 
+    /** Absolute media time (s) the collected bins cover (call after [finish]). */
+    fun coveredSec(): Double = onsetOffsetSec + bins.size * FRAME_SEC
+
     override fun close() {
         try { session?.close() } catch (_: Throwable) {}
         // env is the shared singleton; never close it
@@ -208,7 +216,7 @@ class SileroVad(context: Context) : AutoCloseable {
                     if (regionFirstLen >= sp &&
                         prevZeroLen != null && prevZeroLen >= sil
                     ) {
-                        onsets.add(regionStart * FRAME_SEC)
+                        onsets.add(regionStart * FRAME_SEC + onsetOffsetSec)
                     }
                     regionStart = -1
                 }
@@ -218,7 +226,7 @@ class SileroVad(context: Context) : AutoCloseable {
         if (regionStart >= 0 && regionFirstLen >= sp &&
             prevZeroLen != null && prevZeroLen >= sil
         ) {
-            onsets.add(regionStart * FRAME_SEC)
+            onsets.add(regionStart * FRAME_SEC + onsetOffsetSec)
         }
         return onsets
     }
