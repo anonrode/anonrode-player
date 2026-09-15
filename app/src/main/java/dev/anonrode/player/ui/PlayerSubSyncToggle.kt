@@ -192,7 +192,7 @@ internal fun PlayerSubSyncToggle(
                 // label ellipsizes — the offset remains one long-press
                 // (Resync now) / popover tap away from being read exactly.
                 modifier = Modifier.weight(1f, fill = false),
-                label,
+                text = label,
                 color = tint,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
