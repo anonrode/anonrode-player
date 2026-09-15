@@ -51,6 +51,16 @@ class SyncFingerprintJob(
         private const val MIN_RECALL = 0.35
         private const val MIN_MARGIN = 0.04
         private const val MIN_ONSETS = 20
+
+        /**
+         * v0.8.2: process-wide decoder gate. One whole-file decode at a
+         * time — WorkManager happily runs enqueued workers in parallel and
+         * concurrent MediaCodec+Silero passes starve each other (the
+         * 09-15 log: three episodes' fingerprints started within 3 minutes,
+         * none finished by minute 8). A busy gate means an immediate
+         * Result.retry(), not a blocked worker thread.
+         */
+        private val DECODE_GATE = java.util.concurrent.Semaphore(1)
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -77,6 +87,23 @@ class SyncFingerprintJob(
         if (videoUri.isNullOrEmpty()) {
             AppLog.e("SYNC_JOB", "no video uri in input")
             return@withContext Result.failure()
+        }
+        // v0.8.2: ONE whole-file decode at a time. The 09-15 device log
+        // shows three fingerprint jobs running CONCURRENTLY (three episodes
+        // opened back to back), each holding a MediaCodec decoder plus the
+        // Silero ONNX pass — three parallel ~20-minute decodes saturating a
+        // mid-range SoC, so no episode got its lock fast and the "Syncing…"
+        // chip lied about all of them. WorkManager happily runs queued
+        // workers in parallel and offers no per-job concurrency knob, so the
+        // worker enforces it with a process-wide semaphore: a job that
+        // finds the gate busy returns Result.retry() immediately — WorkManager
+        // re-delivers it after its backoff (default 10 min; the 09-15 log's
+        // own start-to-start gaps show that cadence), and by then the
+        // preceding decode has usually finished. Never block: WorkManager's
+        // executor is small and shared with the app's other work.
+        if (!DECODE_GATE.tryAcquire()) {
+            AppLog.d("SYNC_JOB", "another decode holds the gate, retrying")
+            return@withContext Result.retry()
         }
         AppLog.d("SYNC_JOB", "fingerprint start: $videoUri")
         val store = MediaStateStore(MediaDatabase.get(applicationContext).mediaStateDao())
@@ -272,6 +299,8 @@ class SyncFingerprintJob(
                 try { store.markAutoSyncChecked(videoUri) } catch (_: Throwable) {}
                 Result.failure()
             } else Result.retry()
+        } finally {
+            DECODE_GATE.release()
         }
     }
 

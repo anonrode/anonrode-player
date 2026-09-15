@@ -240,7 +240,7 @@ class AudioSyncProcessor(
         val reset = pendingResetPosition ?: return
         pendingResetPosition = null
         startPositionMs = reset
-        resetWindow()
+        resetWindow(anchorPosMs = reset)
         locked = false
     }
 
@@ -339,9 +339,19 @@ class AudioSyncProcessor(
         locked = false
     }
 
-    private fun resetWindow() {
+    private fun resetWindow(anchorPosMs: Long = -1L) {
         java.util.Arrays.fill(audioBins, 0f)
-        baseIdx = 0; binCount = 0; totalFrames = 0
+        // v0.8.2: anchor the bin grid AT the new position. With baseIdx=0
+        // the first bin after a seek to media position P lands at
+        // rel = P/100ms directly — inside the 9800-bin array that means
+        // binCount jumps to P/bins (09-15 device log: a seek to 665 s
+        // produced "bc=6636" and burned ALL 24 passes on 6600 ZEROED bins
+        // in 40 ms; every resume or scrub under ~16 min did the same).
+        // With the anchor, the fresh window is exactly the bins played
+        // after the seek. The accumulateBin safety net (binCount==0 →
+        // baseIdx=idx) stays for position-unknown starts.
+        baseIdx = if (anchorPosMs >= 0L) (anchorPosMs / 100L).toInt() else 0
+        binCount = 0; totalFrames = 0
         windowN = 0; wSumSq = 0.0; wSumAbs = 0.0; wSumSig = 0.0; wZcr = 0
         floor = 0.0; peak = 0.0; lastSpeech = 0.0
         stableHits = 0; lastOffset = Double.NaN
@@ -457,27 +467,28 @@ class AudioSyncProcessor(
         val posMs = startPositionMs + totalFrames * 1000L / max(sampleRate, 1)
         val idx = (posMs / 100).toInt()
         if (idx < 0 || idx < baseIdx) return
+        if (binCount == 0) {
+            // Fresh window: anchor the grid at the first bin that actually
+            // has data (v0.8.2). This used to happen only when the position
+            // was beyond the array; a flush/resetAll mid-array (decoder
+            // rebuild, in-app seek the sink restarted without an explicit
+            // setStartPosition) left baseIdx=0 and binCount exploded to
+            // position/100 zeroed bins — the 09-15 seek poisoning.
+            baseIdx = idx
+        }
         if (idx - baseIdx >= audioBins.size) {
-            if (binCount == 0) {
-                // Fresh window far into the media (mid-episode resume):
-                // anchor the window at the current position so the data
-                // grows from index 0 and cross-half validation stays sane.
-                baseIdx = idx
+            // Slide forward just enough to fit the new bin at the end.
+            val newBase = idx - audioBins.size + 1
+            val shift = newBase - baseIdx
+            if (shift >= audioBins.size) {
                 java.util.Arrays.fill(audioBins, 0f)
+                binCount = 0
             } else {
-                // Slide forward just enough to fit the new bin at the end.
-                val newBase = idx - audioBins.size + 1
-                val shift = newBase - baseIdx
-                if (shift >= audioBins.size) {
-                    java.util.Arrays.fill(audioBins, 0f)
-                    binCount = 0
-                } else {
-                    System.arraycopy(audioBins, shift, audioBins, 0, audioBins.size - shift)
-                    java.util.Arrays.fill(audioBins, audioBins.size - shift, audioBins.size, 0f)
-                    binCount = max(0, binCount - shift)
-                }
-                baseIdx = newBase
+                System.arraycopy(audioBins, shift, audioBins, 0, audioBins.size - shift)
+                java.util.Arrays.fill(audioBins, audioBins.size - shift, audioBins.size, 0f)
+                binCount = max(0, binCount - shift)
             }
+            baseIdx = newBase
         }
         val rel = idx - baseIdx
         binCount = max(binCount, rel + 1)
