@@ -41,9 +41,17 @@ object SyncLogShare {
     /** Newest sync-decision lines kept regardless of where they sit. */
     private const val SYNC_LINES = 400
 
-    /** Tags that carry the sync story, in order of how much we want them. */
+    /** Tags that carry the sync story, in order of how much we want them.
+     *  Matching is `[$TAG]` exact — SUB_RESOLVER and SUB_TREE were MISSING
+     *  until v0.8.1: their lines log under those tags and "[SUB]" never
+     *  matched "[SUB_RESOLVER]", so every sidecar-discovery and SAF-tree
+     *  verdict line was silently excluded from the report that exists to
+     *  explain why a sync did or didn't happen. AB joined too: a quiet
+     *  re-anchor decision is prime suspect material for "it unlocked wrong
+     *  while I was looping". */
     private val SYNC_TAGS = listOf(
-        "SYNC", "SYNC_JOB", "SYNC_ORCH", "ONSET", "VAD", "SUB", "PLAY", "ENGINE",
+        "SYNC", "SYNC_JOB", "SYNC_ORCH", "ONSET", "VAD", "SUB",
+        "SUB_RESOLVER", "SUB_TREE", "AB", "PLAY", "ENGINE",
     )
 
     /** Share-sheet text cap (clipper / messenger safety, not a log cap). */

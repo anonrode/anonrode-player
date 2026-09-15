@@ -206,14 +206,23 @@ class AudioSyncProcessor(
     /**
      * Re-anchor the media-time clock WITHOUT discarding the window
      * (v0.8, A-B repeat fix). The old blanket re-anchor on every seek
-     * meant an A-B loop re-set the window each iteration, so live sync
-     * could never lock during A-B — and it need not clear anything: the
-     * looped audio re-bins onto the SAME absolute media-time labels with
-     * (near-)identical values, and accumulateBin's max-fold makes that
-     * write idempotent. Recomputing [startPositionMs] so that the clock
-     * agrees with [positionMs] at the current frame count keeps every
-     * existing bin's label true, keeping the window (and the pass
-     * schedule) alive across the loop instead of starting cold.
+     * reset the window each loop iteration — bins, pass schedule and all —
+     * so live sync could never accumulate enough data during A-B.
+     *
+     * Mechanics: the anchor is recomputed so the clock agrees with
+     * [positionMs] at the current frame count. The audio recorded BEFORE
+     * the loop-back now carries labels shifted earlier by one loop length,
+     * while the re-played pass fills fresh slots at the TRUE positions.
+     * Consequence (by design, verified safe): each further loop-back
+     * shifts the older passes' labels by another loop length, so the
+     * correlation sees near-equal peaks at the true shift and at every
+     * k·loopLength — the prominence gate therefore REFUSES to lock while
+     * the loop is sustained (never a lock at a loop-shifted peak — that
+     * is the whole point of keeping the duplicate visible to the margin).
+     * Releasing A-B seeks forward, which takes the full re-anchor path,
+     * and the fresh window locks as fast as a cold start (~18 s on clean
+     * content). A session already `locked` keeps applying its stored
+     * offset across loop-backs (analyze() short-circuits on locked).
      */
     fun setStartPositionQuiet(positionMs: Long) {
         pendingQuietPosition = positionMs
@@ -539,15 +548,26 @@ class AudioSyncProcessor(
         ) {
             // Undecidable slot: the correlator had too little data to judge
             // the pairing (sparse dialogue, long silence, short cue track).
-            // NOT evidence against the subtitle track — v0.7.4 takes it out
-            // of the give-up budget (livesim S5: sparse content charged all
+            // NOT evidence against the subtitle track — v0.7.4 took it out
+            // of the failure budget (livesim S5: sparse content charged all
             // 22 attempts on undecidable seconds and handed off at ~30 s,
-            // while the same track was gate-passable from ~60 s). The
-            // separate MAX_NOT_READY_EVS cap bounds the battery cost.
+            // while the same track was gate-passable from ~60 s). In v0.8
+            // the PASS_BINS cadence is the only cost bound at all.
             is SpeechCorrelator.Outcome.NotReady -> {
                 // v0.8: the cadence bounds cost, so an undecidable window
-                // is logged (this is the sync-log evidence line) and
-                // simply waits for the next scheduled pass.
+                // is logged (this is the sync-log evidence line) and simply
+                // waits for the next scheduled pass.
+                //
+                // The agreement chain DOES break here, matching the oracle
+                // (`if kind != "MATCH": stable_hits = 0` in livesim's
+                // replay_v2): a NotReady pass between two agreeing MATCHes
+                // means the middle of that window had too little speech to
+                // judge, so the two matches are not CONSECUTIVE evidence.
+                // Leaving the chain intact would let sparse content lock on
+                // two agreements that never had a decidable pass between
+                // them — untested behavior the sim numbers don't cover.
+                stableHits = 0
+                lastOffset = Double.NaN
                 AppLog.d("SYNC", "pass t=${req.posMs / 1000}s bc=${req.binCount}: not ready (thin speech mass)")
                 return
             }

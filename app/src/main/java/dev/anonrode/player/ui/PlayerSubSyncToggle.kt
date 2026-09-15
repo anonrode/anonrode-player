@@ -187,6 +187,11 @@ internal fun PlayerSubSyncToggle(
                 )
             }
             Text(
+                // The shrinkable leaf: when the host's Row constrained this
+                // chip (weight fill=false), the icon stays and ONLY the
+                // label ellipsizes — the offset remains one long-press
+                // (Resync now) / popover tap away from being read exactly.
+                modifier = Modifier.weight(1f, fill = false),
                 label,
                 color = tint,
                 fontSize = 13.sp,

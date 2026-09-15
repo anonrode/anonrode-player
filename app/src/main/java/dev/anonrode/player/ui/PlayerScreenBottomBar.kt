@@ -258,7 +258,14 @@ private fun SeekBarRow(
             )
             val dur = durationSec.value.coerceAtLeast(1f)
             val posFrac = (visualPos / dur).coerceIn(0f, 1f)
-            val bufFrac = (bufferedSec.value / dur).coerceIn(posFrac, 1f)
+            // The buffered fraction is clamped 0..1 only, never UP to the
+            // played fraction. The old coerceIn(posFrac, 1f) meant the
+            // 0.45-alpha buffer box was ALWAYS at least as wide as the
+            // accent box painted on top of it — the "buffer" was invisible
+            // at all times, so the bar lied about progress by omission.
+            // Stale/behind bufferedSec (right after a seek) now honestly
+            // shows no buffer ahead.
+            val bufFrac = (bufferedSec.value / dur).coerceIn(0f, 1f)
             // ── the three-part painted track, vertically centered in the
             //    same 32dp band the slider occupies ──
             Box(
@@ -476,8 +483,17 @@ private fun UtilityRow(
                 .spacedBy(PlayerDimens.gapXs, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 1) the sync HERO chip (flagship feature, always in the row)
+            // 1) the sync HERO chip (flagship feature, always in the row).
+            //    weight(fill=false) makes it the row's ONLY shrinkable item:
+            //    fixed-size chips (CC/audio/aspect/rotate = 48dp each, speed
+            //    ~50) with gaps already need ~262dp, and on 360dp-class
+            //    phones (the majority) the ~290–360dp of content width left
+            //    after padding can't also fit an 80–90dp locked sync label
+            //    — Compose does not shrink fixed children, so the tail of
+            //    the row clipped off-screen (the 0.7.1 portrait bug class).
+            //    Below the needed width the chip's label ellipsizes first.
             PlayerSubSyncToggle(
+                modifier = Modifier.weight(1f, fill = false),
                 enabled = actions.quick.subSyncEnabled.value,
                 running = actions.quick.subSyncRunning.value,
                 offsetMs = liveOffsetMs,

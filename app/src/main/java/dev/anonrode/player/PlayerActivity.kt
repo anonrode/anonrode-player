@@ -1255,7 +1255,7 @@ class PlayerActivity : ComponentActivity() {
             // v0.6.2: deferred sidecar parse for the AUTO path — video
             // plays first with empty cues, cues land ~200ms later.
             if (sortedCuesWasDeferred(pending.uriStr, pending.cues)) {
-                scheduleDeferredSidecarParse(pending.uriStr, currentVideoPath)
+                scheduleDeferredSidecarParse(pending.uriStr, currentVideoPath, subtitleChoice)
             }
             // Belt-and-braces: skip publishing state if a newer open landed.
             if (pending.gen != openGeneration) return@launch
@@ -1927,8 +1927,18 @@ class PlayerActivity : ComponentActivity() {
      * with them so the user sees subtitles right after first-frame.
      * Cancelled automatically by the next [openVideo] (which assigns
      * [deferredSidecarJob]).
+     *
+     * v0.8.1 [choice]: "" keeps the AUTO semantics (embedded-first, then
+     * the scored sidecar pick); a "sidecar:…" choice that produced zero
+     * cues at open (transiently — a cold SAF-tree provider, most likely)
+     * is re-resolved through the SAME canonical path, honoring the user's
+     * explicit pick without the embedded probe an explicit choice outranks.
      */
-    private fun scheduleDeferredSidecarParse(uriStr: String, videoPath: String?) {
+    private fun scheduleDeferredSidecarParse(
+        uriStr: String,
+        videoPath: String?,
+        choice: String = "",
+    ) {
         deferredSidecarJob?.cancel()
         val genAtSchedule = openGeneration
         deferredSidecarJob = lifecycleScope.launch(Dispatchers.IO) {
@@ -1936,6 +1946,31 @@ class PlayerActivity : ComponentActivity() {
                 kotlinx.coroutines.delay(200L)
                 if (genAtSchedule != openGeneration) return@launch
                 if (videoPath == null) return@launch
+                if (choice.startsWith("sidecar:")) {
+                    val chosen = try {
+                        SubtitleSourceResolver.resolveCues(
+                            applicationContext, uriStr, videoPath, choice,
+                        ).sortedBy { it.start }
+                    } catch (t: Throwable) {
+                        AppLog.e("SUB", "deferred sidecar-choice retry failed", t)
+                        emptyList()
+                    }
+                    if (genAtSchedule != openGeneration) return@launch
+                    if (chosen.isEmpty()) return@launch
+                    AppLog.d("PLAY", "deferred cues landed: chosen ${choice} (${chosen.size})")
+                    withContext(Dispatchers.Main) {
+                        if (genAtSchedule != openGeneration) return@withContext
+                        restartRenderLoop(chosen)
+                        // Same cues-only attach as the AUTO landing below:
+                        // playback already re-anchored the clock at play();
+                        // a fresh anchor here would mislabel every bin.
+                        if (currentSettings.subtitleAutoSyncEnabled) {
+                            AnonrodeApp.get(this@PlayerActivity).engine
+                                .attachSyncCues(chosen)
+                        }
+                    }
+                    return@launch
+                }
                 // Embedded tracks outrank sidecars on the AUTO path — the
                 // same priority resolveAutoCues applies. The old deferred
                 // job only ever looked at sidecars, so an MKV with internal
@@ -2017,7 +2052,14 @@ class PlayerActivity : ComponentActivity() {
         if (cues.isNotEmpty()) return false
         // Re-read the persisted choice cheaply from the in-memory cache;
         // openVideo already wrote [subtitleChoice] before this commit.
-        return subtitleChoice.isEmpty()
+        // v0.8.1: an explicit sidecar choice that produced NOTHING at open
+        // joins the retry path too. Before v0.8 a sidecar read was a local
+        // File read that either worked in ms or never would; with SAF-tree
+        // sidecars the same lookup is a binder round-trip to an external
+        // DocumentProvider that can fail transiently (cold provider) — the
+        // deferred job retries it ~200 ms later, OFF the first-frame path,
+        // instead of silently committing zero cues.
+        return subtitleChoice.isEmpty() || subtitleChoice.startsWith("sidecar:")
     }
 
     /**

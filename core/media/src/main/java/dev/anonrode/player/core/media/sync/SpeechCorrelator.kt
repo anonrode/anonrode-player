@@ -196,20 +196,19 @@ object SpeechCorrelator {
         val lo = -(maxOffsetSec / ALIGN_BIN).toInt()
         val hi = (maxOffsetSec / ALIGN_BIN).toInt()
         val shifts = hi - lo + 1
-        val rs = FloatArray(shifts)
+        val rs = DoubleArray(shifts)
         val dest = LongArray(words)
         val lastBits = n and 63
 
-        var peak = -2f
+        var peak = -2.0
         var bestShift = 0
-        var bestSb = 0
         for (idx in 0 until shifts) {
             val shift = idx + lo
             shiftB(B, bWords, dest, words, shift)
             if (lastBits != 0) dest[words - 1] = dest[words - 1] and ((1L shl lastBits) - 1)
             var sB = 0
             for (k in 0 until words) sB += java.lang.Long.bitCount(dest[k])
-            if (sB == 0 || sB == n) { rs[idx] = -2f; continue }
+            if (sB == 0 || sB == n) { rs[idx] = -2.0; continue }
             var sAB = 0L
             for (p in 0 until 8) {
                 val pl = planes[p]
@@ -220,19 +219,22 @@ object SpeechCorrelator {
             val num = n * (sAB.toDouble() / 255.0) - sumA * sB
             val varB = n.toDouble() * sB - (sB.toDouble() * sB)
             val den = sqrt(varA * varB)
-            if (den < 1e-9) { rs[idx] = -2f; continue }
-            val r = (num / den).toFloat()
+            if (den < 1e-9) { rs[idx] = -2.0; continue }
+            // Double throughout, matching the oracle: a Float r rounds at
+            // ~1e-7 and margin = peak - second subtracts two near-equal r
+            // values, so the ~0.12 gate could flip on the rounding.
+            val r = num / den
             rs[idx] = r
-            if (r > peak) { peak = r; bestShift = shift; bestSb = sB }
+            if (r > peak) { peak = r; bestShift = shift }
         }
-        if (peak <= -2f) return Outcome.NoMatch
+        if (peak <= -2.0) return Outcome.NoMatch
 
         // prominence: best shift at least EXCLUSION_BINS away
-        var second = -2f
+        var second = -2.0
         for (idx in 0 until shifts) {
             if (abs(idx + lo - bestShift) > EXCLUSION_BINS && rs[idx] > second) second = rs[idx]
         }
-        val margin = if (second <= -2f) peak else peak - second
+        val margin = if (second <= -2.0) peak else peak - second
 
         // containment diagnostic: speech bins covered at the peak
         shiftB(B, bWords, dest, words, bestShift)
