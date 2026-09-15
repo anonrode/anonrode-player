@@ -47,11 +47,13 @@ class OnsetCacheTest {
     }
 
     @Test
-    fun `hybrid union dedupes both sources together`() {
-        val sources = OnsetExtractor.OnsetSources(
-            silencedetect = listOf(1.0, 3.0),
-            vad = listOf(1.02, 2.5),
+    fun `union dedupes at the 50ms resolution the detectors have`() {
+        // The hybrid-union contract the cache merge relies on: 1.0 and
+        // 1.02 are one onset; 1.0 and 1.1 are two. OnsetCache.union IS
+        // mergeOnsets' semantics — exercised directly, no Context needed.
+        assertEquals(
+            listOf(1.0, 2.5, 3.0),
+            OnsetCache.mergeOnsets(listOf(1.0, 3.0), listOf(1.02, 2.5)),
         )
-        assertEquals(listOf(1.0, 2.5, 3.0), sources.hybrid)
     }
 }
