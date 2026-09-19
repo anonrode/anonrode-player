@@ -217,7 +217,7 @@ fun PlayerScreen(
      * [quick.subSyncEnabled] below so the hero chip reflects restarts /
      * external Settings edits immediately.
      */
-    subtitleAutoSyncEnabled: Boolean = false,
+    subtitleAutoSyncEnabled: Boolean = true,
     /**
      * True while ANY host-owned sheet is open (cast picker, EQ panel, audio
      * track, subtitle style, subtitle source, settings). The chrome's

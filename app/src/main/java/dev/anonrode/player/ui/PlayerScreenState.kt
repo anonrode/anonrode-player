@@ -270,7 +270,7 @@ internal class QuickRowUiState(initialHwDecoder: Boolean) {
      * so the toggle icon flips instantly without a DataStore round-trip.
      * Persisted to DataStore on every change.
      */
-    val subSyncEnabled = mutableStateOf(false)
+    val subSyncEnabled = mutableStateOf(true)
 
     /**
      * True while a sync pass is actually working (live correlation window

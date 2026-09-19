@@ -33,7 +33,7 @@ data class PlayerSettings(
      * player chrome writes through to this field; PersistOnce the toggle
      * is ON it stays ON for every video until the user flips it back.
      */
-    val subtitleAutoSyncEnabled: Boolean = false,
+    val subtitleAutoSyncEnabled: Boolean = true,
     val autoAdvance: Boolean = true,
     val keepScreenOn: Boolean = true,
     val backgroundPlayback: Boolean = true,

@@ -75,6 +75,7 @@ class PlaybackEngine(
      *  a failed LIVE re-lock must not undo a good persisted one. Written on
      *  the main thread, read from the sync-eval worker thread. */
     @Volatile private var persistedAutoMs: Long = 0L
+    @Volatile private var persistedSpeed: Float = 1f
 
     /**
      * Cached media item + start position from the most recent [play] call.
@@ -123,6 +124,7 @@ class PlaybackEngine(
      */
     fun applyPersistedLock(autoOffsetMs: Long, speedFactor: Float) {
         persistedAutoMs = autoOffsetMs
+        persistedSpeed = speedFactor
         subtitleOffsetMs = autoOffsetMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
         AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor")
@@ -172,7 +174,15 @@ class PlaybackEngine(
      */
     fun setSubSyncEnabled(enabled: Boolean) {
         syncProcessor.setEnabled(enabled)
-        if (!enabled) {
+        if (enabled) {
+            if (persistedAutoMs != 0L || persistedSpeed != 1f) {
+                subtitleOffsetMs = persistedAutoMs + manualDelayMs
+                subtitleSpeedFactor = persistedSpeed
+            }
+            if (lastSyncCues.isNotEmpty()) {
+                syncProcessor.setCues(lastSyncCues)
+            }
+        } else {
             // P1-6: turning the flagship feature OFF must actually take
             // effect on the rendered subs NOW. Previously the applied auto
             // offset stayed on screen until the next play() — the user
@@ -477,6 +487,8 @@ class PlaybackEngine(
         syncProcessor.setCues(cues)
     }
 
+    val activeSyncCues: List<SubtitleCue> get() = lastSyncCues
+
     fun detachSyncProcessor() {
         lastSyncCues = emptyList()
         syncProcessor.setCues(emptyList())
@@ -500,6 +512,7 @@ class PlaybackEngine(
         // rather than dropping back to the bare manual delay — undoing a good
         // stored lock mid-episode would desync already-correct subtitles.
         subtitleOffsetMs = persistedAutoMs + manualDelayMs
+        subtitleSpeedFactor = persistedSpeed
         onLiveSyncNoMatch?.invoke()
     }
 
@@ -528,18 +541,19 @@ class PlaybackEngine(
         currentUri = uri
         currentMediaItem = mediaItem
         this.manualDelayMs = manualDelayMs
-        persistedAutoMs = if (syncEnabled) persistedAutoOffsetMs else 0L
+        persistedAutoMs = persistedAutoOffsetMs
+        persistedSpeed = persistedSpeedFactor
+        attachSyncProcessor(cues, 0L)
         if (syncEnabled) {
             subtitleOffsetMs = persistedAutoOffsetMs + manualDelayMs
             subtitleSpeedFactor = persistedSpeedFactor
-            attachSyncProcessor(cues, 0L)
         } else {
             // Auto-sync off: subs render exactly as timed in the file —
-            // no persisted lock, no live listening (empty cues = the
-            // processor's evaluate() never runs).
+            // no persisted lock applied, live listening gated by
+            // setSubSyncEnabled(false). Cues are safely staged in the
+            // processor so toggling ON mid-watch takes effect immediately.
             subtitleOffsetMs = manualDelayMs
             subtitleSpeedFactor = 1f
-            attachSyncProcessor(emptyList(), 0L)
         }
 
         // Resume position: caller's pre-read value wins (suspension-free hot

@@ -314,7 +314,7 @@ class PlayerActivity : ComponentActivity() {
      *  resume behavior, auto-sync gate, background-playback gate. The
      *  Compose tree collects its own live snapshot at the call site. */
     @Volatile
-    private var currentSettings: PlayerSettings = PlayerSettings()
+    private var currentSettings: PlayerSettings = PlayerSettings(subtitleAutoSyncEnabled = true)
 
     /** Everything [commitPlay] needs, stashed while the resume prompt is up.
      *  [gen] is the [openGeneration] that produced it: commitPlay refuses to
@@ -473,7 +473,7 @@ class PlayerActivity : ComponentActivity() {
         engine.onLiveSyncNoMatch = {
             handler.post {
                 if (currentSettings.subtitleAutoSyncEnabled) {
-                    scheduleFingerprintIfNeverChecked(keepSpinner = true)
+                    scheduleFingerprintIfNeverChecked(keepSpinner = true, immediate = true)
                 } else {
                     subSyncRunning = false
                 }
@@ -571,6 +571,7 @@ class PlayerActivity : ComponentActivity() {
                 // Live volume boost: the processor's gain is read per-buffer
                 // on the audio thread, so this applies mid-playback.
                 engine.setVolumeBoost(1f + s.volumeBoostPct / 100f)
+                engine.setSubSyncEnabled(s.subtitleAutoSyncEnabled)
             }
         }
 
@@ -964,6 +965,8 @@ class PlayerActivity : ComponentActivity() {
     private fun openVideo(uriStr: String, displayTitle: String) {
         val app = AnonrodeApp.get(this)
         val engine = app.engine
+        val prefSync = PlayerPrefs.autoSyncEnabled(this)
+        currentSettings = currentSettings.copy(subtitleAutoSyncEnabled = prefSync)
         // Supersede any in-flight open: cancel its coroutine and bump the
         // generation guard so work already past its last suspension point
         // aborts before touching the engine, shared state, or the queue.
@@ -1786,6 +1789,12 @@ class PlayerActivity : ComponentActivity() {
     private fun restartRenderLoop(cues: List<SubtitleCue>) {
         renderTick?.let { handler.removeCallbacks(it) }
         lastCues = cues
+        if (cues.isNotEmpty()) {
+            val eng = AnonrodeApp.get(this).engine
+            if (eng.activeSyncCues.isEmpty()) {
+                eng.attachSyncCues(cues)
+            }
+        }
         val tick = object : Runnable {
             override fun run() {
                 val engine = AnonrodeApp.get(this@PlayerActivity).engine
@@ -1965,10 +1974,8 @@ class PlayerActivity : ComponentActivity() {
                         // Same cues-only attach as the AUTO landing below:
                         // playback already re-anchored the clock at play();
                         // a fresh anchor here would mislabel every bin.
-                        if (currentSettings.subtitleAutoSyncEnabled) {
-                            AnonrodeApp.get(this@PlayerActivity).engine
-                                .attachSyncCues(chosen)
-                        }
+                        AnonrodeApp.get(this@PlayerActivity).engine
+                            .attachSyncCues(chosen)
                     }
                     return@launch
                 }
@@ -2031,10 +2038,8 @@ class PlayerActivity : ComponentActivity() {
                     // 0 here mislabeled every audio bin by the resume
                     // position — the live engine could then never lock
                     // (±40 s search window) on any resumed episode.
-                    if (currentSettings.subtitleAutoSyncEnabled) {
-                        AnonrodeApp.get(this@PlayerActivity).engine
-                            .attachSyncCues(cues)
-                    }
+                    AnonrodeApp.get(this@PlayerActivity).engine
+                        .attachSyncCues(cues)
                 }
             } catch (e: CancellationException) {
                 // Normal: a newer openVideo superseded us.
@@ -2075,6 +2080,8 @@ class PlayerActivity : ComponentActivity() {
      */
     private fun onSetSubSyncEnabled(enabled: Boolean) {
         val app = AnonrodeApp.get(this)
+        PlayerPrefs.saveAutoSyncEnabled(this, enabled)
+        currentSettings = currentSettings.copy(subtitleAutoSyncEnabled = enabled)
         app.engine.setSubSyncEnabled(enabled)
         // v0.7.1 honest spinner: ON with no lock yet in place = the engine
         // is (or will be) correlating; OFF or a lock already applied = idle.
@@ -2084,12 +2091,6 @@ class PlayerActivity : ComponentActivity() {
             // starts evaluating at the next slot; a persisted lock (if
             // one lands from the background job) clears this via the Room
             // collector + onLiveSyncLocked.
-            // v0.7.4 P1-2: scheduleSyncNowIfCuesMissing -> schedule-
-            // FingerprintIfNeverChecked reads the store itself, so it both
-            // kicks the background pass AND applies (and stops the spinner
-            // for) a lock that was already in the DB — the Room collector
-            // only re-fires on a ROW CHANGE, so the pre-session lock is
-            // applied there, not by a second read from here.
             scheduleSyncNowIfCuesMissing()
         }
         lifecycleScope.launch {
@@ -2124,14 +2125,13 @@ class PlayerActivity : ComponentActivity() {
      *      we avoid enqueueing pointless work).
      */
     private fun scheduleSyncNowIfCuesMissing() {
-        if (!currentSettings.subtitleAutoSyncEnabled) return
         val app = AnonrodeApp.get(this)
         val cues = lastCues
         if (cues.isNotEmpty()) {
             app.engine.attachSyncCues(cues)
             AppLog.d("SYNC", "toggle ON mid-playback: re-attached ${cues.size} cues")
         }
-        scheduleFingerprintIfNeverChecked()
+        scheduleFingerprintIfNeverChecked(immediate = true)
     }
 
     /**
@@ -2147,7 +2147,7 @@ class PlayerActivity : ComponentActivity() {
      * background pass is queued/running and drops when there is nothing left
      * to run (already checked, or a lock in place).
      */
-    private fun scheduleFingerprintIfNeverChecked(keepSpinner: Boolean = false) {
+    private fun scheduleFingerprintIfNeverChecked(keepSpinner: Boolean = false, immediate: Boolean = false) {
         val uri = currentUriStr ?: return
         val app = AnonrodeApp.get(this)
         lifecycleScope.launch(Dispatchers.IO) {
@@ -2194,7 +2194,7 @@ class PlayerActivity : ComponentActivity() {
                     return@launch
                 }
             }
-            AppLog.d("SYNC", "scheduling fingerprint for current video")
+            AppLog.d("SYNC", "scheduling fingerprint for current video (immediate=$immediate)")
             // v0.7.4 P1-2: we are now genuinely waiting on a background
             // verdict — arm the collector so its sentinel+checked emission
             // (a refused fit / no-usable-subtitle) stops the spinner, while
@@ -2202,7 +2202,13 @@ class PlayerActivity : ComponentActivity() {
             // scheduled here) stays gated off.
             syncAwaitingBackgroundVerdict = true
             if (keepSpinner) handler.post { subSyncRunning = true }
-            SyncFingerprint.scheduleSuspending(applicationContext, uri, force = false)
+            SyncFingerprint.scheduleSuspending(
+                applicationContext,
+                uri,
+                force = false,
+                immediate = immediate,
+                overrideEnabled = true,
+            )
         }
     }
 

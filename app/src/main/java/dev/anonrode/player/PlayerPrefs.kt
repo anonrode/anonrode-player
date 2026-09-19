@@ -21,6 +21,7 @@ object PlayerPrefs {
     private const val FILE = "player_prefs"
     private const val KEY_SUB_POS_DEFAULT = "sub_pos_default"
     private const val KEY_PLAY_SPEED = "play_speed"
+    private const val KEY_SUBTITLE_AUTO_SYNC = "subtitle_auto_sync_enabled"
     private const val KEY_SUB_POS_MRU = "sub_pos_mru"
     private const val SUB_POS_PREFIX = "sub_pos_"
     private const val MAX_SUB_POS_ENTRIES = 256
@@ -84,6 +85,14 @@ object PlayerPrefs {
 
     fun saveGlobalSpeed(context: Context, speed: Float) {
         prefs(context).edit().putString(KEY_PLAY_SPEED, speed.toString()).apply()
+    }
+
+    /** Global auto-sync toggle; defaults to true so the flagship feature is always on. */
+    fun autoSyncEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SUBTITLE_AUTO_SYNC, true)
+
+    fun saveAutoSyncEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SUBTITLE_AUTO_SYNC, enabled).apply()
     }
 
     private fun parse(value: String): Pair<Float, Float>? {

@@ -181,13 +181,9 @@ class AudioSyncProcessor(
             // flip stayed dead until the next seek even though the budget
             // re-armed (the gaveUp branch below was unreachable-by-effect).
             locked = false
-        } else if (gaveUp) {
-            // Re-arm on the OFF→ON flip itself: without this the processor
-            // stays dormant until the next seek/discontinuity resets the
-            // window (resetWindow), so flipping the toggle back ON
-            // mid-playback produced no live re-lock for the rest of the
-            // episode. Re-arming here keeps the already-accumulated bins —
-            // evaluation resumes at the next eval slot (~1s of audio).
+        } else {
+            // Re-arm on the OFF→ON flip: keeps already-accumulated bins and
+            // resumes evaluation at the next eval slot.
             passesUsed = 0
             gaveUp = false
             locked = false // belt & braces: never inherit a stale lock

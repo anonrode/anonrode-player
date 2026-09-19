@@ -345,6 +345,7 @@ fun SettingsScreen(
             item("sec-subs") { SectionHeader(palette, "Subtitles") }
 
             item("autosync") {
+                val current = settings.subtitleAutoSyncEnabled
                 SettingsRow(
                     palette = palette,
                     icon = Icons.Filled.AutoAwesome,
@@ -353,8 +354,12 @@ fun SettingsScreen(
                     trailing = {
                         ToggleSwitch(
                             palette = palette,
-                            on = settings.autoSyncEnabled,
-                            onToggle = { persist { it.copy(autoSyncEnabled = !it.autoSyncEnabled) } },
+                            on = current,
+                            onToggle = {
+                                val next = !current
+                                PlayerPrefs.saveAutoSyncEnabled(context, next)
+                                persist { it.copy(subtitleAutoSyncEnabled = next, autoSyncEnabled = next) }
+                            },
                         )
                     },
                 )

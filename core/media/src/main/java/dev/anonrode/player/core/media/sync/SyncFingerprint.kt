@@ -58,22 +58,22 @@ object SyncFingerprint {
      * Callers must invoke this on a background dispatcher (Dispatchers.IO)
      * — the Flow read is suspending.
      */
-    suspend fun scheduleSuspending(context: Context, videoUri: String, force: Boolean = false) {
-        val enabled = try {
+    suspend fun scheduleSuspending(
+        context: Context,
+        videoUri: String,
+        force: Boolean = false,
+        immediate: Boolean = false,
+        overrideEnabled: Boolean? = null,
+    ) {
+        val enabled = overrideEnabled ?: try {
             context.playerSettingsDataStore.data.first().subtitleAutoSyncEnabled
         } catch (_: Throwable) {
             false
         }
         if (!enabled) return
-        // v0.7.4 P1-3: an explicit "Resync now" must not sit blocked in
-        // WorkManager because the battery happens to be low — the user is
-        // watching, waiting, and pressed the button on purpose, and the
-        // whole-file decode can take minutes with no progress notification.
-        // batteryNotLow stays on the BACKGROUND auto-schedule (defer the
-        // CPU-heavy pass until the phone is healthy), but a forced run drops
-        // all constraints so it executes immediately.
+        val runNow = force || immediate
         val constraints = Constraints.Builder()
-            .apply { if (!force) setRequiresBatteryNotLow(true) }
+            .apply { if (!runNow) setRequiresBatteryNotLow(true) }
             .build()
         val request = OneTimeWorkRequestBuilder<SyncFingerprintJob>()
             .setInputData(
@@ -83,11 +83,7 @@ object SyncFingerprint {
                 )
             )
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            // v0.7.1 speed pass: an explicit "Resync now" runs IMMEDIATELY
-            // (no initial delay) — the user is watching and asked. The
-            // background auto-schedule keeps the 90s delay so the decode
-            // pass doesn't fight the viewing session for CPU/IO.
-            .setInitialDelay(if (force) 0 else 90, TimeUnit.SECONDS)
+            .setInitialDelay(if (runNow) 0 else 90, TimeUnit.SECONDS)
             .setConstraints(constraints)
             .addTag(WORK_TAG)
             .build()
@@ -101,16 +97,19 @@ object SyncFingerprint {
     /**
      * Fire-and-forget shim for callers that don't already hold a
      * coroutine scope. Delegates to [scheduleSuspending] on a
-     * process-global IO scope. Kept for backward compatibility with
-     * legacy call sites that invoke from imperative code paths; new
-     * call sites should prefer [scheduleSuspending] (the suspending
-     * entry point).
+     * process-global IO scope.
      */
     @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     @Suppress("OPT_IN_USAGE")
-    fun schedule(context: Context, videoUri: String) {
+    fun schedule(
+        context: Context,
+        videoUri: String,
+        force: Boolean = false,
+        immediate: Boolean = false,
+        overrideEnabled: Boolean? = null,
+    ) {
         GlobalScope.launch(Dispatchers.IO) {
-            scheduleSuspending(context.applicationContext, videoUri)
+            scheduleSuspending(context.applicationContext, videoUri, force, immediate, overrideEnabled)
         }
     }
 
