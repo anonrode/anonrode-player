@@ -101,9 +101,20 @@ internal fun Modifier.playerGestureLayer(
                     }
                 },
                 onDoubleTap = { off ->
-                    if (isPipMode || ui.locked.value || !doubleTapSeekEnabled) return@detectTapGestures
-                    val dir = if (off.x < gestures.scrW.floatValue / 2) -1 else 1
-                    actions.seekBy(dir * actions.seekIncrementSec)
+                    if (isPipMode || ui.locked.value) return@detectTapGestures
+                    val w = gestures.scrW.floatValue
+                    val x = off.x
+                    when {
+                        x < w * 0.35f -> {
+                            if (doubleTapSeekEnabled) actions.seekBy(-actions.seekIncrementSec)
+                        }
+                        x > w * 0.65f -> {
+                            if (doubleTapSeekEnabled) actions.seekBy(actions.seekIncrementSec)
+                        }
+                        else -> {
+                            actions.togglePlayPause()
+                        }
+                    }
                     ui.controlsVisible.value = false
                 },
                 onLongPress = {
@@ -216,7 +227,7 @@ internal fun Modifier.playerGestureLayer(
                 onDragCancel = { gestures.mode.value = null },
             )
         }
-        // Hold-to-2× speed boost (MX Player / YouTube style): keep a
+        // Hold-to-2× speed boost: keep a
         // finger pressed on the video and playback jumps to 2× after
         // a long-press; lifting the finger restores whatever speed
         // was active before the hold. detectTapGestures' onLongPress

@@ -168,6 +168,8 @@ internal fun PlayerScreenBottomBar(
 
         // ── 2) Transport + utility — auto-hide together (one AnimatedVisibility
         //    so they never disagree about when the chrome is up).
+        var showSpeedStrip by remember { mutableStateOf(false) }
+
         androidx.compose.animation.AnimatedVisibility(
             visible = visible,
             enter = fadeIn(animationSpec = tween(220)) +
@@ -189,12 +191,26 @@ internal fun PlayerScreenBottomBar(
                     onSeekBack = { actions.seekBy(-seekIncrementSec) },
                     onSeekForward = { actions.seekBy(seekIncrementSec) },
                 )
+                if (showSpeedStrip) {
+                    Spacer(Modifier.height(PlayerDimens.gapXs))
+                    SpeedSelectorRow(
+                        speeds = actions.speeds,
+                        selectedSpeed = actions.speeds[actions.speedIdx.intValue],
+                        accent = accent,
+                        onSelectSpeed = { sp ->
+                            actions.setSpeed(sp)
+                            showSpeedStrip = false
+                        },
+                    )
+                }
                 Spacer(Modifier.height(PlayerDimens.gapXs))
                 UtilityRow(
                     accent = accent,
                     liveOffsetMs = liveOffsetMs,
                     hasSubtitleTrack = hasSubtitleTrack,
                     actions = actions,
+                    showSpeedStrip = showSpeedStrip,
+                    onToggleSpeedStrip = { showSpeedStrip = !showSpeedStrip },
                 )
             }
         }
@@ -466,6 +482,8 @@ private fun UtilityRow(
     liveOffsetMs: Long,
     hasSubtitleTrack: Boolean,
     actions: PlayerScreenActions,
+    showSpeedStrip: Boolean = false,
+    onToggleSpeedStrip: () -> Unit = {},
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val w = maxWidth
@@ -504,46 +522,15 @@ private fun UtilityRow(
                 compact = compactSync,
             )
 
-            // 2) speed — a pill that SHOWS the rate; tap = pick from the
-            //    six allowed values (was: an icon that blindly cycled, only
-            //    reachable from the sheet at all in v0.7.2).
-            var speedMenu by remember { mutableStateOf(false) }
-            Box {
-                TextPill(
-                    text = speedLabel(actions.speeds[actions.speedIdx.intValue]),
-                    accent = accent,
-                    selected = abs(actions.speeds[actions.speedIdx.intValue] - 1f) >= 0.05f,
-                    onClick = { speedMenu = true },
-                )
-                DropdownMenu(
-                    expanded = speedMenu,
-                    onDismissRequest = { speedMenu = false },
-                    containerColor = MxPanel,
-                ) {
-                    actions.speeds.forEach { sp ->
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    speedLabel(sp),
-                                    color = if (
-                                        abs(actions.speeds[actions.speedIdx.intValue] - sp) < 0.05f
-                                    ) accent else Color.White,
-                                )
-                            },
-                            leadingIcon = {
-                                if (abs(actions.speeds[actions.speedIdx.intValue] - sp) < 0.05f) {
-                                    Icon(Icons.Filled.Check, null, tint = accent,
-                                        modifier = Modifier.size(18.dp))
-                                }
-                            },
-                            onClick = {
-                                speedMenu = false
-                                actions.setSpeed(sp)
-                            },
-                        )
-                    }
-                }
-            }
+            // 2) speed — a pill that SHOWS the rate; tap = toggle inline speed strip,
+            //    long-press = quick reset to 1.0×.
+            TextPill(
+                text = speedLabel(actions.speeds[actions.speedIdx.intValue]),
+                accent = accent,
+                selected = showSpeedStrip || abs(actions.speeds[actions.speedIdx.intValue] - 1f) >= 0.05f,
+                onClick = onToggleSpeedStrip,
+                onLongClick = { actions.setSpeed(1f) },
+            )
 
             // 3) CC — subtitle visibility toggle; present iff the media has
             //    any subtitle source (track or sidecar), never blinks with
@@ -572,16 +559,19 @@ private fun UtilityRow(
                 )
             }
 
-            // 5) aspect — labeled with the CURRENT mode, tap = direct pick
-            //    of any of the five modes (was: two sheet tiles blindly
-            //    cycling the same 5 entries).
+            // 5) aspect — tap = instant cycle; long-press = direct pick menu
             var aspectMenu by remember { mutableStateOf(false) }
+            val cycleAspect = {
+                val nextIdx = (actions.ui.zoomIdx.intValue + 1) % ZoomModes.size
+                actions.setZoom(nextIdx)
+            }
             Box {
                 if (showAspectLabel) {
                     TextPill(
                         text = ZoomModes[actions.ui.zoomIdx.intValue].abbreviation,
                         accent = accent,
-                        onClick = { aspectMenu = true },
+                        onClick = cycleAspect,
+                        onLongClick = { aspectMenu = true },
                     )
                 } else {
                     ControlChip(
@@ -589,13 +579,14 @@ private fun UtilityRow(
                         contentDescription = "Aspect: " +
                             ZoomModes[actions.ui.zoomIdx.intValue].abbreviation,
                         accent = accent,
-                        onClick = { aspectMenu = true },
+                        onClick = cycleAspect,
+                        onLongClick = { aspectMenu = true },
                     )
                 }
                 DropdownMenu(
                     expanded = aspectMenu,
                     onDismissRequest = { aspectMenu = false },
-                    containerColor = MxPanel,
+                    containerColor = OverlayPanelBg,
                 ) {
                     ZoomModes.forEachIndexed { idx, mode ->
                         DropdownMenuItem(
@@ -629,6 +620,51 @@ private fun UtilityRow(
                 onCycle = { actions.cycleRotateMode() },
                 onSetMode = { actions.setRotateMode(it) },
             )
+        }
+    }
+}
+
+/** Inline speed selector row (0.5× to 2.0×) toggled smoothly without covering the screen. */
+@Composable
+private fun SpeedSelectorRow(
+    speeds: List<Float>,
+    selectedSpeed: Float,
+    accent: Color,
+    onSelectSpeed: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapSm, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        speeds.forEach { sp ->
+            val isSelected = abs(sp - selectedSpeed) < 0.05f
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(
+                        if (isSelected) accent.copy(alpha = 0.25f)
+                        else Color.Black.copy(alpha = 0.6f)
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = if (isSelected) accent else Color.White.copy(alpha = 0.20f),
+                        shape = RoundedCornerShape(999.dp),
+                    )
+                    .clickable { onSelectSpeed(sp) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = speedLabel(sp),
+                    color = if (isSelected) accent else Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                )
+            }
         }
     }
 }

@@ -65,7 +65,7 @@ import androidx.compose.ui.unit.sp
  *
  * This rewrite is sectioned (Playback / Picture / Audio / Subtitles) with
  * every tile showing its live current value, active state in the SKIN
- * accent (the hardcoded MxGreen is gone), and the dead ends wired:
+ * accent, and the dead ends wired:
  * subtitle source, subtitle style, the EQ panel, the full sleep option
  * list, and Settings as a footer.
  *
@@ -120,7 +120,7 @@ internal fun PlayerControlCenterSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MxPanel,
+        containerColor = OverlayPanelBg,
         contentColor = Color.White,
         scrimColor = Color.Black.copy(alpha = 0.55f),
         dragHandle = {

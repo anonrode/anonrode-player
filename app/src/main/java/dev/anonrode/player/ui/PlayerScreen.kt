@@ -400,7 +400,7 @@ fun PlayerScreen(
     SubtitlePositionRestoreEffect(mediaId, context, gestures)
     SubtitlePositionPresetEffect(subtitleStyle.position, context, mediaId, gestures)
     FirstFramePosterEffect(mediaId, context, ui)
-    // v0.7.1: throttled frame previews for the MX-style scrub bubble.
+    // v0.7.1: throttled frame previews for the scrub bubble.
     ScrubPreviewEffect(mediaId, context, ui, gestures)
 
     // Overlays anchor off the MEASURED chrome heights (see the bars'
@@ -436,7 +436,7 @@ fun PlayerScreen(
             onPlayerView = { ui.playerViewRef.value = it },
         )
 
-        // ── subtitle: MX outline, long-press draggable ──
+        // ── subtitle: high-contrast outline, draggable ──
         if (ui.showCC.value && !isPipMode) {
             cueText?.let { txt ->
                 PlayerSubtitleOverlay(

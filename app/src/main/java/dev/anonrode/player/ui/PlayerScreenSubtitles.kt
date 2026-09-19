@@ -33,9 +33,9 @@ private val SubtitleOutlineOffsets = listOf(
 )
 
 /**
- * The subtitle cue: MX-outlined (bold + black outline, no box), centered
- * on a draggable stage position (persisted per video), long-press opens
- * the style dropdown. [modifier] carries the caller's BoxScope alignment.
+ * The subtitle cue: high-contrast outlined (bold + black outline, no box), centered
+ * on a draggable stage position (persisted per video and globally).
+ * [modifier] carries the caller's BoxScope alignment.
  */
 @Composable
 internal fun PlayerSubtitleOverlay(
@@ -65,33 +65,19 @@ internal fun PlayerSubtitleOverlay(
                 alpha = if (gestures.subDragging.value) 0.9f else 1f
             }
             .pointerInput(showCC) {
-                // Single long-press entry point (this used to be
-                // two competing handlers: a pointerInput menu
-                // opener plus a combinedClickable). A stationary
-                // long-press opens the style dropdown; a
-                // long-press that moves drags the cue anywhere on
-                // the stage (persisted per video). Plain taps are
-                // swallowed so they don't toggle the HUD.
-                detectTapGestures(
-                    onTap = { /* no-op: keep taps off the HUD toggle */ },
-                    onLongPress = {
-                        view.haptic(HapticFeedbackConstants.LONG_PRESS)
-                        gestures.subStyleMenuOpen.value = true
-                    },
-                )
                 detectDragGesturesAfterLongPress(
                     onDragStart = {
+                        view.haptic(HapticFeedbackConstants.LONG_PRESS)
                         gestures.subDragging.value = true
-                        gestures.subStyleMenuOpen.value = false
                     },
                     onDrag = { change, amount ->
                         change.consume()
-                        gestures.subX.floatValue = (gestures.subX.floatValue + amount.x / gestures.scrW.floatValue).coerceIn(SUB_X_MIN, SUB_X_MAX)
+                        gestures.subX.floatValue = SUB_DEFAULT_X
                         gestures.subY.floatValue = (gestures.subY.floatValue + amount.y / gestures.scrH.floatValue).coerceIn(SUB_Y_MIN, SUB_Y_MAX)
                     },
                     onDragEnd = {
                         gestures.subDragging.value = false
-                        PlayerPrefs.saveSubtitlePosition(context, mediaId, gestures.subX.floatValue, gestures.subY.floatValue)
+                        PlayerPrefs.saveSubtitlePosition(context, mediaId, SUB_DEFAULT_X, gestures.subY.floatValue)
                     },
                     onDragCancel = { gestures.subDragging.value = false },
                 )
@@ -122,8 +108,8 @@ internal fun PlayerSubtitleOverlay(
 }
 
 /**
- * MX subtitle look: bold white text with a black 8-way outline, no
- * background box, centered, at most two lines. Styled from the host-owned
+ * High-contrast subtitle look: bold white text with a black 8-way outline, no
+ * background box, centered, at most three lines. Styled from the host-owned
  * [SubtitleStyle] (size + color; placement is drag-driven).
  */
 @Composable

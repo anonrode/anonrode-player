@@ -145,7 +145,7 @@ internal fun PlayerScreenRotateButton(
         DropdownMenu(
             expanded = menuOpen,
             onDismissRequest = { menuOpen = false },
-            containerColor = MxPanel,
+            containerColor = OverlayPanelBg,
         ) {
             RotateDropdownItem(
                 icon = Icons.Filled.ScreenRotation,
@@ -157,7 +157,7 @@ internal fun PlayerScreenRotateButton(
                     if (mode != RotateMode.SENSOR) onSetMode(RotateMode.SENSOR)
                 },
             )
-            HorizontalDivider(color = MxMenuDivider)
+            HorizontalDivider(color = OverlayMenuDivider)
             RotateDropdownItem(
                 icon = Icons.Filled.StayCurrentLandscape,
                 label = "Landscape locked",
@@ -168,7 +168,7 @@ internal fun PlayerScreenRotateButton(
                     if (mode != RotateMode.LANDSCAPE) onSetMode(RotateMode.LANDSCAPE)
                 },
             )
-            HorizontalDivider(color = MxMenuDivider)
+            HorizontalDivider(color = OverlayMenuDivider)
             RotateDropdownItem(
                 icon = Icons.Filled.StayCurrentPortrait,
                 label = "Portrait locked",

@@ -633,17 +633,17 @@ class PlayerActivity : ComponentActivity() {
                             onBack = { finish() },
                             initialSpeed = restoredSpeed,
                             onSpeedChanged = { speed ->
-                                // Persist per-video playback speed (Room, media_state).
-                                // The global pref is intentionally NOT written here:
-                                // in-player speed changes are per-video; the settings
-                                // screen owns defaultPlaybackSpeed / global speed.
                                 sessionSpeed = speed
+                                PlayerPrefs.saveGlobalSpeed(this@PlayerActivity, speed)
                                 val targetUri = currentUriStr
-                                if (targetUri != null) {
-                                    lifecycleScope.launch(Dispatchers.IO) {
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    if (targetUri != null) {
                                         app.stateStore.updatePlaybackSpeed(targetUri, speed)
                                         AppLog.d("SPEED", "persisted $speed for $targetUri")
                                     }
+                                    try {
+                                        app.playerSettingsDataStore.updateData { it.copy(defaultPlaybackSpeed = speed) }
+                                    } catch (_: Throwable) {}
                                 }
                             },
                             isPipMode = pipMode,
@@ -1101,9 +1101,10 @@ class PlayerActivity : ComponentActivity() {
                 // last-used play_speed preference, then the session speed.
                 // (this@PlayerActivity: inside launch{} `this` is the scope)
                 val speed = app.stateStore.savedPlaybackSpeed(uriStr)
-                    ?: currentSettings.defaultPlaybackSpeed.takeIf { it > 0f }
                     ?: PlayerPrefs.globalSpeed(this@PlayerActivity)
                     ?: sessionSpeed
+                    ?: currentSettings.defaultPlaybackSpeed.takeIf { it > 0f }
+                    ?: 1f
                 if (gen != openGeneration) return@launch
                 sessionSpeed = speed
 

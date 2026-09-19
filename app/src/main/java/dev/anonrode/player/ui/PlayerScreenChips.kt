@@ -58,8 +58,7 @@ import androidx.compose.ui.unit.sp
 /**
  * Circular icon control. [size] is the painted circle; the touch cell is
  * `max(size, 48dp)`. [selected] paints the accent state — accent is the
- * ONLY active color in the chrome (the sheet's hardcoded MxGreen is gone
- * with this redesign, so a selected control matches the user's skin).
+ * ONLY active color in the chrome (a selected control matches the user's skin).
  */
 @Composable
 internal fun ControlChip(

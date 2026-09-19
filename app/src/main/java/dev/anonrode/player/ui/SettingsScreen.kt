@@ -414,7 +414,7 @@ fun SettingsScreen(
                     palette = palette,
                     icon = Icons.Filled.FormatBold,
                     title = "Bold subtitles",
-                    subtitle = "MX-style bold outlined look",
+                    subtitle = "High-contrast bold outlined look",
                     trailing = {
                         ToggleSwitch(
                             palette = palette,

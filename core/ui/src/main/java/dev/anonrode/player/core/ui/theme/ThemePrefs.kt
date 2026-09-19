@@ -18,16 +18,21 @@ import kotlinx.coroutines.flow.asStateFlow
  * subtitles + transport stay readable on bright frames.
  */
 enum class Skin(val displayName: String) {
-    MX("MX GREEN"),
-    SIGNAL("SIGNAL TEAL"),
+    COBALT("COBALT"),
+    AMBER("AMBER"),
     LIGHT("LIGHT"),
-    BLACK("BLACK");
+    OBSIDIAN("OBSIDIAN");
 
     fun next(): Skin = entries[(ordinal + 1) % entries.size]
 
     companion object {
-        fun fromName(name: String?): Skin =
-            entries.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: MX
+        fun fromName(name: String?): Skin = when (name?.uppercase()) {
+            "COBALT", "MX" -> COBALT
+            "AMBER", "SIGNAL" -> AMBER
+            "LIGHT" -> LIGHT
+            "OBSIDIAN", "BLACK" -> OBSIDIAN
+            else -> entries.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: COBALT
+        }
     }
 }
 
@@ -106,82 +111,81 @@ data class SkinPalette(
 ) {
     companion object {
         fun forSkin(skin: Skin): SkinPalette = when (skin) {
-            // ── MX GREEN ───────────────────────────────────────────
-            // Colours mirror docs/ui-app-final.html body[data-pal="mx"].
-            Skin.MX -> SkinPalette(
-                accent = Color(0xFF00E676),
-                accentDeep = Color(0xFF0B8A4A),
-                accentSoft = Color(0x1400E676),
-                accentLine = Color(0x7300E676),
-                background = Color(0xFF0F0F13),
-                surface = Color(0xFF18181E),
-                surfaceLine = Color(0xFF26262E),
-                rowBg = Color(0xFF17171D),
-                rowLine = Color(0xFF23232B),
-                navBg = Color(0xFF141419),
-                navLine = Color(0xFF23232B),
-                text = Color.White,
-                textDim = Color(0xFFAAAAAA),
-                iconDim = Color(0xFFCFCFD8),
-                toggleOff = Color(0xFF3A3A44),
-                tabOn = Color.Black,
-            )
-            // ── SIGNAL TEAL ───────────────────────────────────────
-            Skin.SIGNAL -> SkinPalette(
-                accent = Color(0xFF2DE0B6),
-                accentDeep = Color(0xFF177E63),
-                accentSoft = Color(0x142DE0B6),
-                accentLine = Color(0x732DE0B6),
-                background = Color(0xFF0B0E14),
-                surface = Color(0xFF12161F),
-                surfaceLine = Color(0xFF1E2530),
-                rowBg = Color(0xFF12161F),
-                rowLine = Color(0xFF1E2530),
-                navBg = Color(0xFF0D1017),
+            // ── COBALT (Deep blue + matte basalt) ───────────────────
+            Skin.COBALT -> SkinPalette(
+                accent = Color(0xFF2563EB),
+                accentDeep = Color(0xFF1D4ED8),
+                accentSoft = Color(0x1F2563EB),
+                accentLine = Color(0x662563EB),
+                background = Color(0xFF0E1015),
+                surface = Color(0xFF161920),
+                surfaceLine = Color(0xFF262B37),
+                rowBg = Color(0xFF1B1F27),
+                rowLine = Color(0xFF262B37),
+                navBg = Color(0xFF12141A),
                 navLine = Color(0xFF20242E),
-                text = Color.White,
-                textDim = Color(0xFFAAAAAA),
-                iconDim = Color(0xFFCFCFD8),
-                toggleOff = Color(0xFF2A3240),
-                tabOn = Color.Black,
-            )
-            // ── LIGHT ─────────────────────────────────────────────
-            Skin.LIGHT -> SkinPalette(
-                accent = Color(0xFF00A84D),
-                accentDeep = Color(0xFF007A38),
-                accentSoft = Color(0x1A00A84D),
-                accentLine = Color(0x7300A84D),
-                background = Color(0xFFF4F5F8),
-                surface = Color.White,
-                surfaceLine = Color(0xFFE0E3EC),
-                rowBg = Color.White,
-                rowLine = Color(0xFFE4E7EE),
-                navBg = Color.White,
-                navLine = Color(0xFFE4E7EE),
-                text = Color(0xFF1A1C22),
-                textDim = Color(0xFF6A7080),
-                iconDim = Color(0xFF4A4F5C),
-                toggleOff = Color(0xFFC7CDDA),
+                text = Color(0xFFF3F4F6),
+                textDim = Color(0xFF9CA3AF),
+                iconDim = Color(0xFFD1D5DB),
+                toggleOff = Color(0xFF2B303D),
                 tabOn = Color.White,
             )
-            // ── BLACK ─────────────────────────────────────────────
-            Skin.BLACK -> SkinPalette(
-                accent = Color(0xFF00E676),
-                accentDeep = Color(0xFF0B8A4A),
-                accentSoft = Color(0x1400E676),
-                accentLine = Color(0x7300E676),
-                background = Color(0xFF000000),
-                surface = Color(0xFF121214),
-                surfaceLine = Color(0xFF232327),
-                rowBg = Color(0xFF121214),
-                rowLine = Color(0xFF232327),
-                navBg = Color(0xFF0A0A0C),
-                navLine = Color(0xFF1F1F23),
-                text = Color.White,
-                textDim = Color(0xFFAAAAAA),
-                iconDim = Color(0xFFCFCFD8),
-                toggleOff = Color(0xFF333338),
-                tabOn = Color.Black,
+            // ── AMBER (Warm media studio amber) ─────────────────────
+            Skin.AMBER -> SkinPalette(
+                accent = Color(0xFFD97706),
+                accentDeep = Color(0xFFB45309),
+                accentSoft = Color(0x1FD97706),
+                accentLine = Color(0x66D97706),
+                background = Color(0xFF0F1014),
+                surface = Color(0xFF17181F),
+                surfaceLine = Color(0xFF272935),
+                rowBg = Color(0xFF1C1D26),
+                rowLine = Color(0xFF272935),
+                navBg = Color(0xFF13141A),
+                navLine = Color(0xFF21232D),
+                text = Color(0xFFF4F4F6),
+                textDim = Color(0xFF9EA0AA),
+                iconDim = Color(0xFFD2D4DC),
+                toggleOff = Color(0xFF2E303D),
+                tabOn = Color.White,
+            )
+            // ── LIGHT (Clean studio alabaster) ──────────────────────
+            Skin.LIGHT -> SkinPalette(
+                accent = Color(0xFF1D4ED8),
+                accentDeep = Color(0xFF1E40AF),
+                accentSoft = Color(0x1A1D4ED8),
+                accentLine = Color(0x4D1D4ED8),
+                background = Color(0xFFF6F8FA),
+                surface = Color.White,
+                surfaceLine = Color(0xFFE2E5EB),
+                rowBg = Color.White,
+                rowLine = Color(0xFFECEEF2),
+                navBg = Color.White,
+                navLine = Color(0xFFE2E5EB),
+                text = Color(0xFF111827),
+                textDim = Color(0xFF4B5563),
+                iconDim = Color(0xFF374151),
+                toggleOff = Color(0xFFD1D5DB),
+                tabOn = Color.White,
+            )
+            // ── OBSIDIAN (Neutral monochrome slate) ─────────────────
+            Skin.OBSIDIAN -> SkinPalette(
+                accent = Color(0xFF64748B),
+                accentDeep = Color(0xFF475569),
+                accentSoft = Color(0x1F64748B),
+                accentLine = Color(0x6664748B),
+                background = Color(0xFF090A0D),
+                surface = Color(0xFF121418),
+                surfaceLine = Color(0xFF20232A),
+                rowBg = Color(0xFF16181F),
+                rowLine = Color(0xFF20232A),
+                navBg = Color(0xFF0E1013),
+                navLine = Color(0xFF1B1D23),
+                text = Color(0xFFEDEDEF),
+                textDim = Color(0xFF8E929E),
+                iconDim = Color(0xFFC8CBD4),
+                toggleOff = Color(0xFF282B33),
+                tabOn = Color.White,
             )
         }
     }

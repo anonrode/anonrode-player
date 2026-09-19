@@ -97,14 +97,10 @@ import java.util.Locale
 
 // ── Anonrode brand palette (legacy) ─────────────────────────────────────
 // Kept for any non-themed callers; new code should use rememberSkinPalette()
-// to pick up the active skin. The library now reads its surface / text
-// colours from the live skin so it stays in sync with player + settings.
-private val AccentPurple = Color(0xFF6C63FF)
-private val AccentTeal = Color(0xFF00D4AA)
+// Colours now read from the live skin palette so the library stays in sync
+// with the player and settings across Dark and Light modes.
 private val BrandTextPrimary = Color(0xFFF0F2F8)
 private val BrandTextSecondary = Color(0xFFF0F2F8).copy(alpha = 0.45f)
-
-private val ProgressBrush = Brush.horizontalGradient(listOf(Color(0xFF6C63FF), Color(0xFF00D4AA)))
 
 private typealias InProgressItem = dev.anonrode.player.feature.library.LibraryViewModel.InProgress
 private typealias EpisodeItem = dev.anonrode.player.feature.library.LibraryViewModel.EpisodeItem
@@ -323,7 +319,9 @@ fun LibraryScreen(
                     .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapSm),
             ) {
                 if (openFolder != null) {
-                    val total = fmtTotalDuration(folderEpisodes.sumOf { it.video.durationMs })
+                    val total = remember(folderEpisodes) {
+                        fmtTotalDuration(folderEpisodes.sumOf { it.video.durationMs })
+                    }
                     val countLabel =
                         if (openFolder.totalEpisodes == 1) "1 video"
                         else "${openFolder.totalEpisodes} videos"
@@ -684,26 +682,18 @@ private fun FolderRow(palette: SkinPalette, s: Series, onClick: () -> Unit, onPl
             .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapMd),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Folder icon tile — matches .coll .ic in the design.
+        // Folder icon tile
         Box(
             modifier = Modifier
                 .size(44.dp)
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            palette.accent.copy(alpha = 0.18f),
-                            palette.accent.copy(alpha = 0.06f),
-                        )
-                    ),
-                    RoundedCornerShape(10.dp),
-                ),
+                .background(palette.accentSoft, RoundedCornerShape(10.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 Icons.Filled.Folder,
                 contentDescription = null,
-                tint = palette.iconDim,
-                modifier = Modifier.size(20.dp),
+                tint = palette.accent,
+                modifier = Modifier.size(22.dp),
             )
         }
         Spacer(Modifier.width(Dimens.gapMd))
@@ -727,22 +717,17 @@ private fun FolderRow(palette: SkinPalette, s: Series, onClick: () -> Unit, onPl
                 color = palette.textDim,
             )
         }
-        // Kebab dots — design's `.coll .dots` — with folder actions.
-        // titleMedium size is intentional for the single-glyph "⋮" so it
-        // reads as a button affordance, not as body text — no standard
-        // role fits a 1-glyph button glyph.
         Box {
-            Text(
-                "⋮",
-                color = palette.iconDim,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier
-                    .clickable { menuOpen = true }
-                    .padding(horizontal = Dimens.gapSm, vertical = Dimens.gapXs)
-                    // 48dp touch target (M3 minimum) — the old Text was
-                    // ~24×30dp.
-                    .minimumInteractiveComponentSize(),
-            )
+            IconButton(
+                onClick = { menuOpen = true },
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    Icons.Filled.MoreVert,
+                    contentDescription = "Folder options",
+                    tint = palette.iconDim,
+                )
+            }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
                     text = { Text("Play all") },
@@ -868,8 +853,9 @@ private fun EpisodeRow(
                 )
             }
             if (fraction > 0f) {
-                GradientProgressBar(
-                    fraction,
+                ProgressBar(
+                    palette = palette,
+                    fraction = fraction,
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth(),
@@ -1039,11 +1025,14 @@ fun PosterArt(
     letterStyle: TextStyle? = null,
     videoUri: String? = null,
 ) {
-    val hue = posterHue(title)
-    val c1 = Color.hsv(hue, 0.62f, 0.60f)
-    val c2 = Color.hsv((hue + 42f) % 360f, 0.72f, 0.30f)
+    val hue = remember(title) { posterHue(title) }
+    val brush = remember(hue) {
+        val c1 = Color.hsv(hue, 0.40f, 0.42f)
+        val c2 = Color.hsv((hue + 38f) % 360f, 0.48f, 0.22f)
+        Brush.linearGradient(listOf(c1, c2))
+    }
     Box(
-        modifier = modifier.background(Brush.linearGradient(listOf(c1, c2)), RoundedCornerShape(cornerRadius)),
+        modifier = modifier.background(brush, RoundedCornerShape(cornerRadius)),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -1065,20 +1054,20 @@ fun PosterArt(
     }
 }
 
-/** Thin purple→teal progress bar over a faint track. */
+/** Clean watched progress bar matching the active theme accent. */
 @Composable
-private fun GradientProgressBar(fraction: Float, modifier: Modifier = Modifier) {
+private fun ProgressBar(palette: SkinPalette, fraction: Float, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(4.dp)
-            .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(2.dp)),
+            .background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(2.dp)),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(fraction.coerceIn(0f, 1f))
                 .height(4.dp)
-                .background(ProgressBrush, RoundedCornerShape(2.dp)),
+                .background(palette.accent, RoundedCornerShape(2.dp)),
         )
     }
 }
@@ -1124,7 +1113,7 @@ private fun ContinueCard(palette: SkinPalette, item: InProgressItem, onClick: ()
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.textDim,
             )
-            GradientProgressBar(item.fraction, modifier = Modifier.padding(top = Dimens.gapSm))
+            ProgressBar(palette, item.fraction, modifier = Modifier.padding(top = Dimens.gapSm))
         }
     }
 }

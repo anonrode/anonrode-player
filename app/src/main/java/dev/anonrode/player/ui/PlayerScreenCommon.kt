@@ -25,12 +25,9 @@ fun View.haptic(
 // stay readable. The skin's accent still bleeds through (TimeSeek pill,
 // HW chip, speed pill, SYNCED chip) but the scrims and panel stay dark.
 //
-// `MxGreen` is the default accent (MX GREEN skin) kept for parity with the
-// pre-split file; the live accent is resolved via [rememberSkinPalette] in
-// PlayerScreen and passed down.
-internal val MxGreen = Color(0xFF00E676)
-internal val MxPanel = Color(0xFF1C1C24)
-internal val MxMenuDivider = Color(0xFF33333B)
+// Overlay dark backgrounds and dividers
+internal val OverlayPanelBg = Color(0xFF1C1C24)
+internal val OverlayMenuDivider = Color(0xFF33333B)
 
 /** Subtitle drag safe margins, as fractions of the stage (box center). */
 internal const val SUB_X_MIN = 0.06f
