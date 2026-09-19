@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -218,6 +219,7 @@ internal fun PlayerScreenBottomBar(
  * Tap-to-toggle labels unchanged (left ↔ −remaining, right ↔ current).
  * ────────────────────────────────────────────────────────────────────── */
 
+@OptIn(ExperimentalMaterial3Api::class)
 @UnstableApi
 @Composable
 private fun SeekBarRow(
