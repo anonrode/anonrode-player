@@ -76,6 +76,7 @@ class OnsetExtractor(private val context: Context) {
     data class OnsetSources(
         val silencedetect: List<Double>,
         val vad: List<Double>,
+        val envelope: FloatArray = FloatArray(0),
     ) {
         /** Union with 50 ms dedup — the fix-1 hybrid source. */
         val hybrid: List<Double> by lazy {

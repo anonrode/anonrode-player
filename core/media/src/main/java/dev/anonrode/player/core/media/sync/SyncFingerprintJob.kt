@@ -289,10 +289,11 @@ class SyncFingerprintJob(
             if (sources.envelope.isNotEmpty() && cues.size >= 5) {
                 val model = SyncOrchestrator.syncWithEnvelope(sources.envelope, cues, sources.hybrid)
                 if (model != null) {
-                    lock = toLockCandidate(model, "envelope")
+                    val candidate = toLockCandidate(model, "envelope")
+                    lock = candidate
                     AppLog.d(
                         "SYNC_JOB",
-                        "Tier 1 envelope lock: offset=${lock.offsetMs}ms speed=${lock.speed} piecewise=${lock.piecewise} recall=${lock.recall}"
+                        "Tier 1 envelope lock: offset=${candidate.offsetMs}ms speed=${candidate.speed} piecewise=${candidate.piecewise} recall=${candidate.recall}"
                     )
                 }
             }
@@ -407,6 +408,43 @@ class SyncFingerprintJob(
      * Returns null when the source is refused so the caller can try the
      * next source; never returns an ungated lock.
      */
+    private fun toLockCandidate(
+        model: SyncOrchestrator.Model,
+        tag: String,
+    ): LockCandidate = when (model) {
+        is SyncOrchestrator.Model.Single -> {
+            // Deadband snapping: if framerate drift is nominal (alpha == 1.0)
+            // and offset is within human subtitle pre-roll lead-time / calculation lag
+            // (|beta| <= 0.20s / 200ms), snap to 0L so already well-synced subtitles
+            // are preserved with pristine original timing.
+            val effectiveOffsetMs = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.beta) <= 0.20) {
+                0L
+            } else {
+                (model.beta * 1000).toLong()
+            }
+            LockCandidate(
+                offsetMs = effectiveOffsetMs,
+                speed = model.alpha.toFloat(),
+                piecewise = "",
+                recall = model.recall,
+                tag = "$tag/${model.path}",
+            )
+        }
+        is SyncOrchestrator.Model.Cut -> {
+            val bb = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.betaBefore) <= 0.20) 0.0 else model.betaBefore
+            val ba = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.betaAfter) <= 0.20) 0.0 else model.betaAfter
+            LockCandidate(
+                offsetMs = (bb * 1000).toLong(),
+                speed = model.alpha.toFloat(),
+                piecewise = SyncFinder.piecewiseToStorage(
+                    model.cutAudio, bb, ba,
+                ),
+                recall = model.recallTwo,
+                tag = "$tag/cut-${model.confidence}",
+            )
+        }
+    }
+
     private fun attemptLock(
         onsets: List<Double>,
         starts: List<Double>,
@@ -416,39 +454,7 @@ class SyncFingerprintJob(
             AppLog.d("SYNC_JOB", "$tag: engine refused (gates)")
             return null
         }
-        return when (model) {
-            is SyncOrchestrator.Model.Single -> {
-                // Deadband snapping: if framerate drift is nominal (alpha == 1.0)
-                // and offset is within human subtitle pre-roll lead-time / calculation lag
-                // (|beta| <= 0.20s / 200ms), snap to 0L so already well-synced subtitles
-                // are preserved with pristine original timing.
-                val effectiveOffsetMs = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.beta) <= 0.20) {
-                    0L
-                } else {
-                    (model.beta * 1000).toLong()
-                }
-                LockCandidate(
-                    offsetMs = effectiveOffsetMs,
-                    speed = model.alpha.toFloat(),
-                    piecewise = "",
-                    recall = model.recall,
-                    tag = "$tag/${model.path}",
-                )
-            }
-            is SyncOrchestrator.Model.Cut -> {
-                val bb = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.betaBefore) <= 0.20) 0.0 else model.betaBefore
-                val ba = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.betaAfter) <= 0.20) 0.0 else model.betaAfter
-                LockCandidate(
-                    offsetMs = (bb * 1000).toLong(),
-                    speed = model.alpha.toFloat(),
-                    piecewise = SyncFinder.piecewiseToStorage(
-                        model.cutAudio, bb, ba,
-                    ),
-                    recall = model.recallTwo,
-                    tag = "$tag/cut-${model.confidence}",
-                )
-            }
-        }
+        return toLockCandidate(model, tag)
     }
 
     /**
