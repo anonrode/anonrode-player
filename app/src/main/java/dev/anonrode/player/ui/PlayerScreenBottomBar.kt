@@ -33,8 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ClosedCaption
-import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -52,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -178,21 +178,7 @@ internal fun PlayerScreenBottomBar(
                 slideOutVertically(animationSpec = tween(220)) { it / 2 },
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
-                Spacer(Modifier.height(PlayerDimens.gapSm))
-                TransportRow(
-                    accent = accent,
-                    isPlaying = isPlaying,
-                    hasPreviousEpisode = hasPreviousEpisode,
-                    hasNextEpisode = hasNextEpisode,
-                    seekIncrementSec = seekIncrementSec,
-                    onPlayPrevious = onPlayPrevious,
-                    onPlayNext = onPlayNext,
-                    onPlayPause = { actions.togglePlayPause() },
-                    onSeekBack = { actions.seekBy(-seekIncrementSec) },
-                    onSeekForward = { actions.seekBy(seekIncrementSec) },
-                )
                 if (showSpeedStrip) {
-                    Spacer(Modifier.height(PlayerDimens.gapXs))
                     SpeedSelectorRow(
                         speeds = actions.speeds,
                         selectedSpeed = actions.speeds[actions.speedIdx.intValue],
@@ -202,15 +188,23 @@ internal fun PlayerScreenBottomBar(
                             showSpeedStrip = false
                         },
                     )
+                    Spacer(Modifier.height(PlayerDimens.gapXs))
                 }
-                Spacer(Modifier.height(PlayerDimens.gapXs))
-                UtilityRow(
+                Spacer(Modifier.height(PlayerDimens.gapSm))
+                TransportRow(
                     accent = accent,
-                    liveOffsetMs = liveOffsetMs,
-                    hasSubtitleTrack = hasSubtitleTrack,
+                    isPlaying = isPlaying,
+                    hasPreviousEpisode = hasPreviousEpisode,
+                    hasNextEpisode = hasNextEpisode,
+                    seekIncrementSec = seekIncrementSec,
                     actions = actions,
                     showSpeedStrip = showSpeedStrip,
                     onToggleSpeedStrip = { showSpeedStrip = !showSpeedStrip },
+                    onPlayPrevious = onPlayPrevious,
+                    onPlayNext = onPlayNext,
+                    onPlayPause = { actions.togglePlayPause() },
+                    onSeekBack = { actions.seekBy(-seekIncrementSec) },
+                    onSeekForward = { actions.seekBy(seekIncrementSec) },
                 )
             }
         }
@@ -324,6 +318,14 @@ private fun SeekBarRow(
                     localSeek.floatValue = -1f
                 },
                 valueRange = 0f..dur,
+                thumb = {
+                    Box(
+                        modifier = Modifier
+                            .size(14.dp)
+                            .shadow(2.dp, CircleShape)
+                            .background(Color.White, CircleShape)
+                    )
+                },
                 // The painted Boxes above are the visible track; the M3
                 // track goes transparent so only the thumb + drag surface
                 // of the real Slider remain in play.
@@ -420,10 +422,7 @@ private fun ScrubBubble(
     }
 }
 
-/* ── Transport row — five fixed items, one layout everywhere ──────────────
- * ‹N · ⏮ · ▶(64) · ⏭ · N›  ≈ 304dp at gapMd, 288dp at gapSm on a 320dp
- * phone (328dp content). Haptics moved into the chip primitives.
- * ------------------------------------------------------------------------- */
+/* ── Transport row — clean 3-cluster layout: Lock · [‹N ⏮ ▶(64) ⏭ N›] · [Speed Pill · Aspect] ── */
 @Composable
 private fun TransportRow(
     accent: Color,
@@ -431,17 +430,31 @@ private fun TransportRow(
     hasPreviousEpisode: Boolean,
     hasNextEpisode: Boolean,
     seekIncrementSec: Int,
+    actions: PlayerScreenActions,
+    showSpeedStrip: Boolean,
+    onToggleSpeedStrip: () -> Unit,
     onPlayPrevious: () -> Unit,
     onPlayNext: () -> Unit,
     onPlayPause: () -> Unit,
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
 ) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val gap = if (maxWidth < 330.dp) PlayerDimens.gapSm else PlayerDimens.gapMd
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Left: Lock controls
+        ControlChip(
+            icon = Icons.Filled.Lock,
+            contentDescription = "Lock controls",
+            accent = accent,
+            onClick = { actions.lockControls() },
+        )
+
+        // Center: Transport cluster (⟲, ⏮, ▶/⏸, ⏭, ⟳)
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(gap, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapSm, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TimeSeekButton(
@@ -468,62 +481,12 @@ private fun TransportRow(
                 onClick = onSeekForward,
             )
         }
-    }
-}
 
-/* ── Utility row — the labeled daily-tool strip ───────────────────────────
- * [✨ sync] [1.0× speed] [CC] [♫ audio] [FIT aspect] [↻ rotate]
- * Every item is labeled or self-describing; the collapse tiers below are
- * the only responsive behaviour left in the dock.
- * ------------------------------------------------------------------------- */
-@Composable
-private fun UtilityRow(
-    accent: Color,
-    liveOffsetMs: Long,
-    hasSubtitleTrack: Boolean,
-    actions: PlayerScreenActions,
-    showSpeedStrip: Boolean = false,
-    onToggleSpeedStrip: () -> Unit = {},
-) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val w = maxWidth
-        // Label-collapse tiers (see file header): sync keeps a readable
-        // state at every width; aspect falls back to its icon below 420dp;
-        // the audio-track chip leaves the row below 340dp (it stays in the
-        // Control Center sheet).
-        val compactSync = w < 380.dp
-        val showAudio = w >= 340.dp
-        val showAspectLabel = w >= 420.dp
-
+        // Right: Speed pill & Aspect ratio
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement
-                .spacedBy(PlayerDimens.gapXs, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs, Alignment.End),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 1) the sync HERO chip (flagship feature, always in the row).
-            //    weight(fill=false) makes it the row's ONLY shrinkable item:
-            //    fixed-size chips (CC/audio/aspect/rotate = 48dp each, speed
-            //    ~50) with gaps already need ~262dp, and on 360dp-class
-            //    phones (the majority) the ~290–360dp of content width left
-            //    after padding can't also fit an 80–90dp locked sync label
-            //    — Compose does not shrink fixed children, so the tail of
-            //    the row clipped off-screen (the 0.7.1 portrait bug class).
-            //    Below the needed width the chip's label ellipsizes first.
-            PlayerSubSyncToggle(
-                modifier = Modifier.weight(1f, fill = false),
-                enabled = actions.quick.subSyncEnabled.value,
-                running = actions.quick.subSyncRunning.value,
-                offsetMs = liveOffsetMs,
-                accent = accent,
-                onEnable = { actions.setSubSyncEnabled(true) },
-                onOpenPopover = { actions.openSyncPopover() },
-                onResync = { actions.resyncNow() },
-                compact = compactSync,
-            )
-
-            // 2) speed — a pill that SHOWS the rate; tap = toggle inline speed strip,
-            //    long-press = quick reset to 1.0×.
             TextPill(
                 text = speedLabel(actions.speeds[actions.speedIdx.intValue]),
                 accent = accent,
@@ -531,58 +494,18 @@ private fun UtilityRow(
                 onClick = onToggleSpeedStrip,
                 onLongClick = { actions.setSpeed(1f) },
             )
-
-            // 3) CC — subtitle visibility toggle; present iff the media has
-            //    any subtitle source (track or sidecar), never blinks with
-            //    the cue text.
-            if (hasSubtitleTrack) {
-                ControlChip(
-                    icon = Icons.Filled.ClosedCaption,
-                    contentDescription = if (actions.ui.showCC.value) {
-                        "Subtitles on"
-                    } else {
-                        "Subtitles off"
-                    },
-                    accent = accent,
-                    selected = actions.ui.showCC.value,
-                    onClick = { actions.toggleShowCC() },
-                )
-            }
-
-            // 4) audio track (width-tiered)
-            if (showAudio) {
-                ControlChip(
-                    icon = Icons.Filled.MusicNote,
-                    contentDescription = "Audio track",
-                    accent = accent,
-                    onClick = { actions.pickAudioTrack() },
-                )
-            }
-
-            // 5) aspect — tap = instant cycle; long-press = direct pick menu
             var aspectMenu by remember { mutableStateOf(false) }
-            val cycleAspect = {
-                val nextIdx = (actions.ui.zoomIdx.intValue + 1) % ZoomModes.size
-                actions.setZoom(nextIdx)
-            }
             Box {
-                if (showAspectLabel) {
-                    TextPill(
-                        text = ZoomModes[actions.ui.zoomIdx.intValue].abbreviation,
-                        accent = accent,
-                        onClick = cycleAspect,
-                        onLongClick = { aspectMenu = true },
-                    )
-                } else {
-                    ControlChip(
-                        icon = Icons.Filled.AspectRatio,
-                        contentDescription = "Aspect: " +
-                            ZoomModes[actions.ui.zoomIdx.intValue].abbreviation,
-                        accent = accent,
-                        onClick = cycleAspect,
-                        onLongClick = { aspectMenu = true },
-                    )
-                }
+                ControlChip(
+                    icon = Icons.Filled.AspectRatio,
+                    contentDescription = "Aspect ratio",
+                    accent = accent,
+                    onClick = {
+                        val nextIdx = (actions.ui.zoomIdx.intValue + 1) % ZoomModes.size
+                        actions.setZoom(nextIdx)
+                    },
+                    onLongClick = { aspectMenu = true },
+                )
                 DropdownMenu(
                     expanded = aspectMenu,
                     onDismissRequest = { aspectMenu = false },
@@ -599,8 +522,12 @@ private fun UtilityRow(
                             },
                             leadingIcon = {
                                 if (idx == actions.ui.zoomIdx.intValue) {
-                                    Icon(Icons.Filled.Check, null, tint = accent,
-                                        modifier = Modifier.size(18.dp))
+                                    Icon(
+                                        Icons.Filled.Check,
+                                        null,
+                                        tint = accent,
+                                        modifier = Modifier.size(18.dp),
+                                    )
                                 }
                             },
                             onClick = {
@@ -611,15 +538,6 @@ private fun UtilityRow(
                     }
                 }
             }
-
-            // 6) rotation — the one 3-state cycle + long-press-menu control
-            //    (its own file; keeps its behavior untouched).
-            PlayerScreenRotateButton(
-                mode = actions.quick.rotateMode.value,
-                accent = accent,
-                onCycle = { actions.cycleRotateMode() },
-                onSetMode = { actions.setRotateMode(it) },
-            )
         }
     }
 }

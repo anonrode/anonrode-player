@@ -13,7 +13,7 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class PlayerSettings(
     val decoderPriority: DecoderPriority = DecoderPriority.PREFER_DEVICE,
-    val resumeBehavior: ResumeBehavior = ResumeBehavior.ALWAYS_ASK,
+    val resumeBehavior: ResumeBehavior = ResumeBehavior.ALWAYS_RESUME,
     /**
      * Legacy auto-sync gate: enabled = the background subtitle fingerprint
      * job may run on a video with no persisted lock. Kept ON by default for
@@ -39,7 +39,7 @@ data class PlayerSettings(
     val backgroundPlayback: Boolean = true,
     val subtitleSize: Int = 1,          // 0=S 1=M 2=L 3=XL
     val subtitlePosition: Int = 1,      // 0=LOW 1=MID 2=HIGH 3=TOP
-    // Default matches the MX-style bold outlined look the renderer ships.
+    // Default high-contrast bold outlined look the renderer ships.
     val subtitleBold: Boolean = true,
     // SubtitleColor ordinal: 0=WHITE 1=YELLOW 2=GREEN 3=CYAN.
     val subtitleColor: Int = 0,

@@ -44,7 +44,7 @@ import kotlinx.coroutines.withContext
 /**
  * Bottom-sheet subtitle picker: embedded container tracks, sidecar files
  * from the video's folder, previously downloaded subtitles, and online
- * search (OpenSubtitles, exact file-hash first — the MX Player flow).
+ * search (OpenSubtitles, exact file-hash first).
  *
  * Every row maps to a persisted choice string (see
  * MediaStateEntity.subtitleChoice): "" auto / "none" / "embedded:N" /

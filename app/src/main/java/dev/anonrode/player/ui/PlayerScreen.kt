@@ -55,7 +55,7 @@ import kotlin.math.abs
  *   • Overlays anchor off the MEASURED chrome heights instead of the old
  *     hand-tuned `top = 70 / bottom = 140 / 210` dp magic that collided.
  *
- * The subtitle cue is MX-outlined (bold + black outline, no box) and can
+ * The subtitle cue is high-contrast outlined (bold + black outline, no box) and can
  * be long-press dragged anywhere; its position persists per video with a
  * global default fallback (see [dev.anonrode.player.PlayerPrefs]). While
  * in PiP ([isPipMode]) every overlay hides; while controls are locked
@@ -463,10 +463,14 @@ fun PlayerScreen(
             )
         }
 
-        // ── gesture HUD pill ──
+        // ── gesture HUD pill (top-center, never covers subtitles) ──
         if (hud.visible.value && !isPipMode) {
             GestureHudPill(
-                modifier = Modifier.align(Alignment.Center),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .displayCutoutPadding()
+                    .padding(top = 16.dp),
                 icon = hud.icon.value,
                 text = hud.text.value,
             )

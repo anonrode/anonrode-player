@@ -88,6 +88,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import dev.anonrode.player.PlayerActivity
 import dev.anonrode.player.core.model.Series
 import dev.anonrode.player.core.model.Video
@@ -1042,8 +1044,16 @@ fun PosterArt(
             fontWeight = FontWeight.Black,
         )
         if (videoUri != null) {
+            val context = LocalContext.current
+            val imageRequest = remember(videoUri) {
+                ImageRequest.Builder(context)
+                    .data(videoUri)
+                    .size(240, 135)
+                    .crossfade(true)
+                    .build()
+            }
             AsyncImage(
-                model = videoUri,
+                model = imageRequest,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier

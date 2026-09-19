@@ -47,10 +47,9 @@ import dev.anonrode.player.core.media.log.AppLog
 
 /**
  * Bottom-sheet picker for [androidx.mediarouter.media.MediaRouter] audio
- * output routes. Mirrors the UX of the system MediaRouter dialog used by
- * MX Player / VLC / YouTube: tap a route to [onSelectRoute], tap the
- * "Phone speaker" entry (the system default route) to return audio to
- * the device.
+ * output routes. Mirrors the standard UX of media route selection: tap a route
+ * to [onSelectRoute], tap the "Phone speaker" entry (the system default route)
+ * to return audio to the device.
  *
  * The router's route set is observed live: discovering a new Bluetooth
  * or Cast device while the sheet is open refreshes the list without

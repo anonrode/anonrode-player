@@ -373,6 +373,17 @@ class PlayerActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) updatePipAutoEnter(isPlaying)
         }
 
+        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+            super.onVideoSizeChanged(videoSize)
+            if (videoSize.width > 0 && videoSize.height > 0) {
+                pipAspectCacheW = videoSize.width
+                pipAspectCacheH = videoSize.height
+                if (videoSize.width > videoSize.height && !pipMode) {
+                    requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                }
+            }
+        }
+
         override fun onPlayerError(error: PlaybackException) {
             // Surface a recoverable dialog instead of freezing on the last
             // frame. The render loop keeps ticking harmlessly; Retry re-runs

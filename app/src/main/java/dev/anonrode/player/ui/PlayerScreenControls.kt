@@ -2,23 +2,37 @@ package dev.anonrode.player.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.displayCutoutPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -26,12 +40,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.media3.common.util.UnstableApi
 
 /* ── Player controls chrome (v0.7.3 curated dock) ─────────────────────────
@@ -93,6 +113,8 @@ internal fun PlayerControlsOverlay(
                 title = title,
                 accent = accent,
                 actions = actions,
+                hasSubtitleTrack = hasSubtitleTrack,
+                liveOffsetMs = liveOffsetMs,
                 onBack = onBack,
                 onMore = onMore,
             )
@@ -120,7 +142,7 @@ internal fun PlayerControlsOverlay(
     }
 }
 
-/** Top bar — back · title · PiP · lock · ⋮. */
+/** Top bar — Row 1: back · title · audio · CC · HW/SW · ⋮; Row 2: collapsible scrollable tools ribbon. */
 @UnstableApi
 @Composable
 internal fun PlayerScreenTopBar(
@@ -128,9 +150,13 @@ internal fun PlayerScreenTopBar(
     title: String,
     accent: Color,
     actions: PlayerScreenActions,
+    hasSubtitleTrack: Boolean,
+    liveOffsetMs: Long,
     onBack: () -> Unit,
     onMore: () -> Unit,
 ) {
+    var ribbonCollapsed by rememberSaveable { mutableStateOf(false) }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -138,7 +164,7 @@ internal fun PlayerScreenTopBar(
             // edge; content sits below the status bar / cutout.
             .background(
                 Brush.verticalGradient(
-                    listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
+                    listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent)
                 )
             )
             .statusBarsPadding()
@@ -151,6 +177,7 @@ internal fun PlayerScreenTopBar(
                 if (it.height > 0) actions.ui.topBarHeightPx.intValue = it.height
             },
     ) {
+        // ── Row 1: Primary header controls ──
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -165,34 +192,34 @@ internal fun PlayerScreenTopBar(
             Text(
                 title,
                 color = Color.White,
-                // 2 lines max so a multi-word episode title wraps instead
-                // of ellipsising aggressively.
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = PlayerDimens.gapXs),
             )
             ControlChip(
-                icon = Icons.Filled.PictureInPictureAlt,
-                contentDescription = "Picture-in-picture",
+                icon = Icons.Filled.MusicNote,
+                contentDescription = "Audio track",
                 accent = accent,
-                onClick = { actions.enterPip() },
+                onClick = { actions.pickAudioTrack() },
             )
-            // The controls-lock moved here from the far-left of the
-            // transport row (v0.7.3): it's chrome housekeeping, not
-            // transport, and it reads naturally beside ⋮. Locked state is
-            // shown by LockOpen→Lock + the accent fill; unlocking is also
-            // long-press anywhere on the stage (unchanged gesture).
-            ControlChip(
-                icon = if (actions.ui.locked.value) Icons.Filled.LockOpen
-                else Icons.Filled.Lock,
-                contentDescription = if (actions.ui.locked.value) "Unlock controls"
-                else "Lock controls",
+            if (hasSubtitleTrack) {
+                ControlChip(
+                    icon = Icons.Filled.ClosedCaption,
+                    contentDescription = if (actions.ui.showCC.value) "Subtitles on" else "Subtitles off",
+                    accent = accent,
+                    selected = actions.ui.showCC.value,
+                    onClick = { actions.toggleShowCC() },
+                )
+            }
+            TextPill(
+                text = if (actions.quick.hwDecoder.value) "HW" else "SW",
                 accent = accent,
-                selected = actions.ui.locked.value,
-                onClick = { actions.lockControls() },
+                selected = actions.quick.hwDecoder.value,
+                onClick = { actions.toggleHwDecoder() },
             )
             ControlChip(
                 icon = Icons.Filled.MoreVert,
@@ -200,6 +227,86 @@ internal fun PlayerScreenTopBar(
                 accent = accent,
                 onClick = onMore,
             )
+        }
+
+        // ── Row 2: Horizontally scrollable and collapsible Quick Ribbon ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AnimatedVisibility(
+                visible = !ribbonCollapsed,
+                modifier = Modifier.weight(1f),
+                enter = fadeIn(tween(180)) + expandHorizontally(tween(220)),
+                exit = fadeOut(tween(180)) + shrinkHorizontally(tween(220)),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PlayerSubSyncToggle(
+                        enabled = actions.quick.subSyncEnabled.value,
+                        running = actions.quick.subSyncRunning.value,
+                        offsetMs = liveOffsetMs,
+                        accent = accent,
+                        onEnable = { actions.setSubSyncEnabled(true) },
+                        onOpenPopover = { actions.openSyncPopover() },
+                        onResync = { actions.resyncNow() },
+                        compact = true,
+                    )
+                    ControlChip(
+                        icon = Icons.Filled.Equalizer,
+                        contentDescription = "Equalizer",
+                        accent = accent,
+                        selected = actions.quick.equalizerOn.value,
+                        onClick = { actions.toggleEqualizer() },
+                    )
+                    PlayerScreenRotateButton(
+                        mode = actions.quick.rotateMode.value,
+                        accent = accent,
+                        onCycle = { actions.cycleRotateMode() },
+                        onSetMode = { actions.setRotateMode(it) },
+                    )
+                    ControlChip(
+                        icon = Icons.Filled.PictureInPictureAlt,
+                        contentDescription = "Picture-in-picture",
+                        accent = accent,
+                        onClick = { actions.enterPip() },
+                    )
+                    ControlChip(
+                        icon = Icons.Filled.PhotoCamera,
+                        contentDescription = "Capture frame",
+                        accent = accent,
+                        onClick = { actions.captureFrame() },
+                    )
+                    ControlChip(
+                        icon = Icons.Filled.Cast,
+                        contentDescription = "Cast",
+                        accent = accent,
+                        onClick = { actions.openCastPicker() },
+                    )
+                }
+            }
+            if (ribbonCollapsed) {
+                Spacer(Modifier.weight(1f))
+            }
+            IconButton(
+                onClick = { ribbonCollapsed = !ribbonCollapsed },
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(
+                    imageVector = if (ribbonCollapsed) Icons.AutoMirrored.Filled.KeyboardArrowLeft
+                    else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = if (ribbonCollapsed) "Expand tools" else "Collapse tools",
+                    tint = Color.White.copy(alpha = 0.75f),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }
