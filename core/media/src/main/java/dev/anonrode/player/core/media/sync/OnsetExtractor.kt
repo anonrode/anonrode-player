@@ -140,11 +140,15 @@ class OnsetExtractor(private val context: Context) {
             true
         }
         val silOnsets = sil ?: silence.finish()
-        val vadOnsets = if (vad != null) {
-            try { vad.finish() } finally { vad.close() }
-        } else emptyList()
+        val (vadOnsets, vadEnvelope) = if (vad != null) {
+            try {
+                Pair(vad.finish(), vad.getSpeechEnvelope())
+            } finally {
+                vad.close()
+            }
+        } else Pair(emptyList(), FloatArray(0))
         lastCoveredSec = silence.coveredSec()
-        return OnsetSources(silOnsets, vadOnsets)
+        return OnsetSources(silOnsets, vadOnsets, vadEnvelope)
     }
 
     /**

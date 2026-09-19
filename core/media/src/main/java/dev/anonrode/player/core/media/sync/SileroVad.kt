@@ -59,6 +59,7 @@ class SileroVad(context: Context) : AutoCloseable {
     private val chunk = FloatArray(WINDOW)
     private var chunkN = 0
     private val bins = ArrayList<Byte>(4096)
+    private val probBins = ArrayList<Float>(4096)
 
     /** v0.8.3: absolute media time the first bin belongs to (non-zero only
      *  on a resumed decode pass) — added to every onset time so the caller
@@ -147,6 +148,7 @@ class SileroVad(context: Context) : AutoCloseable {
                         // model output order (validated): [output, stateN]
                         val outVal = result.get(0) as OnnxTensor
                         val prob = (outVal.value as Array<FloatArray>)[0][0]
+                        probBins.add(prob)
                         bins.add(if (prob > THRESHOLD) 1.toByte() else 0.toByte())
                         val stVal = result.get(1) as OnnxTensor
                         val stArr = stVal.value as Array<Array<FloatArray>>
@@ -166,6 +168,32 @@ class SileroVad(context: Context) : AutoCloseable {
         val onsets = onsetsFromBins(bins)
         AppLog.d("VAD", "${bins.size} bins -> ${onsets.size} speech-start onsets")
         return onsets
+    }
+
+    /**
+     * Resamples the continuous 32ms model probability bins into a 100ms
+     * soft speech envelope (FloatArray) covering the entire analyzed audio.
+     */
+    fun getSpeechEnvelope(targetBinSec: Double = 0.1): FloatArray {
+        val n = probBins.size
+        if (n == 0) return FloatArray(0)
+        val totalSec = n * FRAME_SEC
+        val outBins = maxOf(1, (totalSec / targetBinSec).toInt())
+        val envelope = FloatArray(outBins)
+        val counts = IntArray(outBins)
+
+        for (i in 0 until n) {
+            val tSec = i * FRAME_SEC
+            val outIdx = minOf(outBins - 1, (tSec / targetBinSec).toInt())
+            envelope[outIdx] += probBins[i]
+            counts[outIdx]++
+        }
+
+        for (i in 0 until outBins) {
+            val c = counts[i]
+            if (c > 0) envelope[i] /= c
+        }
+        return envelope
     }
 
     /** Absolute media time (s) the collected bins cover (call after [finish]). */

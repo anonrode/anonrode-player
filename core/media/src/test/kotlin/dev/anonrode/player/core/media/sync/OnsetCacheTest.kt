@@ -56,4 +56,25 @@ class OnsetCacheTest {
             OnsetCache.mergeOnsets(listOf(1.0, 3.0), listOf(1.02, 2.5)),
         )
     }
+
+    @Test
+    fun `mergeEnvelope combines prefix and suffix at coveredSec boundary`() {
+        val prefix = floatArrayOf(0.1f, 0.2f, 0.3f, 0.4f, 0.5f)
+        val suffix = floatArrayOf(0.6f, 0.7f, 0.8f)
+        // 0.3s coveredSec at 0.1s/bin -> takes first 3 bins of prefix (0.1, 0.2, 0.3) + suffix (0.6, 0.7, 0.8)
+        val merged = OnsetCache.mergeEnvelope(prefix, suffix, 0.3, 0.1)
+        assertEquals(6, merged.size)
+        org.junit.Assert.assertArrayEquals(
+            floatArrayOf(0.1f, 0.2f, 0.3f, 0.6f, 0.7f, 0.8f),
+            merged,
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun `mergeEnvelope short-circuits on empty inputs`() {
+        val data = floatArrayOf(0.5f, 0.9f)
+        org.junit.Assert.assertArrayEquals(data, OnsetCache.mergeEnvelope(FloatArray(0), data, 0.0), 0.0001f)
+        org.junit.Assert.assertArrayEquals(data, OnsetCache.mergeEnvelope(data, FloatArray(0), 1.0), 0.0001f)
+    }
 }

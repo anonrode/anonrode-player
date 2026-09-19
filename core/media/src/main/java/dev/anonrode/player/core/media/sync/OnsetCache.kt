@@ -31,18 +31,19 @@ import java.security.MessageDigest
 object OnsetCache {
 
     private const val MAGIC = 0x4F430001L
-    /** Bump when the detectors' onset semantics change (invalidates all). */
-    private const val VERSION = 1L
+    /** Bump when the detectors' onset/envelope semantics change (invalidates all). */
+    private const val VERSION = 2L
 
     data class Entry(
         val silencedetect: List<Double>,
         val vad: List<Double>,
+        val envelope: FloatArray = FloatArray(0),
         /** Absolute media time (s) covered by the stored onset lists. */
         val coveredSec: Double,
         /** True when the stored lists cover the whole file (no resume needed). */
         val complete: Boolean,
     ) {
-        fun asSources() = OnsetExtractor.OnsetSources(silencedetect, vad)
+        fun asSources() = OnsetExtractor.OnsetSources(silencedetect, vad, envelope)
     }
 
     private fun fileFor(context: Context, videoUri: String): File {
@@ -69,7 +70,8 @@ object OnsetCache {
                 val complete = d.readBoolean()
                 val sil = readDoubles(d)
                 val vad = readDoubles(d)
-                Entry(sil, vad, covered, complete)
+                val env = readFloats(d)
+                Entry(sil, vad, env, covered, complete)
             }
         } catch (t: Throwable) {
             AppLog.d("SYNC_JOB", "onset cache read failed, extracting fresh")
@@ -98,6 +100,7 @@ object OnsetCache {
                 d.writeBoolean(entry.complete)
                 writeDoubles(d, entry.silencedetect)
                 writeDoubles(d, entry.vad)
+                writeFloats(d, entry.envelope)
             }
             if (!tmp.renameTo(f)) {
                 runCatching { f.delete() }
@@ -125,6 +128,23 @@ object OnsetCache {
         return out
     }
 
+    /** Stitch together continuous envelopes from a cached prefix and resumed suffix. */
+    fun mergeEnvelope(
+        prefix: FloatArray,
+        suffix: FloatArray,
+        prefixCoveredSec: Double,
+        binSec: Double = 0.1,
+    ): FloatArray {
+        if (prefix.isEmpty()) return suffix
+        if (suffix.isEmpty()) return prefix
+        val prefixBins = maxOf(0, (prefixCoveredSec / binSec).toInt()).coerceAtMost(prefix.size)
+        val totalBins = prefixBins + suffix.size
+        val out = FloatArray(totalBins)
+        System.arraycopy(prefix, 0, out, 0, prefixBins)
+        System.arraycopy(suffix, 0, out, prefixBins, suffix.size)
+        return out
+    }
+
     private fun readDoubles(d: DataInputStream): List<Double> {
         val n = d.readInt().coerceAtMost(2_000_000)
         if (n <= 0) return emptyList()
@@ -134,5 +154,18 @@ object OnsetCache {
     private fun writeDoubles(d: DataOutputStream, v: List<Double>) {
         d.writeInt(v.size)
         for (x in v) d.writeDouble(x)
+    }
+
+    private fun readFloats(d: DataInputStream): FloatArray {
+        val n = d.readInt().coerceAtMost(2_000_000)
+        if (n <= 0) return FloatArray(0)
+        val arr = FloatArray(n)
+        for (i in 0 until n) arr[i] = d.readFloat()
+        return arr
+    }
+
+    private fun writeFloats(d: DataOutputStream, arr: FloatArray) {
+        d.writeInt(arr.size)
+        for (x in arr) d.writeFloat(x)
     }
 }

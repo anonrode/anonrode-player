@@ -264,8 +264,9 @@ class SyncFingerprintJob(
                 extractionComplete = !extractor.lastDecodeTruncated
                 sources = if (resumeFrom > 0.0 && cached != null) {
                     OnsetExtractor.OnsetSources(
-                        OnsetCache.mergeOnsets(cached.silencedetect, fresh.silencedetect),
-                        OnsetCache.mergeOnsets(cached.vad, fresh.vad),
+                        silencedetect = OnsetCache.mergeOnsets(cached.silencedetect, fresh.silencedetect),
+                        vad = OnsetCache.mergeOnsets(cached.vad, fresh.vad),
+                        envelope = OnsetCache.mergeEnvelope(cached.envelope, fresh.envelope, resumeFrom),
                     )
                 } else {
                     fresh
@@ -275,27 +276,45 @@ class SyncFingerprintJob(
                     OnsetCache.Entry(
                         silencedetect = sources.silencedetect,
                         vad = sources.vad,
+                        envelope = sources.envelope,
                         coveredSec = extractor.lastCoveredSec,
                         complete = extractionComplete,
                     ),
                 )
             }
+
+            var lock: LockCandidate? = null
+
+            // Tier 1: Continuous soft-envelope 2D Pearson correlator (immune to onset sparsity in music)
+            if (sources.envelope.isNotEmpty() && cues.size >= 5) {
+                val model = SyncOrchestrator.syncWithEnvelope(sources.envelope, cues, sources.hybrid)
+                if (model != null) {
+                    lock = toLockCandidate(model, "envelope")
+                    AppLog.d(
+                        "SYNC_JOB",
+                        "Tier 1 envelope lock: offset=${lock.offsetMs}ms speed=${lock.speed} piecewise=${lock.piecewise} recall=${lock.recall}"
+                    )
+                }
+            }
+
+            // Tier 2: Discrete onset candidate loop (fallback if envelope refused)
             val candidates = mutableListOf("silencedetect" to sources.silencedetect)
             if (sources.vad.isNotEmpty()) {
                 candidates.add("hybrid" to sources.hybrid)
                 candidates.add("vad" to sources.vad)
             }
 
-            var lock: LockCandidate? = null
             var fitsAttempted = 0
-            for ((tag, onsets) in candidates) {
-                if (onsets.size < MIN_ONSETS) {
-                    AppLog.d("SYNC_JOB", "$tag: too few onsets (${onsets.size})")
-                    continue
+            if (lock == null) {
+                for ((tag, onsets) in candidates) {
+                    if (onsets.size < MIN_ONSETS) {
+                        AppLog.d("SYNC_JOB", "$tag: too few onsets (${onsets.size})")
+                        continue
+                    }
+                    fitsAttempted++
+                    lock = attemptLock(onsets, starts, tag)
+                    if (lock != null) break
                 }
-                fitsAttempted++
-                lock = attemptLock(onsets, starts, tag)
-                if (lock != null) break
             }
 
             if (lock == null) {
@@ -398,22 +417,37 @@ class SyncFingerprintJob(
             return null
         }
         return when (model) {
-            is SyncOrchestrator.Model.Single -> LockCandidate(
-                offsetMs = (model.beta * 1000).toLong(),
-                speed = model.alpha.toFloat(),
-                piecewise = "",
-                recall = model.recall,
-                tag = "$tag/${model.path}",
-            )
-            is SyncOrchestrator.Model.Cut -> LockCandidate(
-                offsetMs = (model.betaBefore * 1000).toLong(),
-                speed = model.alpha.toFloat(),
-                piecewise = SyncFinder.piecewiseToStorage(
-                    model.cutAudio, model.betaBefore, model.betaAfter,
-                ),
-                recall = model.recallTwo,
-                tag = "$tag/cut-${model.confidence}",
-            )
+            is SyncOrchestrator.Model.Single -> {
+                // Deadband snapping: if framerate drift is nominal (alpha == 1.0)
+                // and offset is within human subtitle pre-roll lead-time / calculation lag
+                // (|beta| <= 0.20s / 200ms), snap to 0L so already well-synced subtitles
+                // are preserved with pristine original timing.
+                val effectiveOffsetMs = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.beta) <= 0.20) {
+                    0L
+                } else {
+                    (model.beta * 1000).toLong()
+                }
+                LockCandidate(
+                    offsetMs = effectiveOffsetMs,
+                    speed = model.alpha.toFloat(),
+                    piecewise = "",
+                    recall = model.recall,
+                    tag = "$tag/${model.path}",
+                )
+            }
+            is SyncOrchestrator.Model.Cut -> {
+                val bb = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.betaBefore) <= 0.20) 0.0 else model.betaBefore
+                val ba = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.betaAfter) <= 0.20) 0.0 else model.betaAfter
+                LockCandidate(
+                    offsetMs = (bb * 1000).toLong(),
+                    speed = model.alpha.toFloat(),
+                    piecewise = SyncFinder.piecewiseToStorage(
+                        model.cutAudio, bb, ba,
+                    ),
+                    recall = model.recallTwo,
+                    tag = "$tag/cut-${model.confidence}",
+                )
+            }
         }
     }
 
