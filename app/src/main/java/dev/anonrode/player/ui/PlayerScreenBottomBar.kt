@@ -151,6 +151,25 @@ internal fun PlayerScreenBottomBar(
                 if (it.height > 0) actions.ui.bottomBarHeightPx.intValue = it.height
             },
     ) {
+        // ── Status strip — v0.9 Single-Plane Chrome ─────────────────────────
+        // Information, not buttons. The flagship sub-sync feature was one pill
+        // among six in the old utility row; here it is a READ-OUT you can see
+        // working. Speed shows only when it differs from 1.0×, remaining time
+        // rides the right edge. Tapping the sync pill opens the sync tray —
+        // same action the old hero chip's tap had.
+        if (!actions.ui.locked.value && !actions.gestures.subDragging.value) {
+            StatusStrip(
+                accent = accent,
+                syncEnabled = actions.quick.subSyncEnabled.value,
+                syncRunning = actions.quick.subSyncRunning.value,
+                offsetMs = liveOffsetMs,
+                speed = actions.speeds.getOrElse(actions.speedIdx.intValue) { 1f },
+                positionSec = positionSec.value,
+                durationSec = durationSec.value,
+                onTapSync = { actions.openSyncPopover() },
+            )
+        }
+
         // ── 1) Seek row — ALWAYS visible (except locked/PiP: whole block
         //    skipped by the host). Recomposes on the 10Hz tick ONLY here —
         //    same State discipline as the v0.7.1 perf pass.
@@ -222,7 +241,7 @@ internal fun PlayerScreenBottomBar(
 @OptIn(ExperimentalMaterial3Api::class)
 @UnstableApi
 @Composable
-private fun SeekBarRow(
+internal fun SeekBarRow(
     accent: Color,
     positionSec: State<Float>,
     durationSec: State<Float>,
@@ -446,13 +465,13 @@ private fun TransportRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Left: Lock controls
-        ControlChip(
-            icon = Icons.Filled.Lock,
-            contentDescription = "Lock controls",
-            accent = accent,
-            onClick = { actions.lockControls() },
-        )
+        // v0.9 "Single-Plane Chrome": PURE transport.
+        // The lock chip that used to sit here moved to the always-visible tool
+        // rail. Locking is a MODE, not a transport action, and parking it on
+        // this row's left edge forced the five transport controls off-centre.
+        // A same-footprint spacer keeps the 5-cluster optically centred in the
+        // SpaceBetween row, so the thumb still finds PLAY where it expects it.
+        Spacer(Modifier.size(PlayerDimens.touchMin))
 
         // Center: Transport cluster (⟲, ⏮, ▶/⏸, ⏭, ⟳)
         Row(
@@ -546,7 +565,7 @@ private fun TransportRow(
 
 /** Inline speed selector row (0.5× to 2.0×) toggled smoothly without covering the screen. */
 @Composable
-private fun SpeedSelectorRow(
+internal fun SpeedSelectorRow(
     speeds: List<Float>,
     selectedSpeed: Float,
     accent: Color,

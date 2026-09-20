@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,8 +21,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Equalizer
@@ -155,8 +152,6 @@ internal fun PlayerScreenTopBar(
     onBack: () -> Unit,
     onMore: () -> Unit,
 ) {
-    var ribbonCollapsed by rememberSaveable { mutableStateOf(false) }
-
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -237,7 +232,12 @@ internal fun PlayerScreenTopBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AnimatedVisibility(
-                visible = !ribbonCollapsed,
+                // v0.9: always visible. The collapse chevron is removed — it
+                // was a 36dp hit target (under PlayerDimens.touchMin) with a
+                // dimmed 0.75-alpha tint, so the control that REVEALED the
+                // tools rendered smaller and more "disabled" than the tools it
+                // revealed. The rail scrolls instead; nothing hides.
+                visible = true,
                 modifier = Modifier.weight(1f),
                 enter = fadeIn(tween(180)) + expandHorizontally(tween(220)),
                 exit = fadeOut(tween(180)) + shrinkHorizontally(tween(220)),
@@ -249,6 +249,21 @@ internal fun PlayerScreenTopBar(
                     horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // v0.9: Lock lives here now — the transport row is pure
+                    // transport, and this rail is always visible so the door
+                    // in/out of lock mode is never hidden behind a toggle.
+                    ControlChip(
+                        icon = if (actions.ui.locked.value) Icons.Filled.Lock
+                        else Icons.Filled.LockOpen,
+                        contentDescription = if (actions.ui.locked.value) {
+                            "Controls locked"
+                        } else {
+                            "Lock controls"
+                        },
+                        accent = accent,
+                        selected = actions.ui.locked.value,
+                        onClick = { actions.lockControls() },
+                    )
                     PlayerSubSyncToggle(
                         enabled = actions.quick.subSyncEnabled.value,
                         running = actions.quick.subSyncRunning.value,
@@ -265,6 +280,22 @@ internal fun PlayerScreenTopBar(
                         accent = accent,
                         selected = actions.quick.equalizerOn.value,
                         onClick = { actions.toggleEqualizer() },
+                    )
+                    // v0.9: subtitle style tunes in place — this is its one
+                    // always-visible entry point (the tray replaces the host's
+                    // modal sheet, so the cue stays on screen while tuned).
+                    ControlChip(
+                        icon = Icons.Filled.ClosedCaption,
+                        contentDescription = "Subtitle style",
+                        accent = accent,
+                        selected = actions.quick.showStyleTray.value,
+                        onClick = {
+                            if (actions.quick.showStyleTray.value) {
+                                actions.closeStyleTray()
+                            } else {
+                                actions.openStyleTray()
+                            }
+                        },
                     )
                     PlayerScreenRotateButton(
                         mode = actions.quick.rotateMode.value,
@@ -291,21 +322,6 @@ internal fun PlayerScreenTopBar(
                         onClick = { actions.openCastPicker() },
                     )
                 }
-            }
-            if (ribbonCollapsed) {
-                Spacer(Modifier.weight(1f))
-            }
-            IconButton(
-                onClick = { ribbonCollapsed = !ribbonCollapsed },
-                modifier = Modifier.size(36.dp),
-            ) {
-                Icon(
-                    imageVector = if (ribbonCollapsed) Icons.AutoMirrored.Filled.KeyboardArrowLeft
-                    else Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = if (ribbonCollapsed) "Expand tools" else "Collapse tools",
-                    tint = Color.White.copy(alpha = 0.75f),
-                    modifier = Modifier.size(20.dp),
-                )
             }
         }
     }

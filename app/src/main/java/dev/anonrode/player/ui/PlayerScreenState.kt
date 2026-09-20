@@ -265,6 +265,15 @@ internal class QuickRowUiState(initialHwDecoder: Boolean) {
     val showSyncPopover = mutableStateOf(false)
 
     /**
+     * v0.9 "Single-Plane Chrome": true while the inline subtitle-style tray
+     * is expanded. Replaces the host's modal [SubtitleStyleSheet] — the tray
+     * renders inside the bottom zone so the cue stays visible while it is
+     * tuned. Mutually exclusive with [showSyncPopover] (opening one closes
+     * the other) so only one tray can cover the transport at a time.
+     */
+    val showStyleTray = mutableStateOf(false)
+
+    /**
      * User-driven subtitle sync toggle. Mirrors
      * [dev.anonrode.player.core.datastore.PlayerSettings.subtitleAutoSyncEnabled]
      * so the toggle icon flips instantly without a DataStore round-trip.
