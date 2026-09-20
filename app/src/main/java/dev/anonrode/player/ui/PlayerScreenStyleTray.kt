@@ -204,7 +204,7 @@ internal fun SubtitleColorSwatchRow(
                         onSelect(swatch)
                     },
                 contentAlignment = Alignment.Center,
-            )
+            ) { }
         }
     }
 }

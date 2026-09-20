@@ -210,16 +210,6 @@ private fun offsetText(ms: Long): String {
     return (if (s >= 0f) "+" else "−") + "%.1fs".format(abs(s))
 }
 
-/** "1.25×" — no trailing ".00" (1.0× not 1.00×, but 1.25× keeps both digits). */
-private fun speedLabel(speed: Float): String {
-    val rounded = (speed * 100).toInt() / 100f
-    return if (abs(rounded - rounded.toInt()) < 0.01f) {
-        rounded.toInt().toString() + "×"
-    } else {
-        "%.2f×".format(rounded)
-    }
-}
-
 /** mm:ss (or h:mm:ss past an hour) — self-contained so this file has no
  *  dependency on the bottom bar's private formatter. */
 private fun fmtClock(ms: Long): String {

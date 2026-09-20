@@ -61,8 +61,11 @@ class OnsetCacheTest {
     fun `mergeEnvelope combines prefix and suffix at coveredSec boundary`() {
         val prefix = floatArrayOf(0.1f, 0.2f, 0.3f, 0.4f, 0.5f)
         val suffix = floatArrayOf(0.6f, 0.7f, 0.8f)
-        // 0.3s coveredSec at 0.1s/bin -> takes first 3 bins of prefix (0.1, 0.2, 0.3) + suffix (0.6, 0.7, 0.8)
-        val merged = OnsetCache.mergeEnvelope(prefix, suffix, 0.3, 0.1)
+        // 0.35s coveredSec at 0.1s/bin -> takes first 3 bins of prefix (0.1, 0.2, 0.3) + suffix (0.6, 0.7, 0.8).
+        // (0.35 rather than 0.3 so the division is not an exact FP boundary:
+        // 0.3/0.1 == 2.9999999999999996 and truncates to 2, which would test
+        // the truncation instead of the boundary.)
+        val merged = OnsetCache.mergeEnvelope(prefix, suffix, 0.35, 0.1)
         assertEquals(6, merged.size)
         org.junit.Assert.assertArrayEquals(
             floatArrayOf(0.1f, 0.2f, 0.3f, 0.6f, 0.7f, 0.8f),
