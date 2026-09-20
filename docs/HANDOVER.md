@@ -1,67 +1,114 @@
 # HANDOVER NOTE — anonrode-player
 
-_Date: 2026-08-31 · Written after the v0.7.0 release · Read this before touching anything._
+_Date: 2026-09-20 · Written after the v0.8.6 release · Read this before touching anything._
 
 ---
 
-## 1. Where things stand
+## 1. Where Things Stand
 
 | Thing | State |
 |---|---|
-| Latest release | **v0.7.0** on GitHub Releases (tag `v0.7.0`, commit `c690878`, marked **Latest**) |
-| APKs | 10 assets attached to the release (arm64-v8a / armeabi-v7a / x86 / x86_64 / universal × release-with-debug-signing + debug) |
-| CI | **GREEN** — `android_build` run 33379150147, `publish_release` run 33381774556 |
-| Users to install | `anonrode-player-v0.7.0-app-arm64-v8a-releaseWithDebugSigning.apk` (same keystore as v0.6.1 → installs over it, no uninstall) |
-| Full changelog | `docs/V0.7_REPORT.md` (Section 30 report, committed `e1d88b1`) |
+| Latest release | **v0.8.6** on GitHub Releases (tag `v0.8.6`, commit `f3df461`, marked **Latest**) |
+| APKs | 10 assets attached automatically by `publish_release.yaml` (arm64-v8a / armeabi-v7a / x86 / x86_64 / universal × release-with-debug-signing + debug) |
+| CI Status | **GREEN** — `android_build` run 35449355358, `publish_release` run 35449369815 |
+| Target APK to install | `anonrode-player-v0.8.6-app-arm64-v8a-releaseWithDebugSigning.apk` (installs cleanly over v0.8.5 / v0.7.0 without data loss) |
+| Release URL | https://github.com/anonrode/anonrode-player/releases/tag/v0.8.6 |
 
-## 2. What v0.7.0 contains (the master-prompt pass)
+---
 
-- **Library snappiness**: disk-snapshot persistence in `MediaScanner.kt` (`observeLibrary(): Flow<LibraryEvent>`, `@Serializable PersistedLibrarySnapshot`, `ScanSource` enum) — library paints from last scan instead of cold rescanning every launch.
-- **Startup/playback**: lazy ExoPlayer build (double-checked locking), hand-authored baseline profile + profileinstaller, natural episode ordering with cached season/episode parse (O(N log N)).
-- **Player UI polish**: 64dp play button, "10" labels inside skip buttons, tap-to-toggle timestamp side, right-edge action rail (`PlayerScreenActionRail.kt`: CC · audio · sync · rotate · more), PiP chip.
-- **Subtitle sync (the headline)**:
-  - Toggle in player chrome, default OFF, persisted globally in `PlayerSettings.subtitleAutoSyncEnabled` (DataStore) — survives across videos and restarts.
-  - Smart sidecar auto-pick in `SubtitleMatcher.scoreSidecar()`: exact stem = 100, stem+tag = 80, episode conflict = −100 (hard disqualify), episode agreement = +50, token-overlap (Jaccard, junk-word filtered) ≤ +20, language hints ≤ +10, format ≤ +2. Normalized by `normalizedScore()` (÷100, clamped 0..1).
-  - Gates: score ≥ 0.6 → trust sidecar, skip fingerprint job; ≥ 0.7 → persisted lock reusable.
-  - `SyncFingerprint.scheduleSuspending()` reads the toggle and returns WITHOUT enqueueing when OFF; job re-checks the toggle at runtime; 90s initial delay + battery-not-low + exponential backoff.
-  - "Resync now" = long-press on toggle (`PlayerActivity.onResyncNow()`).
-- **Embed rule kept**: MKV → embedded track auto-selected; separate files → sidecar scored auto-pick.
+## 2. What v0.8.6 Contains (Player Redesign & Performance Overhaul)
 
-## 3. Build & release system — READ CAREFULLY
+### Top Bar Architecture (`PlayerScreenControls.kt`)
+- **Row 1 (Primary Header Controls)**:
+  - Back button (`←`) exits cleanly back to library browsing.
+  - Video title rendered with single-line ellipsis (no internal path truncation).
+  - Audio Track picker chip (`♫`) opens the host audio track sheet.
+  - Subtitle toggle chip (`CC`) directly gates cue rendering; shown only when tracks/sidecars exist.
+  - Decoder toggle pill (`HW` / `SW`) switches hardware/software codec pipeline via host rebuild.
+  - Control Center button (`⋮`) opens `PlayerControlCenterSheet` with sleep timer, stats, and audio options.
+- **Row 2 (Collapsible & Scrollable Quick Tools Ribbon)**:
+  - Horizontally scrollable row containing: Sub-Sync toggle/status pill, Equalizer, 3-state Rotation Lock, Picture-in-Picture (`PiP`), Frame Screenshot / Capture, and Cast device picker.
+  - Collapsible `<` / `>` chevron toggle allows one-tap minimization/expansion so tools never obstruct playback.
 
-- **Local machine has NO Java.** You cannot run Gradle locally. All builds happen in CI.
-  - `android_build.yaml` — on push to main, builds debug APKs, uploads `debug-apks` artifact.
-  - `publish_release.yaml` — **on tag push `v*`**, builds signed APKs and attaches them to the release automatically. So: **just push the tag; the APKs appear on the release by themselves** (~10 min). Do NOT manually `gh release create` before the workflow finishes — you'll race it (this bit us once; the release briefly showed no APKs).
-- **Keystore**: only in CI secrets (`ANONRODE_KEYSTORE_BASE64` + aliases/passwords). NEVER commit it. Local backup: `C:\Users\Anon\Desktop\Anon\anonrode-keystore-backup\`.
-- **`tools/` directory is the user's read-only Python workspace** (sync research scripts, Silero VAD `.onnx` models). NEVER commit, NEVER delete. Same for anything else untracked that you didn't create.
-- Committing gotchas learned this session: kotlinx-serialization **plugin** needs the **runtime dep** in the same module; extension functions (`GlobalScope.launch`, `Context.playerSettingsDataStore`) can't be called fully-qualified / without receiver; Compose function-type params must be invoked positionally (no named args); Kotlin local functions must be declared before use; `EpisodePattern.find()` returns `Pair<Int?, Int>?` (not an object).
+### Bottom Bar & Transport Restructure (`PlayerScreenBottomBar.kt`)
+- **Sleek Scrubber Thumb**: Custom 14dp circular thumb (`Box(Modifier.size(14.dp).shadow(2.dp, CircleShape).background(Color.White, CircleShape))`) replacing default M3 slider thumb, completely eliminating the vertical line (`|`) artifact. Annotated with `@OptIn(ExperimentalMaterial3Api::class)`.
+- **Balanced 3-Cluster Layout**:
+  - **Left**: Screen Lock button (`🔒`).
+  - **Center**: 5 transport controls (`⟲ 10s`, `⏮`, **Big Play/Pause**, `⏭`, `10s ⟳`).
+  - **Right**: Playback Speed pill (`1.0×`, tap toggles inline speed strip `0.5×`–`2.0×`; long-press resets to `1.0×`) and Aspect Ratio button (`FIT`, tap cycles mode; long-press opens mode selector).
+  - Cleaned up redundant bottom utility dock (tools relocated to top ribbon).
 
-## 4. Open items / next steps
+### Gesture Engine (`PlayerScreenGestures.kt` & `PlayerScreen.kt`)
+- **Double-Tap**:
+  - Center ($35\%–65\%$ width): Toggles Play / Pause.
+  - Left ($< 35\%$ width): Seeks backwards by 10 seconds.
+  - Right ($> 65\%$ width): Seeks forward by 10 seconds.
+- **Vertical Swipe Controls**:
+  - Left half: Slide up/down adjusts screen brightness (`0%`–`100%`).
+  - Right half: Slide up/down adjusts stream volume (`0%`–`100%`).
+- **Repositioned Gesture HUD**: Moved `GestureHudPill` to `Alignment.TopCenter` with status bar and cutout padding, keeping volume, brightness, and 2× boost indicators completely clear of subtitles.
+- **Hold-to-Boost**: Long-press and hold anywhere triggers instant `2× speed` until released.
 
-1. **On-device verification (NOT done yet — no device was available).** The whole v0.7 chain compiles and is wired, but nobody has pressed play on a real phone. Verify first:
-   - Library opens instantly on second launch (disk snapshot).
-   - Player opens fast; first frame lands quickly.
-   - Sub sync: toggle ON → MKV with embedded subs → auto-pick; separate `.srt` (mismatched filename, e.g. series name differs) → scoring picks the right one; episode folder → wrong-episode sub never selected.
-   - Toggle state survives: back out, play another video → still ON. Force-stop → still ON.
-2. **Wi-Fi ADB test session** (planned, interrupted): pair via Developer options → Wireless debugging → "Pair device with pairing code" (`adb pair IP:PORT CODE`, then `adb connect IP:PORT`), then drive the app with `adb shell input`, verify via `adb exec-out screencap -p > frame.png` (Read the PNG), record with `adb shell screenrecord /sdcard/test.mp4` and pull to Desktop.
-3. If sync still misbehaves on device: logcat filter `adb logcat -s SUB PLAYER` (tags used: `SUB`, `PLAYER`, `APP`, `POSTER`).
-4. Known limitation (documented in V0.7_REPORT.md): fingerprint job decodes the whole file — up to ~10 min on long videos; runs in background, gated on battery-not-low.
+### Subtitle Dragging & Sub-Sync (`PlayerScreenSubtitles.kt` & `PlayerSettings.kt`)
+- **Draggable Subtitles**: Long-pressing active cue text triggers haptic feedback and scales the text ($1.08\times$), allowing free vertical dragging from $10\%$ to $94\%$ of screen height. Saved and remembered per video in `PlayerPrefs.saveSubtitlePosition`.
+- **Always-On Sub-Sync**: `subtitleAutoSyncEnabled` defaults to `true` permanently across all videos in `PlayerSettings.kt`.
+- **Instant Force Re-Sync**: Long-pressing the Sub-Sync pill triggers `actions.resyncNow()`, running a full-file cross-correlation fingerprint immediately.
 
-## 5. File map (v0.7 core surfaces)
+### Auto-Orientation & Library Performance
+- **Auto-Landscape (`PlayerActivity.kt`)**: Added `onVideoSizeChanged` listener to auto-orient widescreen ($w > h$) videos to `SCREEN_ORIENTATION_SENSOR_LANDSCAPE`.
+- **Scroll Optimization (`LibraryScreen.kt`)**: Bounded `PosterArt` thumbnails to `size(240, 135)` with `crossfade(true)`, eliminating 1080p uncompressed frame decoding during fast library scrolling.
+
+---
+
+## 3. Build & Release System
+
+- **Local environment has NO Java / Android SDK.** Local Gradle builds are not possible. All builds happen in GitHub Actions CI.
+- **Triggering Releases**:
+  - Pushing to `main` triggers `android_build.yaml` (debug APK verification).
+  - Pushing tags matching `v*` triggers `publish_release.yaml` (builds signed release APKs and automatically publishes the GitHub Release with attached APKs).
+  - Version bump in `app/build.gradle.kts` (`versionCode` and `versionName`) must precede the tag.
+- **Windows Git Push Gotcha**:
+  - Git's Windows `schannel` SSL backend can encounter `Empty reply from server` when talking to GitHub. Always use `git -c http.sslBackend=openssl push origin <branch/tag>`.
+- **Keystore**: Injected via CI secrets (`ANONRODE_KEYSTORE_BASE64`). Never committed to repository.
+- **Rules**:
+  - Never add AI attribution to commits (no `Co-Authored-By`, no "Generated with").
+  - Zero competitor brand names in code, UI strings, logs, or documentation.
+  - Ask before pushing and before large refactors.
+
+---
+
+## 4. File Map of Core Surfaces
 
 | Area | File |
 |---|---|
-| Scoring engine | `core/media/.../subtitle/SubtitleMatcher.kt` |
-| Sidecar resolution | `core/media/.../subtitle/SubtitleSourceResolver.kt` |
-| Fingerprint schedule | `core/media/.../sync/SyncFingerprint.kt`, `SyncFingerprintJob.kt` |
-| Scanner | `core/media/.../library/MediaScanner.kt` |
-| Settings field | `core/datastore/.../PlayerSettings.kt` (`subtitleAutoSyncEnabled`) |
-| Toggle UI | `app/.../ui/PlayerSubSyncToggle.kt`, `PlayerScreenBottomBar.kt` |
-| Action rail | `app/.../ui/PlayerScreenActionRail.kt` |
-| Host wiring | `app/.../PlayerActivity.kt` (`onSetSubSyncEnabled`, `onResyncNow`, `subtitleAutoSyncEnabled` param) |
-| Episode ordering cache | `feature/library/.../LibraryViewModel.kt` |
+| Top Bar Chrome | `app/src/main/java/dev/anonrode/player/ui/PlayerScreenControls.kt` |
+| Bottom Bar & Dock | `app/src/main/java/dev/anonrode/player/ui/PlayerScreenBottomBar.kt` |
+| Gestures & Touch Zones | `app/src/main/java/dev/anonrode/player/ui/PlayerScreenGestures.kt` |
+| Subtitle Rendering & Drag | `app/src/main/java/dev/anonrode/player/ui/PlayerScreenSubtitles.kt` |
+| Main Player Container | `app/src/main/java/dev/anonrode/player/ui/PlayerScreen.kt` |
+| Activity & Orientation | `app/src/main/java/dev/anonrode/player/PlayerActivity.kt` |
+| Library Thumbnail Perf | `app/src/main/java/dev/anonrode/player/ui/LibraryScreen.kt` |
+| Settings Defaults | `core/datastore/src/main/java/dev/anonrode/player/core/datastore/PlayerSettings.kt` |
+| Version Configuration | `app/build.gradle.kts` |
+| Engineering Skill | `.agents/skills/mobile-app-engineering/SKILL.md` |
 
-## 6. Uncommitted files (intentionally)
+---
 
-- `docs/draw_player_v1.py`, `docs/player_screen_v0_7.png` — local design sketches; user could not view them; do not commit unless asked.
-- Everything in `tools/` — user's own files, hands off.
+## 5. Next Steps & Recommended Verifications
+
+1. **On-Device Real World Run**:
+   - Sideload `anonrode-player-v0.8.6-app-arm64-v8a-releaseWithDebugSigning.apk` on a physical device.
+   - Verify top ribbon collapse/expand animation and smooth horizontal scrolling.
+   - Verify 14dp circular seekbar thumb drag feel and precision.
+   - Verify double-tap center for play/pause and sides for ±10s seek.
+   - Verify vertical swipe brightness (left) and volume (right) with HUD at top-center.
+   - Verify long-press subtitle drag up/down and position persistence across reopening.
+   - Verify auto-orientation behavior when opening 16:9 widescreen videos in portrait.
+
+---
+
+## 6. Uncommitted Files (Intentionally)
+
+- `docs/draw_player_v1.py`, `docs/player_screen_v0_7.png` — local design sketches; keep uncommitted unless explicitly requested.
+- Everything in `tools/` — user's personal tools, hands off.
+
