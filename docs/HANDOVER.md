@@ -1,6 +1,6 @@
 # HANDOVER NOTE — anonrode-player
 
-_Date: 2026-09-20 · Written after the v0.8.6 release · Read this before touching anything._
+_Date: 2026-09-20 · Written after the v0.8.7 release · Read this before touching anything._
 
 ---
 
@@ -8,17 +8,37 @@ _Date: 2026-09-20 · Written after the v0.8.6 release · Read this before touchi
 
 | Thing | State |
 |---|---|
-| Latest release | **v0.8.6** on GitHub Releases (tag `v0.8.6`, commit `f3df461`, marked **Latest**) |
+| Latest release | **v0.8.7** on GitHub Releases (tag `v0.8.7`, commit `219dda4`, marked **Latest**) |
 | APKs | 10 assets attached automatically by `publish_release.yaml` (arm64-v8a / armeabi-v7a / x86 / x86_64 / universal × release-with-debug-signing + debug) |
-| CI Status | **GREEN** — `android_build` run 35449355358, `publish_release` run 35449369815 |
-| Target APK to install | `anonrode-player-v0.8.6-app-arm64-v8a-releaseWithDebugSigning.apk` (installs cleanly over v0.8.5 / v0.7.0 without data loss) |
-| Release URL | https://github.com/anonrode/anonrode-player/releases/tag/v0.8.6 |
+| CI Status | **GREEN** — `android_build` run 35528984623, `publish_release` run 35529160364 |
+| Target APK to install | `anonrode-player-v0.8.7-app-arm64-v8a-releaseWithDebugSigning.apk` (installs cleanly over v0.8.6 / v0.7.0 without data loss) |
+| Release URL | https://github.com/anonrode/anonrode-player/releases/tag/v0.8.7 |
 
 ---
 
-## 2. What v0.8.6 Contains (Player Redesign & Performance Overhaul)
+## 2. What v0.8.7 Contains (Sub-Sync Reliability · Single-Plane Chrome · CI Test Gate)
+
+v0.8.6's player redesign and performance work (top-bar architecture, bottom-bar
+transport, gesture engine, subtitle dragging, auto-landscape, library thumbnail
+perf) are all still in place. v0.8.7 adds:
+
+### Sub-Sync Reliability (core/media)
+- **Pass-budget collapse fix** (`AudioSyncProcessor.kt`): `setEnabled(true)` used to re-arm the 24-pass listening schedule on EVERY call — including redundant ON→ON hits from the host mirroring the whole settings DataStore. Zeroing `passesUsed` with a large `binCount` banked collapsed the ~4.8-minute listen into ~240 ms of audio; every collapsed pass was refused, each refusal reset `stableHits`, so the two consecutive agreeing passes a lock requires became unreachable. Now re-arms only on a genuine OFF→ON flip.
+- **Second re-arm path closed** (`setCues`): re-arms only when the cue list actually changes (structural compare; `PlaybackEngine.setSubSyncEnabled` re-pushes the same list on every emission). `passesScheduled` monotonic counter pins it in tests.
+- **Host churn fix** (`PlayerActivity.kt`): settings collector mirrors volume boost and sub-sync into the engine only when those values actually change.
+- **No more permanent no-lock verdicts** (`SyncFingerprintJob.kt`): a truncated decode never gets marked "checked"; gate-busy retries can no longer consume the whole resume budget.
+- **Lock always lands** (`SyncFingerprintJob.kt`): computed locks persist under `NonCancellable`; `CancellationException` rethrown cleanly.
+
+### Single-Plane Chrome (player `ui/`)
+- **Status strip** (`PlayerScreenStatusStrip.kt`): sync state + speed + remaining as a 26dp read-out line above the seek bar.
+- **Inline style tray** (`PlayerScreenStyleTray.kt`): subtitle tuning in place; the cue stays visible while tuned.
+- **Always-visible rail** (`PlayerScreenControls.kt` + `PlayerScreenChrome.kt`): lock, sync, EQ, style, rotate, speed, aspect, PiP, capture, cast — no collapse chevron, pure centered transport.
+
+### CI Test Gate
+- Both workflows run `testDebugUnitTest` as a hard gate before APK builds. First run caught and resolved 3 real compile errors plus 4 pre-existing test failures (3 matcher spec-drift cases now `@Ignore`d with reasons; one FP boundary fixed). 5 new regression tests drive the real `AudioSyncProcessor` and would trip the collapse.
 
 ### Top Bar Architecture (`PlayerScreenControls.kt`)
+- *(v0.8.6, unchanged)*
 - **Row 1 (Primary Header Controls)**:
   - Back button (`←`) exits cleanly back to library browsing.
   - Video title rendered with single-line ellipsis (no internal path truncation).
@@ -97,7 +117,11 @@ _Date: 2026-09-20 · Written after the v0.8.6 release · Read this before touchi
 ## 5. Next Steps & Recommended Verifications
 
 1. **On-Device Real World Run**:
-   - Sideload `anonrode-player-v0.8.6-app-arm64-v8a-releaseWithDebugSigning.apk` on a physical device.
+   - Sideload `anonrode-player-v0.8.7-app-arm64-v8a-releaseWithDebugSigning.apk` on a physical device.
+   - Verify the status strip: sync dot/label flips to green "Synced +X.Xs" once a lock lands (the whole point of the v0.8.7 engine work).
+   - Open one of the episodes that failed on v0.8.6 (e.g. the one that never synced) and confirm it now fingers-prints to completion and locks.
+   - Verify the rail is always visible (no collapse chevron), every hit area ≥ 48dp, and the tools scroll smoothly.
+   - Verify the inline style tray: style changes apply with the cue still visible; no modal appears from the sync popover STYLE button or the Control Centre tile.
    - Verify top ribbon collapse/expand animation and smooth horizontal scrolling.
    - Verify 14dp circular seekbar thumb drag feel and precision.
    - Verify double-tap center for play/pause and sides for ±10s seek.
