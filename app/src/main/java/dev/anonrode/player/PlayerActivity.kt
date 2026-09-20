@@ -576,13 +576,31 @@ class PlayerActivity : ComponentActivity() {
         // persisted immediately by applySubtitleStyle, so this echo is
         // idempotent and keeps sheet + cue + settings in agreement.
         lifecycleScope.launch {
+            var appliedBoostPct = Int.MIN_VALUE
+            var appliedSubSync: Boolean? = null
             app.playerSettingsDataStore.data.collect { s ->
                 currentSettings = s
                 subStyle = s.toSubtitleStyle()
-                // Live volume boost: the processor's gain is read per-buffer
-                // on the audio thread, so this applies mid-playback.
-                engine.setVolumeBoost(1f + s.volumeBoostPct / 100f)
-                engine.setSubSyncEnabled(s.subtitleAutoSyncEnabled)
+                // v0.8.7 P0: this collector fires on EVERY settings write,
+                // including the subtitle size/colour/position taps that have
+                // nothing to do with playback. Re-applying the audio
+                // processors unconditionally re-armed the live sync pass
+                // schedule dozens of times per minute — see
+                // [AudioSyncProcessor.setEnabled] for the budget collapse it
+                // caused in the 09-19 device log. Both calls are pure mirrors
+                // of a persisted field, so only a real change is worth
+                // applying.
+                if (s.volumeBoostPct != appliedBoostPct) {
+                    appliedBoostPct = s.volumeBoostPct
+                    // Live volume boost: the processor's gain is read
+                    // per-buffer on the audio thread, so this applies
+                    // mid-playback.
+                    engine.setVolumeBoost(1f + s.volumeBoostPct / 100f)
+                }
+                if (s.subtitleAutoSyncEnabled != appliedSubSync) {
+                    appliedSubSync = s.subtitleAutoSyncEnabled
+                    engine.setSubSyncEnabled(s.subtitleAutoSyncEnabled)
+                }
             }
         }
 

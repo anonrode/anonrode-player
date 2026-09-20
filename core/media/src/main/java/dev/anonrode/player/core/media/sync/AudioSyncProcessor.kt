@@ -81,9 +81,12 @@ class AudioSyncProcessor(
     // resume far into) an episode instead of dying at a fixed cap.
     private val audioBins = FloatArray(BIN_WINDOW)
     private var baseIdx = 0
-    private var binCount = 0
+    // v0.8.7: internal (not private) so [SyncScheduleRegressionTest] can assert
+    // the pass schedule's exact position. The 09-19 device log's collapsed
+    // budget was invisible to every black-box observation — it needed these.
+    internal var binCount = 0
 
-    @Volatile private var locked = false
+    @Volatile internal var locked = false
 
     // v0.8 pass budget: the scheduler fires SpeechCorrelator.PASS_BINS.size
     // passes as the window grows (see accumulateBin), and feature
@@ -93,8 +96,21 @@ class AudioSyncProcessor(
     // removes the v0.7.4-era sparse-dialogue starvation structurally.
     // flush()/reset()/position re-anchor and a fresh non-empty setCues
     // re-arm the schedule.
-    @Volatile private var passesUsed = 0
-    @Volatile private var gaveUp = false
+    @Volatile internal var passesUsed = 0
+    @Volatile internal var gaveUp = false
+
+    /**
+     * v0.8.7: total passes ever scheduled. Monotonic — never reset.
+     *
+     * [passesUsed] ALONE CANNOT EXPOSE A REDUNDANT RE-ARM: zeroing it makes it
+     * re-climb through the same thresholds it already crossed, so it converges
+     * back to the exact value it had. That is precisely why the 09-19
+     * collapse was invisible in the state and only visible in the log's
+     * timestamps. The RATE is the invariant that matters — a redundant
+     * setEnabled(true) must schedule zero new passes — and this counter is
+     * what [SyncScheduleRegressionTest] asserts on.
+     */
+    @Volatile internal var passesScheduled = 0
 
     // Bumped on every window reset (flush/reset/position re-anchor) so an
     // evaluation already in flight against stale bins is discarded instead
@@ -130,8 +146,16 @@ class AudioSyncProcessor(
     private val worker = SyncAnalysisWorker(BIN_WINDOW, this::evaluate)
 
     fun setCues(cues: List<SubtitleCue>) {
+        // v0.8.7 P0: only a GENUINE track change is a fresh matching problem.
+        // The host re-pushes the SAME list on every settings emission (see
+        // PlaybackEngine.setSubSyncEnabled), and the unconditional re-arm
+        // below was the second half of the collapsed-budget bug documented on
+        // [setEnabled]: each redundant push zeroed [passesUsed] while a large
+        // [binCount] was already banked. SubtitleCue is a data class, so this
+        // is a structural list comparison (~2 µs for 800-odd cues).
+        val changed = this.cues != cues
         this.cues = cues
-        if (cues.isNotEmpty()) {
+        if (cues.isNotEmpty() && changed) {
             // A fresh subtitle track is a fresh matching problem: re-arm the
             // attempt budget so a track attached after a previous give-up
             // still gets its chance (a seek/episode switch would re-arm via
@@ -171,6 +195,7 @@ class AudioSyncProcessor(
      * setCues) re-arms the budget naturally.
      */
     fun setEnabled(enabled: Boolean) {
+        val wasEnabled = this.enabled
         this.enabled = enabled
         if (!enabled) {
             // Forced give-up so we stop spending CPU on a user-disabled
@@ -181,9 +206,25 @@ class AudioSyncProcessor(
             // flip stayed dead until the next seek even though the budget
             // re-armed (the gaveUp branch below was unreachable-by-effect).
             locked = false
-        } else {
-            // Re-arm on the OFF→ON flip: keeps already-accumulated bins and
-            // resumes evaluation at the next eval slot.
+        } else if (!wasEnabled) {
+            // Re-arm on a GENUINE OFF→ON flip only: keeps already-accumulated
+            // bins and resumes evaluation at the next eval slot.
+            //
+            // v0.8.7 P0: this used to run on EVERY setEnabled(true) call. The
+            // host mirrors the whole settings DataStore into this processor
+            // (PlayerActivity's settings collector), so any unrelated settings
+            // write — every subtitle size/colour/position tap — landed here.
+            // [passesUsed] was zeroed while [binCount] was NOT, so the very
+            // next 10 ms window already satisfied PASS_BINS[0], the one after
+            // satisfied PASS_BINS[1], and so on: the entire 24-pass listening
+            // budget collapsed into ~240 ms of audio, all of it judging the
+            // same tiny window. Every collapsed pass was refused (NoMatch) and
+            // reset stableHits, so the two CONSECUTIVE agreeing passes a lock
+            // requires became unreachable and the engine handed off having
+            // "listened" to a quarter of a second. The 09-19 device log is the
+            // exact signature: `bc=205` three times in 25 ms, then a wall of
+            // `judged, gates refused`. It also dropped a confirmed lock via
+            // `locked = false` on every style tap.
             passesUsed = 0
             gaveUp = false
             locked = false // belt & braces: never inherit a stale lock
@@ -503,6 +544,7 @@ class AudioSyncProcessor(
             cues.isNotEmpty() && !gaveUp && enabled
         ) {
             passesUsed++
+            passesScheduled++
             scheduleEvaluate(posMs)
             if (passesUsed == SpeechCorrelator.PASS_BINS.size) {
                 // Last pass scheduled: the listening budget is spent —

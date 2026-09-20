@@ -340,6 +340,29 @@ class SyncFingerprintJob(
                         (if (extractionComplete) "" else ", STILL truncated after ${runAttemptCount + 1} passes") +
                         ")",
                 )
+                // v0.8.7 P0: NEVER record a verdict from a decode that did not
+                // finish the file. [runAttemptCount] counts EVERY delivery, and
+                // the gate-busy Result.retry() above increments it — so three
+                // retries spent waiting on a concurrent decode consumed this
+                // video's whole resume budget, and the next TRUNCATED decode
+                // fell through to here and called markAutoSyncChecked. That is a
+                // permanent "no lock" verdict for audio the engine never
+                // finished hearing: doWork() then short-circuits on every later
+                // open with "fingerprint verdict already recorded, skipping"
+                // and the episode never syncs again without an explicit
+                // "Resync now". The 09-19 device log shows the setup exactly —
+                // four gate-busy retries on one episode, then no lock and no
+                // sync. A truncated decode is not evidence about the video, so
+                // drop the checked mark and let a later open resume extraction
+                // from the cached onset prefix (the whole point of OnsetCache).
+                if (!extractionComplete) {
+                    AppLog.d(
+                        "SYNC_JOB",
+                        "no verdict: decode still truncated — will resume on a later attempt",
+                    )
+                    return@withContext Result.success()
+                }
+
                 // This is a verdict about the video's own data (the gates
                 // refused every usable source, or there was too little
                 // detectable speech), not a transient failure: record it so
@@ -349,7 +372,17 @@ class SyncFingerprintJob(
                 return@withContext Result.success()
             }
 
-            store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, lock.piecewise)
+            // v0.8.7 P0: commit the computed lock OUTSIDE the cancellable
+            // scope. updateAutoSync is a suspend Room write; when WorkManager
+            // cancelled this job mid-write (ExistingWorkPolicy.REPLACE from a
+            // forced "Resync now") the suspension point threw
+            // CancellationException and a fully-computed lock was never
+            // persisted — the 09-19 log's "Tier 1 envelope lock" line with no
+            // matching "LOCKED" line after it. A lock the engine has already
+            // computed must always land.
+            withContext(kotlinx.coroutines.NonCancellable) {
+                store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, lock.piecewise)
+            }
             // v0.8.3: a lock fitted on a TRUNCATED extraction is persisted
             // (better than nothing, the player applies it immediately) but
             // is NOT the final word — the checked mark stays off, so the
@@ -375,6 +408,19 @@ class SyncFingerprintJob(
                     "recall=${"%.2f".format(lock.recall)}"
             )
             Result.success()
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            // v0.8.7 P0: WorkManager cancels an in-flight unique job when a
+            // forced "Resync now" enqueues with REPLACE. That used to surface
+            // as "fingerprint failed | Job was cancelled" and then be retried
+            // as if the file were poisoned. The 09-19 log shows the real cost:
+            // a Tier 1 envelope lock was computed at 16:06:58.259 and the job
+            // was cancelled 6 ms later, so a perfectly good lock was thrown
+            // away and the episode stayed unsynced. Honour the cancellation
+            // instead of mislabelling it a failure — and never schedule a
+            // retry for work the caller asked to stop.
+            AppLog.d("SYNC_JOB", "fingerprint cancelled (superseded work) — no retry")
+            throw c
+
         } catch (t: Throwable) {
             AppLog.e("SYNC_JOB", "fingerprint failed", t)
             // Each attempt is a full MediaCodec decode + Silero VAD pass; a
