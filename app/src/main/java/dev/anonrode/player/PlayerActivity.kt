@@ -1006,6 +1006,23 @@ class PlayerActivity : ComponentActivity() {
         // v0.7.4 P1-2: a background verdict for the PREVIOUS video can no
         // longer reach this session — disarm the collector's verdict gate so
         // the fresh video's own scheduling arms it anew.
+        //
+        // v0.8.8 P0: switching videos does NOT cancel the previous video's
+        // fingerprint job. DECODE_GATE is a process-wide Semaphore(1), so the
+        // abandoned episode's decode kept the gate for minutes — and the NEW
+        // video's log filled with "another decode holds the gate, retrying"
+        // instead of syncing (09-20 v0.8.7 log, Growling Tiger EP03 blocked
+        // by Bloody Flower EP05). Cancel the previous video's unique-work so
+        // the new one owns the gate immediately. The resumable OnsetCache
+        // keeps any progress the old job made, so the cancellation costs
+        // nothing if the user comes back.
+        run {
+            val prev = currentUriStr
+            if (prev != null && prev != uriStr) {
+                SyncFingerprint.cancel(applicationContext, prev)
+                AppLog.d("PLAY", "cancelled fingerprint for abandoned video")
+            }
+        }
         syncAwaitingBackgroundVerdict = false
         // Kick off the MediaStore aspect lookup off the main thread so the
         // next PiP enter has a cached (w,h) and never blocks on a query.
