@@ -19,6 +19,14 @@ android {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
     }
+
+    // v0.8.7: the sync engine's unit tests drive the real AudioSyncProcessor on
+    // a plain JVM (no Robolectric). AppLog only reaches android.util.Log on a
+    // failed file write, but a stub that throws would fail the whole suite, so
+    // any android.* reference must degrade to a default instead.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {

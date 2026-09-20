@@ -38,6 +38,24 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # v0.8.7: the unit tests were never wired into CI — they existed in
+      # core/media/src/test but no workflow ever invoked them, so a regression
+      # in the sync engine could only be found on a phone. This gate runs
+      # before the APK build so a broken engine fails fast and loud, and the
+      # JUnit XML is uploaded even on failure so the report is readable from
+      # the Actions run without re-running anything locally.
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Upload unit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            **/build/test-results/testDebugUnitTest/**
+            **/build/reports/tests/testDebugUnitTest/**
+
       - name: Build debug APKs
         run: ./gradlew assembleDebug --stacktrace
 
