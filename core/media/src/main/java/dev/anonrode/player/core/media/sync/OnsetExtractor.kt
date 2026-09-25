@@ -106,6 +106,7 @@ class OnsetExtractor(private val context: Context) {
         videoPath: String,
         videoUri: Uri? = null,
         resumeFromSec: Double = -1.0,
+        isCancelled: () -> Boolean = { false },
     ): OnsetSources {
         lastDecodeTruncated = false
         lastCoveredSec = 0.0
@@ -127,7 +128,8 @@ class OnsetExtractor(private val context: Context) {
         // first callback below.
         var offsetSec = 0.0
         var offsetSet = false
-        decodeAudio(videoPath, videoUri, resumeFromSec) { buf, sr, ch, isFloat, ptsUs ->
+        decodeAudio(videoPath, videoUri, resumeFromSec, isCancelled) { buf, sr, ch, isFloat, ptsUs ->
+            if (isCancelled()) return@decodeAudio false
             if (!offsetSet) {
                 if (resumeFromSec >= 0.0) {
                     offsetSec = if (ptsUs > 0L) ptsUs / 1_000_000.0 else resumeFromSec
@@ -138,7 +140,7 @@ class OnsetExtractor(private val context: Context) {
             }
             silence.process(buf, sr, ch, isFloat)
             vad?.processPcm(buf, sr, ch, isFloat)
-            true
+            !isCancelled()
         }
         val silOnsets = sil ?: silence.finish()
         val (vadOnsets, vadEnvelope) = if (vad != null) {
@@ -242,6 +244,7 @@ class OnsetExtractor(private val context: Context) {
         videoPath: String?,
         videoUri: Uri?,
         resumeFromSec: Double = -1.0,
+        isCancelled: () -> Boolean = { false },
         onPcm: (buf: ByteBuffer, sampleRate: Int, channels: Int, isFloat: Boolean, ptsUs: Long) -> Boolean,
     ) {
         val extractor = MediaExtractor()
@@ -307,6 +310,11 @@ class OnsetExtractor(private val context: Context) {
             val t0 = System.currentTimeMillis()
 
             while (!outputDone) {
+                if (isCancelled()) {
+                    AppLog.d("ONSET", "decode cancelled by caller, aborting")
+                    lastDecodeTruncated = true
+                    break
+                }
                 if (!inputDone) {
                     val inIdx = codec.dequeueInputBuffer(10_000)
                     if (inIdx >= 0) {

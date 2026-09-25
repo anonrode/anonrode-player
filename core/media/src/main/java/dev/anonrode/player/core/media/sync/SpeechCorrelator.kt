@@ -160,7 +160,7 @@ object SpeechCorrelator {
         var hard = 0
         for (i in 0 until n) if (audio[i] > 0.3f) hard++
         if (hard < MIN_SPEECH_BINS) return Outcome.NotReady
-        if (n < ELIGIBLE_BINS) return Outcome.NoMatch // reportable, not lockable yet
+        if (n < ELIGIBLE_BINS) return Outcome.NotReady // not enough audio to judge yet
 
         // A envelope → 8 bit-planes over a word array (bit i at position i)
         val words = (n + 63) / 64
@@ -188,12 +188,13 @@ object SpeechCorrelator {
         val varA = n * sumA2 - sumA * sumA
         if (varA <= 1e-9) return Outcome.NoMatch
 
-        // B cue grid on the FULL bin array, word layout, bit j at j
-        val bWords = (total + 63) / 64
+        val padBins = (maxOffsetSec / ALIGN_BIN).toInt()
+        val bBins = total + 2 * padBins
+        val bWords = (bBins + 63) / 64
         val B = LongArray(bWords)
         for (cue in cues) {
-            val i0 = maxOf(0, ((cue.start - baseSeconds) / ALIGN_BIN).toInt())
-            val i1 = minOf(total - 1, ((cue.end - baseSeconds) / ALIGN_BIN).toInt())
+            val i0 = maxOf(0, (((cue.start - baseSeconds) / ALIGN_BIN) + padBins).toInt())
+            val i1 = minOf(bBins - 1, (((cue.end - baseSeconds) / ALIGN_BIN) + padBins).toInt())
             if (i0 > i1) continue
             var w = i0 shr 6
             val wEnd = i1 shr 6
@@ -206,8 +207,8 @@ object SpeechCorrelator {
             }
         }
 
-        val lo = -(maxOffsetSec / ALIGN_BIN).toInt()
-        val hi = (maxOffsetSec / ALIGN_BIN).toInt()
+        val lo = -padBins
+        val hi = padBins
         val shifts = hi - lo + 1
         val rs = DoubleArray(shifts)
         val dest = LongArray(words)
@@ -217,7 +218,7 @@ object SpeechCorrelator {
         var bestShift = 0
         for (idx in 0 until shifts) {
             val shift = idx + lo
-            shiftB(B, bWords, dest, words, shift)
+            shiftB(B, bWords, dest, words, shift + padBins)
             if (lastBits != 0) dest[words - 1] = dest[words - 1] and ((1L shl lastBits) - 1)
             var sB = 0
             for (k in 0 until words) sB += java.lang.Long.bitCount(dest[k])
@@ -250,7 +251,7 @@ object SpeechCorrelator {
         val margin = if (second <= -2.0) peak else peak - second
 
         // containment diagnostic: speech bins covered at the peak
-        shiftB(B, bWords, dest, words, bestShift)
+        shiftB(B, bWords, dest, words, bestShift + padBins)
         if (lastBits != 0) dest[words - 1] = dest[words - 1] and ((1L shl lastBits) - 1)
         var inside = 0
         for (i in 0 until n) {

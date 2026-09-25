@@ -101,7 +101,7 @@ class SyncFingerprintJob(
         // own start-to-start gaps show that cadence), and by then the
         // preceding decode has usually finished. Never block: WorkManager's
         // executor is small and shared with the app's other work.
-        if (!DECODE_GATE.tryAcquire()) {
+        if (!DECODE_GATE.tryAcquire(3, java.util.concurrent.TimeUnit.SECONDS)) {
             AppLog.d("SYNC_JOB", "another decode holds the gate, retrying")
             return@withContext Result.retry()
         }
@@ -260,7 +260,12 @@ class SyncFingerprintJob(
                         ),
                     )
                 }
-                val fresh = extractor.extractSources(videoPath, Uri.parse(videoUri), resumeFrom)
+                val fresh = extractor.extractSources(
+                    videoPath,
+                    Uri.parse(videoUri),
+                    resumeFrom,
+                    isCancelled = { !coroutineContext.isActive || isStopped },
+                )
                 extractionComplete = !extractor.lastDecodeTruncated
                 sources = if (resumeFrom > 0.0 && cached != null) {
                     OnsetExtractor.OnsetSources(

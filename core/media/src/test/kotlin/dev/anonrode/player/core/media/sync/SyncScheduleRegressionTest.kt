@@ -260,4 +260,26 @@ class SyncScheduleRegressionTest {
         assertEquals("an empty track must not touch the budget", armed, p.passesUsed)
         assertEquals("an empty track must not hand off", 0, listener.noMatchCount)
     }
+
+    @Test
+    fun `reset followed by setCues does not trigger false give-up or analyzer inactive`() {
+        val listener = RecordingListener()
+        val p = newProcessor(listener)
+        p.setCues(cues())
+        feed(p, SHALLOW_SECONDS)
+
+        // Simulate video transition / player reset
+        p.reset()
+        // Video opens with cues attached before PCM audio starts playing
+        p.setCues(cues())
+
+        assertFalse("reset followed by setCues must not give up", p.gaveUp)
+        assertEquals("must not notify noMatch / inactive on open", 0, listener.noMatchCount)
+
+        // When PCM audio arrives and configure runs, it should become active
+        p.configure(AudioFormat(SAMPLE_RATE, CHANNELS, C.ENCODING_PCM_16BIT))
+        feed(p, 1)
+        assertFalse(p.gaveUp)
+        assertEquals(0, listener.noMatchCount)
+    }
 }

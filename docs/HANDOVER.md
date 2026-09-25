@@ -1,6 +1,6 @@
 # HANDOVER NOTE — anonrode-player
 
-_Date: 2026-09-20 · Written after the v0.8.7 release · Read this before touching anything._
+_Date: 2026-09-25 · Written after the v0.8.8 release · Read this before touching anything._
 
 ---
 
@@ -8,15 +8,36 @@ _Date: 2026-09-20 · Written after the v0.8.7 release · Read this before touchi
 
 | Thing | State |
 |---|---|
-| Latest release | **v0.8.7** on GitHub Releases (tag `v0.8.7`, commit `219dda4`, marked **Latest**) |
+| Latest release | **v0.8.8** on GitHub Releases (tag `v0.8.8`) |
 | APKs | 10 assets attached automatically by `publish_release.yaml` (arm64-v8a / armeabi-v7a / x86 / x86_64 / universal × release-with-debug-signing + debug) |
-| CI Status | **GREEN** — `android_build` run 35528984623, `publish_release` run 35529160364 |
-| Target APK to install | `anonrode-player-v0.8.7-app-arm64-v8a-releaseWithDebugSigning.apk` (installs cleanly over v0.8.6 / v0.7.0 without data loss) |
-| Release URL | https://github.com/anonrode/anonrode-player/releases/tag/v0.8.7 |
+| CI Status | Verified via GitHub Actions CI (`android_build` and `publish_release`) |
+| Target APK to install | `anonrode-player-v0.8.8-app-arm64-v8a-releaseWithDebugSigning.apk` (installs cleanly over v0.8.7 / v0.8.6 without data loss) |
+| Release URL | https://github.com/anonrode/anonrode-player/releases/tag/v0.8.8 |
 
 ---
 
-## 2. What v0.8.7 Contains (Sub-Sync Reliability · Single-Plane Chrome · CI Test Gate)
+## 2. What v0.8.8 Contains (Full Sub-Sync Reliability & Deadlock Fixes)
+
+v0.8.8 resolves the root causes discovered in live device logs (`Infinix X669 · Android API 31`) where subtitle sync completely failed to lock:
+
+### Subtitle Sync Engine & Processor (`core/media`)
+- **Fatal Live Sync Deactivation on Video Open (`AudioSyncProcessor.kt`)**: `AudioSyncProcessor.reset()` previously left `configured = true` while clearing `active = false`. On the next video open, `setCues(...)` saw `configured && !active`, concluded the sink had no PCM capability, and permanently called `listener.onSyncNoMatch()` with `gaveUp = true` at frame 0. Fixed by ensuring `reset()` and unconfigured audio formats set `configured = false`.
+- **Dialogue Pause Agreement Retention (`AudioSyncProcessor.kt`)**: During normal conversational pauses, `SpeechCorrelator.Outcome.NotReady` no longer wipes `stableHits` to 0. The agreement chain is preserved across dialogue gaps so two consecutive agreeing passes can reliably achieve a lock.
+- **Pearson Subtitle Grid Negative Headroom (`SpeechCorrelator.kt`)**: Added `padBins = (maxOffsetSec / ALIGN_BIN).toInt()` headroom to the subtitle grid $B$ and search loop. Subtitle cues leading audio (negative shift) no longer clamp to bin 0 or read zero-fill, restoring true Pearson correlation peaks on mid-video resumes.
+- **Graceful Gate Handling on Warmup (`SpeechCorrelator.kt`)**: Returns `Outcome.NotReady` rather than `Outcome.NoMatch` when bin count is below `ELIGIBLE_BINS` (160 bins), preventing premature gate failure logs during the initial warmup window.
+
+### Concurrency, Cancellation & State Store (`app/` & `core/media`)
+- **Decode Semaphore Deadlock Prevention (`SyncFingerprintJob.kt` & `OnsetExtractor.kt`)**: Added cooperative cancellation checks (`isCancelled()`) inside `OnsetExtractor.decodeAudio`'s `while (!outputDone)` loop. Cancelling an abandoned episode's background job now instantly breaks out of `MediaCodec` and frees `DECODE_GATE` (Semaphore(1)). In `SyncFingerprintJob`, replaced `tryAcquire()` with `tryAcquire(3, TimeUnit.SECONDS)` so a new video cleanly waits for a cancelled predecessor to release the gate instead of bouncing to exponential backoff.
+- **Previous Episode Fingerprint Cancellation (`PlayerActivity.kt`)**: In `openVideo()`, captured `prevUri` *before* assigning `currentUriStr = uriStr`, correctly invoking `SyncFingerprint.cancel(applicationContext, prevUri)`.
+- **Room State Collector per Video (`PlayerActivity.kt`)**: Replaced the blocked `while (true)` Room flow collector with `startStateStoreCollector(uriStr)`, which cancels the previous collector and starts a fresh collector per media item so Room locks for subsequent episodes are immediately applied.
+- **Fresh UI State Reset (`PlayerActivity.kt`)**: Explicitly reset `lastCues = emptyList()` on video open to avoid carrying over cue state between media items.
+
+### Regression Unit Tests
+- Added `reset followed by setCues does not trigger false give-up or analyzer inactive` regression test to `SyncScheduleRegressionTest.kt`.
+
+---
+
+## 3. What v0.8.7 Contained (Sub-Sync Reliability · Single-Plane Chrome · CI Test Gate)
 
 v0.8.6's player redesign and performance work (top-bar architecture, bottom-bar
 transport, gesture engine, subtitle dragging, auto-landscape, library thumbnail

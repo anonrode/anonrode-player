@@ -509,52 +509,57 @@ class PlayerActivity : ComponentActivity() {
         // applied to the engine immediately — subs snap into place mid-
         // watch. Skips non-locks (0/1f sentinel); the live lock path
         // (onSyncLocked) overwrites cleanly if both land.
-        lifecycleScope.launch {
-            var collected = currentUriStr
-            while (true) {
-                val uri = collected ?: break
-                app.stateStore.getAsFlow(uri).collect { st ->
-                    val s = st ?: return@collect
-                    if (s.autoSyncOffsetMs == 0L && s.autoSyncSpeedFactor == 1f) {
-                        // v0.7.4 P1-2: a row change carrying the no-lock
-                        // SENTINEL with a checked timestamp is the engine's
-                        // NEGATIVE verdict landing while we watch (refused
-                        // fit, or a no-usable-subtitle file at first open).
-                        // Nothing will ever produce a lock for this video on
-                        // its own — stop the "Syncing…" indicator instead of
-                        // burning it forever. GATED on a verdict we actually
-                        // scheduled: an ALREADY-checked video's first flow
-                        // emission must not preempt the live engine's own
-                        // honest attempt. Force "Resync now" re-arms.
-                        if (syncAwaitingBackgroundVerdict) {
-                            syncAwaitingBackgroundVerdict = false
-                            if (s.autoSyncCheckedAtMs != 0L && subSyncRunning) {
-                                withContext(Dispatchers.Main) {
-                                    if (uri == currentUriStr) subSyncRunning = false
-                                }
+        // v0.7.1: apply a persisted fingerprint lock to the LIVE session.
+        // The fingerprint job runs in the background (whole-file decode)
+        // and writes its lock to Room; startStateStoreCollector(uri) is
+        // launched by openVideo for each active video, keeping live state
+        // and Room in sync across episode switches.
+    }
+
+    private var stateStoreCollectorJob: kotlinx.coroutines.Job? = null
+
+    private fun startStateStoreCollector(uri: String) {
+        stateStoreCollectorJob?.cancel()
+        val app = AnonrodeApp.get(this)
+        stateStoreCollectorJob = lifecycleScope.launch {
+            app.stateStore.getAsFlow(uri).collect { st ->
+                val s = st ?: return@collect
+                if (s.autoSyncOffsetMs == 0L && s.autoSyncSpeedFactor == 1f) {
+                    // v0.7.4 P1-2: a row change carrying the no-lock
+                    // SENTINEL with a checked timestamp is the engine's
+                    // NEGATIVE verdict landing while we watch (refused
+                    // fit, or a no-usable-subtitle file at first open).
+                    // Nothing will ever produce a lock for this video on
+                    // its own — stop the "Syncing…" indicator instead of
+                    // burning it forever. GATED on a verdict we actually
+                    // scheduled: an ALREADY-checked video's first flow
+                    // emission must not preempt the live engine's own
+                    // honest attempt. Force "Resync now" re-arms.
+                    if (syncAwaitingBackgroundVerdict) {
+                        syncAwaitingBackgroundVerdict = false
+                        if (s.autoSyncCheckedAtMs != 0L && subSyncRunning) {
+                            withContext(Dispatchers.Main) {
+                                if (uri == currentUriStr) subSyncRunning = false
                             }
                         }
-                        return@collect
                     }
-                    if (!currentSettings.subtitleAutoSyncEnabled) return@collect
-                    // The verdict we were waiting for (if any) is this lock.
-                    syncAwaitingBackgroundVerdict = false
-                    withContext(Dispatchers.Main) {
-                        if (uri != currentUriStr) return@withContext
-                        AnonrodeApp.get(this@PlayerActivity).engine
-                            .applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor)
-                        piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
-                        // A real lock just landed for the video being watched
-                        // (the sentinel values are filtered above): sync work
-                        // for this video is done, so the "SYNCING" indicator
-                        // must stop — the toggle stays ON, the subs are now
-                        // corrected.
-                        subSyncRunning = false
-                    }
+                    return@collect
                 }
-                // getAsFlow completes only if the Activity scope is torn
-                // down; loop back in case currentUriStr changed meanwhile.
-                collected = currentUriStr
+                if (!currentSettings.subtitleAutoSyncEnabled) return@collect
+                // The verdict we were waiting for (if any) is this lock.
+                syncAwaitingBackgroundVerdict = false
+                withContext(Dispatchers.Main) {
+                    if (uri != currentUriStr) return@withContext
+                    AnonrodeApp.get(this@PlayerActivity).engine
+                        .applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor)
+                    piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
+                    // A real lock just landed for the video being watched
+                    // (the sentinel values are filtered above): sync work
+                    // for this video is done, so the "SYNCING" indicator
+                    // must stop — the toggle stays ON, the subs are now
+                    // corrected.
+                    subSyncRunning = false
+                }
             }
         }
 
@@ -1002,6 +1007,7 @@ class PlayerActivity : ComponentActivity() {
         openJob?.cancel()
         openGeneration++
         val gen = openGeneration
+        val prevUri = currentUriStr
         currentUriStr = uriStr
         // v0.7.4 P1-2: a background verdict for the PREVIOUS video can no
         // longer reach this session — disarm the collector's verdict gate so
@@ -1016,19 +1022,18 @@ class PlayerActivity : ComponentActivity() {
         // the new one owns the gate immediately. The resumable OnsetCache
         // keeps any progress the old job made, so the cancellation costs
         // nothing if the user comes back.
-        run {
-            val prev = currentUriStr
-            if (prev != null && prev != uriStr) {
-                SyncFingerprint.cancel(applicationContext, prev)
-                AppLog.d("PLAY", "cancelled fingerprint for abandoned video")
-            }
+        if (prevUri != null && prevUri != uriStr) {
+            SyncFingerprint.cancel(applicationContext, prevUri)
+            AppLog.d("PLAY", "cancelled fingerprint for abandoned video")
         }
+        startStateStoreCollector(uriStr)
         syncAwaitingBackgroundVerdict = false
         // Kick off the MediaStore aspect lookup off the main thread so the
         // next PiP enter has a cached (w,h) and never blocks on a query.
         refreshPipAspectAsync(uriStr)
 
         // Fresh UI state for the new media item.
+        lastCues = emptyList()
         cueText = null
         positionSec = 0f
         // v0.7.3: the new media's onTracksChanged repopulates this; zero it

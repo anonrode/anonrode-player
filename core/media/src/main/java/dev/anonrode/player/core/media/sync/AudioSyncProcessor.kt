@@ -282,6 +282,11 @@ class AudioSyncProcessor(
     }
 
     override fun configure(fmt: AudioFormat): AudioFormat {
+        if (fmt == AudioFormat.NOT_SET) {
+            configured = false
+            active = false
+            return AudioFormat.NOT_SET
+        }
         sampleRate = fmt.sampleRate; channelCount = fmt.channelCount
         inputIsFloat = fmt.encoding == C.ENCODING_PCM_FLOAT
         // Accept 16-bit AND float PCM: float-passthrough devices used to be
@@ -367,6 +372,7 @@ class AudioSyncProcessor(
         flush()
         cues = emptyList()
         active = false
+        configured = false
         // The worker thread is deliberately kept alive: the processor is
         // reused across player rebuilds (reset() then configure() again).
     }
@@ -607,16 +613,10 @@ class AudioSyncProcessor(
                 // is logged (this is the sync-log evidence line) and simply
                 // waits for the next scheduled pass.
                 //
-                // The agreement chain DOES break here, matching the oracle
-                // (`if kind != "MATCH": stable_hits = 0` in livesim's
-                // replay_v2): a NotReady pass between two agreeing MATCHes
-                // means the middle of that window had too little speech to
-                // judge, so the two matches are not CONSECUTIVE evidence.
-                // Leaving the chain intact would let sparse content lock on
-                // two agreements that never had a decidable pass between
-                // them — untested behavior the sim numbers don't cover.
-                stableHits = 0
-                lastOffset = Double.NaN
+                // A NotReady pass between two agreeing MATCHes means a short
+                // dialogue pause or music interlude occurred; preserving the
+                // agreement chain allows real dialogue to lock across natural
+                // speech pauses instead of endlessly wiping tentative hits.
                 AppLog.d("SYNC", "pass t=${req.posMs / 1000}s bc=${req.binCount}: not ready (thin speech mass)")
                 return
             }
