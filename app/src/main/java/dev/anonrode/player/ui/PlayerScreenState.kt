@@ -2,10 +2,12 @@ package dev.anonrode.player.ui
 
 import android.view.View
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.media3.common.util.UnstableApi
@@ -105,7 +107,7 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
     val localSeek = mutableFloatStateOf(-1f)
 
     /**
-     * Scrub frame preview (v0.7.1 MX-style scrub): the throttled, scaled
+     * Scrub frame preview (v0.7.1): the throttled, scaled
      * frame at the current scrub target — slider drag OR swipe gesture —
      * decoded by ScrubPreviewEffect while scrubbing, null otherwise.
      * Read only by the scrub bubble in the seek bar row.
@@ -311,4 +313,81 @@ internal class QuickRowUiState(initialHwDecoder: Boolean) {
      * gives up — never decorative.
      */
     val subSyncRunning = mutableStateOf(false)
+
+    /**
+     * The Quick Access Ribbon's item order, as stable tool keys. Persisted
+     * (see [dev.anonrode.player.PlayerPrefs.ribbonOrder]) so a user's
+     * arrangement survives process death.
+     *
+     * Held here rather than in the composable because BOTH the ribbon
+     * itself and the customise sheet read it: the sheet mutates this list,
+     * the ribbon renders it. A `remember` local would fork the two.
+     */
+    var ribbonOrder by mutableStateOf(RibbonTool.defaultOrder())
+        private set
+
+    /** True while the ribbon customise sheet is open. */
+    val showRibbonCustomise = mutableStateOf(false)
+
+    /**
+     * Tools the user has hidden. The full catalogue is always
+     * [RibbonTool.entries]; [ribbonOrder] is the visible sequence, so a
+     * hidden tool simply drops out of it. Keeping one ordered list (rather
+     * than an order + a hidden set that can disagree) makes every
+     * move/hide/show operation a single deterministic list edit.
+     */
+    private val hiddenTools = mutableStateOf(emptySet<RibbonTool>())
+
+    /** Load the persisted arrangement. Called once when the screen is built. */
+    fun loadRibbon(order: List<RibbonTool>, hidden: Set<RibbonTool>) {
+        ribbonOrder = order
+        hiddenTools.value = hidden
+    }
+
+    fun openRibbonCustomise() {
+        showRibbonCustomise.value = true
+    }
+
+    fun closeRibbonCustomise() {
+        showRibbonCustomise.value = false
+    }
+
+    /** Hide/show a tool; hiding also removes it from the visible order. */
+    fun toggleRibbonToolVisible(tool: RibbonTool) {
+        val hidden = hiddenTools.value
+        if (tool in hidden) {
+            hiddenTools.value = hidden - tool
+            // Re-insert at its catalogue position so unhiding is predictable.
+            val canonical = RibbonTool.defaultOrder()
+            val visible = ribbonOrder.filter { it != tool }
+            val anchor = canonical.indexOf(tool)
+            val idx = visible.indexOfFirst {
+                canonical.indexOf(it) > anchor
+            }.let { if (it < 0) visible.size else it }
+            ribbonOrder = visible.take(idx) + tool + visible.drop(idx)
+        } else {
+            hiddenTools.value = hidden + tool
+            ribbonOrder = ribbonOrder.filter { it != tool }
+        }
+    }
+
+    fun isRibbonToolVisible(tool: RibbonTool): Boolean = tool !in hiddenTools.value
+
+    fun ribbonHiddenTools(): Set<RibbonTool> = hiddenTools.value
+
+    /**
+     * Move a tool one slot toward the start (dir = -1) or the end (+1) of
+     * the visible order. Clamped at the ends — a no-op move never dirties
+     * the persisted value.
+     */
+    fun moveRibbonTool(tool: RibbonTool, dir: Int) {
+        val cur = ribbonOrder.toMutableList()
+        val i = cur.indexOf(tool)
+        if (i < 0) return
+        val j = i + dir
+        if (j < 0 || j >= cur.size) return
+        cur.removeAt(i)
+        cur.add(j, tool)
+        ribbonOrder = cur
+    }
 }

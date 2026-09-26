@@ -14,6 +14,7 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import dev.anonrode.player.core.media.audio.VolumeBoostProcessor
+import dev.anonrode.player.core.media.audio.VoiceClarityProcessor
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.sync.AudioSyncProcessor
 import dev.anonrode.player.core.media.sync.SyncFingerprint
@@ -150,8 +151,25 @@ class PlaybackEngine(
      */
     @Volatile var abRegionProvider: (() -> Pair<Long, Long>?)? = null
 
-    /** VLC-style gain stage after the sync analyzer (see its KDoc). */
+    /** Over-amplification gain stage after the sync analyzer (see its KDoc). */
     private val boostProcessor = VolumeBoostProcessor()
+
+    /**
+     * Dialogue-clarity stage ("Audio Effect" in the ribbon). Sits between
+     * the sync analyzer and the boost stage — see
+     * [dev.anonrode.player.core.media.audio.VoiceClarityProcessor] for why
+     * that order matters.
+     *
+     * The toggle is a plain volatile read on the render thread, so the UI
+     * can flip it mid-playback without reconfiguring the audio sink.
+     */
+    private val voiceClarityProcessor = VoiceClarityProcessor()
+
+    /** Turn the dialogue-clarity stage on/off. Safe from any thread. */
+    fun setVoiceClarity(enabled: Boolean) {
+        voiceClarityProcessor.enabled = enabled
+        AppLog.d("ENGINE", "voice clarity enabled=" + enabled)
+    }
 
     /**
      * Volume boost: 1.0 = off up to 3.0 (+9.5 dB). Runtime-safe — the audio
@@ -363,7 +381,11 @@ class PlaybackEngine(
     }
 
     /** Audio sink shared by every decoder profile: sync analyzer first,
-     *  then the volume-boost gain stage. */
+     *  then the dialogue-clarity stage, then the volume-boost gain stage.
+     *
+     *  Order is load-bearing — see each processor's KDoc. All three are
+     *  constructed once and reused across decoder rebuilds, so a rebuild
+     *  cannot lose a live gain/toggle state. */
     private fun buildSharedAudioSink(
         context: Context,
         enableFloatOutput: Boolean,
@@ -372,7 +394,9 @@ class PlaybackEngine(
         DefaultAudioSink.Builder(context)
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            .setAudioProcessors(arrayOf(syncProcessor, boostProcessor))
+            .setAudioProcessors(
+                arrayOf(syncProcessor, voiceClarityProcessor, boostProcessor)
+            )
             .build()
 
     private fun buildPlayer(context: Context, mode: Int): ExoPlayer {

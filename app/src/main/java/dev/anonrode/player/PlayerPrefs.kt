@@ -23,6 +23,8 @@ object PlayerPrefs {
     private const val KEY_PLAY_SPEED = "play_speed"
     private const val KEY_SUBTITLE_AUTO_SYNC = "subtitle_auto_sync_enabled"
     private const val KEY_SUB_POS_MRU = "sub_pos_mru"
+    private const val KEY_RIBBON_ORDER = "ribbon_order"
+    private const val KEY_RIBBON_HIDDEN = "ribbon_hidden"
     private const val SUB_POS_PREFIX = "sub_pos_"
     private const val MAX_SUB_POS_ENTRIES = 256
 
@@ -93,6 +95,41 @@ object PlayerPrefs {
 
     fun saveAutoSyncEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SUBTITLE_AUTO_SYNC, enabled).apply()
+    }
+
+    /* ── Quick Access Ribbon arrangement ───────────────────────────────────
+     * Persisted as the enum NAMES joined by a newline, so the stored value
+     * is decoupled from the enum's ordinals: reordering the declaration in
+     * RibbonTool never invalidates a saved arrangement. Unknown names (a
+     * tool removed in a later version) are dropped on read, and any tool
+     * the user never reordered is appended in catalogue order — so a stored
+     * value can never come back as a partial or empty ribbon.
+     * ──────────────────────────────────────────────────────────────────── */
+
+    /** Visible ribbon order, or the canonical default when nothing is stored. */
+    fun ribbonOrder(context: Context, default: List<String>): List<String> {
+        val raw = prefs(context).getString(KEY_RIBBON_ORDER, null) ?: return default
+        val known = default.toSet()
+        val stored = raw.split('\n').filter { it.isNotBlank() && it in known }
+        // Preserve catalogue order for anything the stored value omitted.
+        val missing = default.filter { it !in stored }
+        return stored + missing
+    }
+
+    fun saveRibbonOrder(context: Context, order: List<String>) {
+        prefs(context).edit().putString(KEY_RIBBON_ORDER, order.joinToString("\n")).apply()
+    }
+
+    /** Tools the user hid from the ribbon. */
+    fun ribbonHidden(context: Context): Set<String> =
+        prefs(context).getString(KEY_RIBBON_HIDDEN, "")
+            ?.split('\n')
+            ?.filter { it.isNotBlank() }
+            ?.toSet()
+            ?: emptySet()
+
+    fun saveRibbonHidden(context: Context, hidden: Set<String>) {
+        prefs(context).edit().putString(KEY_RIBBON_HIDDEN, hidden.joinToString("\n")).apply()
     }
 
     private fun parse(value: String): Pair<Float, Float>? {

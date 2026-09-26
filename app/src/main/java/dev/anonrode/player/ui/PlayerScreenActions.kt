@@ -83,6 +83,30 @@ internal class PlayerScreenActions(
     private val onSetSubSyncEnabled: (Boolean) -> Unit,
     /** "Resync now" — long-press on the toggle. */
     private val onResyncNow: () -> Unit,
+    /**
+     * Persist + apply the user's background-playback preference.
+     *
+     * The ribbon's "Background Play" tool used to flip a Compose flag that
+     * nothing read, so the tap produced a toast and no behaviour change. It
+     * now routes through to the same [dev.anonrode.player.core.datastore.PlayerSettings.backgroundPlayback]
+     * field that PlayerActivity.onStop consults — one source of truth, so
+     * the ribbon tool and the Settings screen can never disagree.
+     */
+    private val onSetBackgroundPlayback: (Boolean) -> Unit = {},
+    /**
+     * Persist + apply the "Audio Effect" (voice clarity) preference. The
+     * host owns the DSP stage; this action only owns the UI state + haptics
+     * so the red active dot flips instantly.
+     */
+    private val onSetAudioEffect: (Boolean) -> Unit = {},
+    /**
+     * Persist the playlist shuffle/repeat pair for [persistUri] (the video
+     * currently open). Null when no video is open, in which case the
+     * toggle still applies to the live player but is not written.
+     */
+    private val onPersistPlaylistMode: (uri: String, shuffle: Boolean, repeatMode: Int) -> Unit = { _, _, _ -> },
+    /** The video whose playlist mode is currently being edited. */
+    private val persistUri: () -> String? = { null },
 ) {
 
     fun showHud(icon: ImageVector, text: String) =
@@ -113,6 +137,7 @@ internal class PlayerScreenActions(
         view.haptic()
         (livePlayer as? ExoPlayer)?.shuffleModeEnabled = ui.shuffleOn.value
         showTransientToast(if (ui.shuffleOn.value) "Shuffle on" else "Shuffle off")
+        persistPlaylistMode()
     }
 
     fun cycleRepeatLoopMode() {
@@ -126,6 +151,23 @@ internal class PlayerScreenActions(
         }
         livePlayer.repeatMode = exoMode
         showTransientToast(next.label)
+        persistPlaylistMode()
+    }
+
+    /**
+     * Write the shuffle/repeat pair through to the host.
+     *
+     * Both are persisted in ONE statement so they can never land as a
+     * half-applied pair, and skipped entirely when no video is open (the
+     * live player still honours the change for this session).
+     */
+    private fun persistPlaylistMode() {
+        val uri = persistUri() ?: return
+        onPersistPlaylistMode(
+            uri,
+            ui.shuffleOn.value,
+            ui.repeatMode.value.ordinal,
+        )
     }
 
     fun toggleMute() {
@@ -182,10 +224,39 @@ internal class PlayerScreenActions(
         }
     }
 
+    /**
+     * Audio Effect / voice clarity.
+     *
+     * This used to flip [PlayerUiState.audioEffectOn] and stop there — the
+     * flag was only ever read back to colour its own icon, so the tap was
+     * decorative. It now persists the preference through the host, which
+     * owns the actual DSP stage, so the red active dot reflects a real
+     * audible change.
+     */
     fun toggleAudioEffect() {
-        ui.audioEffectOn.value = !ui.audioEffectOn.value
+        val next = !ui.audioEffectOn.value
+        ui.audioEffectOn.value = next
         view.haptic()
-        showTransientToast(if (ui.audioEffectOn.value) "Voice clarity on" else "Audio effect off")
+        onSetAudioEffect(next)
+        showTransientToast(if (next) "Voice clarity on" else "Audio effect off")
+    }
+
+    /**
+     * Reset the persistent rate to 1x without cycling — the reference
+     * player's long-press on the speed pill. [RibbonToolItem] already
+     * accepts an `onLongClick`; the ribbon's Speed tool now uses it.
+     */
+    fun resetSpeed() {
+        val normal = speeds.indexOfFirst { abs(it - 1f) < 0.05f }
+        if (normal < 0 || speedIdx.intValue == normal) {
+            showTransientToast("Speed already " + speedLabel(1f))
+            return
+        }
+        speedIdx.intValue = normal
+        livePlayer.setPlaybackSpeed(1f)
+        onSpeedChanged(1f)
+        view.haptic()
+        showTransientToast("Speed reset to " + speedLabel(1f))
     }
 
     fun cycleSpeed() {
@@ -194,10 +265,58 @@ internal class PlayerScreenActions(
         view.haptic()
     }
 
+    /**
+     * Background playback.
+     *
+     * Previously a no-op flag. Now writes the real setting: with it OFF,
+     * PlayerActivity.onStop pauses the player when the activity leaves the
+     * foreground; with it ON, playback (and the foreground service) continue.
+     */
     fun toggleBackgroundPlay() {
-        ui.backgroundPlayOn.value = !ui.backgroundPlayOn.value
+        val next = !ui.backgroundPlayOn.value
+        ui.backgroundPlayOn.value = next
         view.haptic()
-        showTransientToast(if (ui.backgroundPlayOn.value) "Background play on" else "Background play off")
+        onSetBackgroundPlayback(next)
+        showTransientToast(if (next) "Background play on" else "Background play off")
+    }
+
+    fun openRibbonCustomise() {
+        quick.openRibbonCustomise()
+        view.haptic()
+    }
+
+    fun closeRibbonCustomise() {
+        quick.closeRibbonCustomise()
+    }
+
+    fun toggleRibbonToolVisible(tool: RibbonTool) {
+        quick.toggleRibbonToolVisible(tool)
+        view.haptic()
+        persistRibbon()
+    }
+
+    fun moveRibbonTool(tool: RibbonTool, dir: Int) {
+        quick.moveRibbonTool(tool, dir)
+        view.haptic()
+        persistRibbon()
+    }
+
+    /**
+     * Write the current arrangement through to SharedPreferences.
+     *
+     * Only the ORDER of the visible tools is stored; the hidden set is
+     * stored separately, so a hidden tool is simply absent from the order
+     * and reappears at its catalogue position when unhidden.
+     */
+    private fun persistRibbon() {
+        dev.anonrode.player.PlayerPrefs.saveRibbonOrder(
+            context,
+            quick.ribbonOrder.map { it.name },
+        )
+        dev.anonrode.player.PlayerPrefs.saveRibbonHidden(
+            context,
+            quick.ribbonHiddenTools().map { it.name }.toSet(),
+        )
     }
 
     fun openSyncPopover() {

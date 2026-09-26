@@ -53,10 +53,18 @@ android {
         create("releaseWithDebugSigning") {
             initWith(getByName("release"))
             matchingFallbacks += listOf("release")
-            // R8 breaks DataStore/serialization on this path — keep sideload
-            // builds unshrunk until proper keep rules are proven.
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // Shrinking is now safe here: the kotlinx.serialization / Room /
+            // coroutine keep rules that were previously missing live in
+            // proguard-rules.pro, so the sideload APK gets the same
+            // shrink + resource-strip win as `release`. Previously this
+            // build shipped unshrunk as a workaround for exactly those
+            // missing rules.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             signingConfig =
                 if (sharedKeyAvailable) signingConfigs.getByName("shared")
                 else signingConfigs.getByName("debug")

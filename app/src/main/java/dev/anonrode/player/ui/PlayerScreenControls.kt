@@ -2,10 +2,8 @@ package dev.anonrode.player.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -30,18 +28,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bedtime
-import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.ScreenRotation
@@ -59,10 +53,7 @@ import kotlin.math.abs
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.State
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -246,7 +237,13 @@ internal fun PlayerScreenTopBar(
             )
         }
 
-        // ── Row 2: 13-item Quick Access Ribbon ──
+        // ── Row 2: Quick Access Ribbon ──
+        //
+        // Renders from [QuickRowUiState.ribbonOrder] rather than 13
+        // hard-coded calls, which is what makes the Customise tool real:
+        // the user's order (and hidden set) is a single persisted list the
+        // ribbon and the customise sheet both read and write.
+        val ribbonOrder = actions.quick.ribbonOrder
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -255,99 +252,115 @@ internal fun PlayerScreenTopBar(
             horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 1. Night Mode
-            RibbonToolItem(
-                icon = Icons.Filled.Bedtime,
-                label = "Night Mode",
-                accent = accent,
-                selected = actions.ui.nightMode.value,
-                onClick = { actions.toggleNightMode() },
-            )
+            ribbonOrder.forEach { tool ->
+                // `key` keeps a moved tool's slot stable across the reorder
+                // so the ripple/scale animation doesn't restart on every tap.
+                key(tool.name) {
+                    RibbonToolSlot(tool = tool, accent = accent, actions = actions)
+                }
+            }
+        }
+    }
+}
 
-            // 2. Customise Items
-            RibbonToolItem(
-                icon = Icons.Filled.Edit,
-                label = "Customise",
-                accent = accent,
-                selected = false,
-                onClick = { actions.showTransientToast("Customise: long-press to pin items") },
-            )
+/**
+ * One ribbon entry: the icon, label, active state and tap target for a
+ * single [RibbonTool]. Split out of the ribbon's Row so the ribbon can
+ * iterate an ordered list while each tool keeps its own state reads.
+ */
+@Composable
+private fun RibbonToolSlot(
+    tool: RibbonTool,
+    accent: Color,
+    actions: PlayerScreenActions,
+) {
+    val ui = actions.ui
+    val quick = actions.quick
+    when (tool) {
+        RibbonTool.NIGHT_MODE -> RibbonToolItem(
+            icon = Icons.Filled.Bedtime,
+            label = "Night Mode",
+            accent = accent,
+            selected = ui.nightMode.value,
+            onClick = { actions.toggleNightMode() },
+        )
 
-            // 3. Shuffle
-            RibbonToolItem(
-                icon = Icons.Filled.Shuffle,
-                label = "Shuffle",
-                accent = accent,
-                selected = actions.ui.shuffleOn.value,
-                onClick = { actions.toggleShuffle() },
-            )
+        RibbonTool.CUSTOMISE -> RibbonToolItem(
+            icon = Icons.Filled.Edit,
+            label = "Customise",
+            accent = accent,
+            selected = quick.showRibbonCustomise.value,
+            onClick = { actions.openRibbonCustomise() },
+        )
 
-            // 4. Loop
-            RibbonToolItem(
-                icon = if (actions.ui.repeatMode.value == RepeatLoopMode.ONE) Icons.Filled.RepeatOne
-                else Icons.Filled.Repeat,
-                label = when (actions.ui.repeatMode.value) {
-                    RepeatLoopMode.ONE -> "Loop 1"
-                    RepeatLoopMode.ALL -> "Loop All"
-                    RepeatLoopMode.OFF -> "Loop"
-                },
-                accent = accent,
-                selected = actions.ui.repeatMode.value != RepeatLoopMode.OFF,
-                onClick = { actions.cycleRepeatLoopMode() },
-            )
+        RibbonTool.SHUFFLE -> RibbonToolItem(
+            icon = Icons.Filled.Shuffle,
+            label = "Shuffle",
+            accent = accent,
+            selected = ui.shuffleOn.value,
+            onClick = { actions.toggleShuffle() },
+        )
 
-            // 5. Mute
-            RibbonToolItem(
-                icon = if (actions.ui.isMuted.value) Icons.AutoMirrored.Filled.VolumeOff
-                else Icons.AutoMirrored.Filled.VolumeUp,
-                label = if (actions.ui.isMuted.value) "Muted" else "Mute",
-                accent = accent,
-                selected = actions.ui.isMuted.value,
-                onClick = { actions.toggleMute() },
-            )
+        RibbonTool.LOOP -> RibbonToolItem(
+            icon = if (ui.repeatMode.value == RepeatLoopMode.ONE) Icons.Filled.RepeatOne
+            else Icons.Filled.Repeat,
+            label = when (ui.repeatMode.value) {
+                RepeatLoopMode.ONE -> "Loop 1"
+                RepeatLoopMode.ALL -> "Loop All"
+                RepeatLoopMode.OFF -> "Loop"
+            },
+            accent = accent,
+            selected = ui.repeatMode.value != RepeatLoopMode.OFF,
+            onClick = { actions.cycleRepeatLoopMode() },
+        )
 
-            // 6. Sleep Timer
-            RibbonToolItem(
-                icon = Icons.Filled.Timer,
-                label = "Sleep Timer",
-                accent = accent,
-                selected = false,
-                onClick = { actions.cycleSleepTimer() },
-            )
+        RibbonTool.MUTE -> RibbonToolItem(
+            icon = if (ui.isMuted.value) Icons.AutoMirrored.Filled.VolumeOff
+            else Icons.AutoMirrored.Filled.VolumeUp,
+            label = if (ui.isMuted.value) "Muted" else "Mute",
+            accent = accent,
+            selected = ui.isMuted.value,
+            onClick = { actions.toggleMute() },
+        )
 
-            // 7. A - B Repeat
-            RibbonToolItem(
-                badgeText = "A⮂B",
-                label = when {
-                    actions.ui.abStartMs.value != null && actions.ui.abEndMs.value != null -> "Loop A-B"
-                    actions.ui.abStartMs.value != null -> "Set B"
-                    else -> "A - B Repeat"
-                },
-                accent = accent,
-                selected = actions.ui.abStartMs.value != null,
-                onClick = { actions.cycleAbRepeat() },
-            )
+        RibbonTool.SLEEP_TIMER -> RibbonToolItem(
+            icon = Icons.Filled.Timer,
+            label = "Sleep Timer",
+            accent = accent,
+            selected = actions.sleep.active,
+            onClick = { actions.cycleSleepTimer() },
+        )
 
-            // 8. Audio Effect (with reference red active dot)
-            RibbonToolItem(
-                icon = Icons.Filled.GraphicEq,
-                label = "Audio Effect",
-                accent = accent,
-                selected = actions.ui.audioEffectOn.value,
-                hasActiveDot = actions.ui.audioEffectOn.value,
-                onClick = { actions.toggleAudioEffect() },
-            )
+        RibbonTool.AB_REPEAT -> RibbonToolItem(
+            badgeText = "A⮂B",
+            label = when {
+                ui.abStartMs.value != null && ui.abEndMs.value != null -> "Loop A-B"
+                ui.abStartMs.value != null -> "Set B"
+                else -> "A - B Repeat"
+            },
+            accent = accent,
+            selected = ui.abStartMs.value != null,
+            onClick = { actions.cycleAbRepeat() },
+        )
 
-            // 9. Equalizer
-            RibbonToolItem(
-                icon = Icons.Filled.Equalizer,
-                label = "Equalizer",
-                accent = accent,
-                selected = actions.quick.equalizerOn.value,
-                onClick = { actions.toggleEqualizer() },
-            )
+        RibbonTool.AUDIO_EFFECT -> RibbonToolItem(
+            icon = Icons.Filled.GraphicEq,
+            label = "Audio Effect",
+            accent = accent,
+            selected = ui.audioEffectOn.value,
+            hasActiveDot = ui.audioEffectOn.value,
+            onClick = { actions.toggleAudioEffect() },
+        )
 
-            // 10. Speed (showing current speed)
+        RibbonTool.EQUALIZER -> RibbonToolItem(
+            icon = Icons.Filled.Equalizer,
+            label = "Equalizer",
+            accent = accent,
+            selected = quick.equalizerOn.value,
+            onClick = { actions.toggleEqualizer() },
+        )
+
+        RibbonTool.SPEED -> {
             val curSpeed = actions.speeds[actions.speedIdx.intValue]
             RibbonToolItem(
                 badgeText = speedLabel(curSpeed),
@@ -355,40 +368,37 @@ internal fun PlayerScreenTopBar(
                 accent = accent,
                 selected = abs(curSpeed - 1f) > 0.05f,
                 onClick = { actions.cycleSpeed() },
-                onLongClick = { actions.setSpeed(1f) },
-            )
-
-            // 11. Screenshot
-            RibbonToolItem(
-                icon = Icons.Filled.PhotoCamera,
-                label = "Screenshot",
-                accent = accent,
-                selected = false,
-                onClick = { actions.captureFrame() },
-            )
-
-            // 12. Background Play
-            RibbonToolItem(
-                icon = Icons.Filled.Headphones,
-                label = "Background",
-                accent = accent,
-                selected = actions.ui.backgroundPlayOn.value,
-                onClick = { actions.toggleBackgroundPlay() },
-            )
-
-            // 13. Screen Rotation
-            RibbonToolItem(
-                icon = Icons.Filled.ScreenRotation,
-                label = when (actions.quick.rotateMode.value) {
-                    RotateMode.SENSOR -> "Auto"
-                    RotateMode.LANDSCAPE -> "Landscape"
-                    RotateMode.PORTRAIT -> "Portrait"
-                },
-                accent = accent,
-                selected = actions.quick.rotateMode.value != RotateMode.SENSOR,
-                onClick = { actions.cycleRotateMode() },
+                onLongClick = { actions.resetSpeed() },
             )
         }
+
+        RibbonTool.SCREENSHOT -> RibbonToolItem(
+            icon = Icons.Filled.PhotoCamera,
+            label = "Screenshot",
+            accent = accent,
+            selected = false,
+            onClick = { actions.captureFrame() },
+        )
+
+        RibbonTool.BACKGROUND_PLAY -> RibbonToolItem(
+            icon = Icons.Filled.Headphones,
+            label = "Background",
+            accent = accent,
+            selected = ui.backgroundPlayOn.value,
+            onClick = { actions.toggleBackgroundPlay() },
+        )
+
+        RibbonTool.ROTATION -> RibbonToolItem(
+            icon = Icons.Filled.ScreenRotation,
+            label = when (quick.rotateMode.value) {
+                RotateMode.SENSOR -> "Auto"
+                RotateMode.LANDSCAPE -> "Landscape"
+                RotateMode.PORTRAIT -> "Portrait"
+            },
+            accent = accent,
+            selected = quick.rotateMode.value != RotateMode.SENSOR,
+            onClick = { actions.cycleRotateMode() },
+        )
     }
 }
 

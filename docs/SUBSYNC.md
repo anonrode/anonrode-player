@@ -28,23 +28,23 @@ The speed factor is the speedup/slowdown that needs to be applied. For Growling 
 
 ## 2. Algorithm Selection — Why Cross-Correlation
 
-Research of 10+ open-source video players (NOVA, NextPlayer, mpv-android, moneytoo/Player, VLC, mpvRex, mpvKt) plus ffsubsync (the gold-standard Python tool) yielded the state of the art.
+Research of many open-source players and standalone subtitle-sync tools (the cross-correlation standard being ffsubsync, plus alass) yielded the state of the art.
 
 ### What other players do
 
 | Player | Sync approach | Quality |
 |---|---|---|
-| NextPlayer | Auto-detect media offset only via VAD onset correlation | Weak; needs improvement |
-| mpv-android | Same as NextPlayer | Weak |
-| NOVA | Similar | Weak |
+
+
+
 | **ffsubsync** | VAD + FFT cross-correlation + golden-section framerate search | **Near-perfect (88–98% per docs)** |
 | **alass** | Fragment matching with MWIS algorithm | **Near-perfect (per docs)** |
 
-ffsubsync and alass are the standards. The algorithm here is adapted from ffsubsync.
+The cross-correlation approach in ffsubsync and alass is the current standard. The algorithm here follows it.
 
 ### Why FFT-based binary correlation
 
-ffsubsync's approach (which we replicate):
+The approach replicated here:
 
 1. **Discretize both audio and subtitles to 10ms binary speech tracks** — 1 = speech present, 0 = silence
 2. **Score every alignment shift δ** by: matched-speech-with-subtitle-speech minus matched-speech-with-subtitle-silence
@@ -422,7 +422,7 @@ Where:
 - ✅ Videos play
 - ✅ Subtitles resolve from any file in video directory
 - ✅ File logging to `Download/AnonPlayer/anonrode-player.log`
-- ✅ Drift-corrected SRT files generated for all Growling Tiger 2 episodes (use in MPC-HC/VLC — works perfectly)
+- ✅ Drift-corrected SRT files generated for all Growling Tiger 2 episodes (works perfectly in external players)
 - ✅ Engine code is in place and compiles; not validated to auto-lock on real C-drama content
 
 ## What's Missing (Honest Gap Analysis)
@@ -430,7 +430,7 @@ Where:
 - ❌ **Live auto-sync on real C-drama content** — the in-app VAD doesn't match ffmpeg's quality. To make this work, either:
   - Bundle ffmpeg native lib (nextlib already has it) and call silencedetect from the audio pipeline
   - Add a TFLite speech VAD model (~2MB)
-  - Run a background fingerprint pass on first play (ffsubsync model)
+  - Run a background fingerprint pass on first play (cross-correlation model)
 - ❌ PiP, background playback, sleep timer, zoom modes
 - ❌ The redesigned M3 library UI is written but not built or pushed
 - ❌ SMB/network stream support
@@ -447,7 +447,7 @@ Original: subs start 0.97s early, end ~5s early
 Corrected: align throughout the 45-minute episode within ~0.3s
 ```
 
-No other Android video player (NOVA, NextPlayer, mpv-android, moneytoo, VLC) can do this with their in-app VAD. The only tools that can are ffsubsync and alass, which use a stronger VAD + framerate search. We have the framerate search, the gating math, and a working Python pipeline. The only thing missing is the same quality VAD in-app.
+Most players rely on a weaker in-app VAD and cannot match this. The standalone tools that can use a stronger VAD plus a framerate search. We have the framerate search, the gating math, and a working Python pipeline. The only thing missing is the same quality VAD in-app.
 
 ---
 

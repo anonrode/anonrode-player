@@ -121,6 +121,18 @@ class MediaStateStore(private val dao: MediaStateDao) {
     }
 
     /**
+     * Persist playlist shuffle + repeat mode together.
+     *
+     * These used to live only in the player's Compose state, so the Shuffle
+     * and Loop ribbon tools reset on every open of the same video. One
+     * statement for both means a half-applied pair is impossible.
+     */
+    suspend fun updatePlaylistMode(uri: String, shuffle: Boolean, repeatMode: Int) {
+        dao.ensureRow(uri)
+        dao.updatePlaylistModeFields(uri, shuffle, repeatMode, System.currentTimeMillis())
+    }
+
+    /**
      * Remove state rows for videos that no longer exist in the library.
      *
      * DANGEROUS BY DESIGN unless the caller asserts [fullScanConfirmed]:
@@ -158,6 +170,8 @@ class MediaStateStore(private val dao: MediaStateDao) {
         autoSyncCheckedAtMs = autoSyncCheckedAtMs,
         playbackSpeed = playbackSpeed,
         videoScale = videoScale,
+        shuffleEnabled = shuffleEnabled,
+        repeatMode = repeatMode,
         lastPlayedTimeMs = lastPlayedTimeMs,
         finished = finished,
     )

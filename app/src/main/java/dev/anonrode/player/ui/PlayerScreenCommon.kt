@@ -51,7 +51,42 @@ internal fun fmtTime(ms: Long): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
 }
 
-/** MX-style pill label: "1X", "1.25X", "1.5X", "2X". */
+/**
+ * The Quick Access Ribbon's tools, as stable keys.
+ *
+ * The ribbon previously hard-coded 13 `RibbonToolItem(...)` calls in
+ * source order, which made "Customise" unimplementable — there was no
+ * order to change. Naming each tool lets the ribbon render from a
+ * user-editable list instead, while this enum keeps the persistence
+ * format stable: the persisted value is the enum NAME, so reordering the
+ * declaration below never invalidates a user's saved arrangement.
+ */
+enum class RibbonTool(val label: String) {
+    NIGHT_MODE("Night Mode"),
+    CUSTOMISE("Customise"),
+    SHUFFLE("Shuffle"),
+    LOOP("Loop"),
+    MUTE("Mute"),
+    SLEEP_TIMER("Sleep Timer"),
+    AB_REPEAT("A-B Repeat"),
+    AUDIO_EFFECT("Audio Effect"),
+    EQUALIZER("Equalizer"),
+    SPEED("Speed"),
+    SCREENSHOT("Screenshot"),
+    BACKGROUND_PLAY("Background Play"),
+    ROTATION("Screen Rotation");
+
+    companion object {
+        /**
+         * Canonical order — also the fallback when nothing is persisted.
+         * Uses `entries` (not a hand-kept list) so a newly added tool is
+         * automatically part of the default arrangement.
+         */
+        fun defaultOrder(): List<RibbonTool> = entries.toList()
+    }
+}
+
+/** Speed pill label: "1X", "1.25X", "1.5X", "2X". */
 internal fun speedLabel(sp: Float): String =
     if (sp % 1f == 0f) "${sp.toInt()}X" else "${sp}X"
 

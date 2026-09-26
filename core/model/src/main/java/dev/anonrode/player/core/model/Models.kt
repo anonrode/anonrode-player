@@ -81,6 +81,10 @@ data class MediaState(
     val autoSyncCheckedAtMs: Long = 0L,
     val playbackSpeed: Float = 1f,
     val videoScale: Float = 1f,
+    /** Persisted playlist shuffle — survives a re-open of the same video. */
+    val shuffleEnabled: Boolean = false,
+    /** Repeat mode ordinal: 0 = off, 1 = repeat one, 2 = repeat all. */
+    val repeatMode: Int = 0,
     val lastPlayedTimeMs: Long? = null,
     val finished: Boolean = false,
 )

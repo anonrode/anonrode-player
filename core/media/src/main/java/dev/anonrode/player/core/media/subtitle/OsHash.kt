@@ -24,7 +24,7 @@ import java.nio.ByteOrder
  *     mod-2^64, and "%016x" renders negative values as their unsigned
  *     hex — matching the reference C implementation byte for byte.
  *
- * Hash-first search is what makes MX-style "find subtitles for this
+ * Hash-first search is what makes "find subtitles for this
  * exact file" work: an exact-hash hit means the subtitle was timed for
  * this very release.
  */

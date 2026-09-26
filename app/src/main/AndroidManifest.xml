@@ -6,9 +6,9 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-    <!-- Sidecar subtitles (.srt/.ass/…) are NON-media files: invisible to
+    <!-- Sidecar subtitle files are non-media files: invisible to
          MediaStore.Files on Android 11+ without all-files access. This is
-         a personal local player, so we ask for it directly (VLC/MX style). -->
+         a personal local player, so we ask for all-files access directly. -->
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />

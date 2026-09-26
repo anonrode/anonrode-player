@@ -322,7 +322,7 @@ internal fun FirstFramePosterEffect(mediaId: String, context: Context, ui: Playe
 }
 
 /**
- * MX-style scrub preview (v0.7.1 UI pass): while the user is scrubbing —
+ * Scrub frame preview (v0.7.1 UI pass): while the user is scrubbing —
  * slider drag ([PlayerUiState.localSeek]) OR horizontal swipe
  * ([GestureUiState.pendingSeekMs]) — keep ONE MediaMetadataRetriever open
  * for the whole scrub session and decode throttled, downscaled frames at

@@ -8,7 +8,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * VLC-style volume boost: multiplies 16-bit PCM samples by a runtime gain
+ * Over-amplification stage: multiplies 16-bit PCM samples by a runtime gain
  * (1.0 = off, 2.0 = +6 dB ≈ "200% volume") with hard clipping. Sits in the
  * DefaultAudioSink processor chain AFTER [dev.anonrode.player.core.media.sync.AudioSyncProcessor]
  * so the sync engine analyzes the untouched signal. Gain is a volatile

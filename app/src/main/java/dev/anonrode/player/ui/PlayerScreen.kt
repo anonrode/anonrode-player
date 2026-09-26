@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import dev.anonrode.player.PlayerPrefs
 import dev.anonrode.player.audio.SubtitleStyle
 import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 import dev.anonrode.player.feature.player.PlaybackEngine
@@ -264,6 +265,38 @@ fun PlayerScreen(
     isRebuildingDecoder: Boolean = false,
     /** Name of the currently selected Cast route, for the output tile. */
     castRouteName: String? = null,
+    /**
+     * Persist the background-playback preference. The ribbon's
+     * "Background Play" tool routes here so the toggle writes the same
+     * field the Settings screen owns (and that onStop consults) instead of
+     * flipping a private flag that nothing read.
+     */
+    onSetBackgroundPlayback: (Boolean) -> Unit = {},
+    /**
+     * Persist the "Audio Effect" (voice clarity) preference and apply it to
+     * the audio pipeline. Default no-op so a caller that doesn't care keeps
+     * compiling; PlayerActivity supplies the real handler.
+     */
+    onSetAudioEffect: (Boolean) -> Unit = {},
+    /**
+     * Persisted state for the two ribbon toggles that are now backed by
+     * real settings, seeded so their icons are right on the first frame
+     * instead of flashing the default and correcting a tick later.
+     */
+    initialBackgroundPlay: Boolean = true,
+    initialAudioEffect: Boolean = false,
+    /**
+     * Persisted playlist mode for the video being opened, so Shuffle/Loop
+     * restore their previous state instead of silently resetting to OFF on
+     * every open.
+     */
+    initialShuffle: Boolean = false,
+    initialRepeatMode: Int = 0,
+    /**
+     * Persist the playlist shuffle/repeat pair for a video URI. Supplied by
+     * the host because only it can reach the Room-backed state store.
+     */
+    onPersistPlaylistMode: (uri: String, shuffle: Boolean, repeatMode: Int) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -282,7 +315,7 @@ fun PlayerScreen(
     val gestures = remember { GestureUiState() }
     val quick = remember { QuickRowUiState(initialHwDecoder = engine?.isHw ?: true) }
 
-    val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+    val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
     // Keyed on initialSpeed so the pill re-syncs when the activity restores
     // a different persisted speed (e.g. after an auto-advance episode switch).
     val speedIdx = remember(initialSpeed) {
@@ -341,10 +374,59 @@ fun PlayerScreen(
             onEnterPip = onEnterPip,
             onSetSubSyncEnabled = { onSetSubSyncEnabled(it) },
             onResyncNow = { onResyncNow() },
+            onSetBackgroundPlayback = { onSetBackgroundPlayback(it) },
+            onSetAudioEffect = { onSetAudioEffect(it) },
+            onPersistPlaylistMode = { u, sh, rm -> onPersistPlaylistMode(u, sh, rm) },
+            persistUri = { mediaId.ifBlank { null } },
         )
     }
 
     // ── side-effects: same keys and order as before the split ──
+    // Restore the persisted ribbon arrangement ONCE per screen entry. Keyed
+    // on nothing (runs a single time) so a user's reorder survives without
+    // re-reading SharedPreferences on every recomposition. Unknown/stale
+    // names are dropped and any newly added tool is appended in catalogue
+    // order inside PlayerPrefs, so this can never yield a partial ribbon.
+    LaunchedEffect(Unit) {
+        val canonical = RibbonTool.entries.map { it.name }
+        val order = PlayerPrefs.ribbonOrder(context, canonical)
+            .mapNotNull { name -> RibbonTool.entries.firstOrNull { it.name == name } }
+        val hidden = PlayerPrefs.ribbonHidden(context)
+            .mapNotNull { name -> RibbonTool.entries.firstOrNull { it.name == name } }
+            .toSet()
+        // A tool can't be both visible and hidden; visible wins.
+        quick.loadRibbon(order, hidden - order.toSet())
+    }
+
+    // Seed the two settings-backed ribbon toggles from the persisted values
+    // the host passes in, so the icons reflect reality on the first frame.
+    // Keyed on the values themselves, so a Settings-screen edit (or a
+    // process restart) re-syncs without a manual round trip.
+    LaunchedEffect(initialBackgroundPlay) {
+        ui.backgroundPlayOn.value = initialBackgroundPlay
+    }
+    LaunchedEffect(initialAudioEffect) {
+        ui.audioEffectOn.value = initialAudioEffect
+    }
+
+    // Restore the persisted playlist mode. Keyed on BOTH values so an
+    // episode switch re-applies the newly opened video's saved choice,
+    // and a decoder rebuild (which does not change them) does not —
+    // the latter matters because it would otherwise clobber a toggle the
+    // user made this session.
+    LaunchedEffect(initialShuffle, initialRepeatMode, mediaId) {
+        ui.shuffleOn.value = initialShuffle
+        ui.repeatMode.value = RepeatLoopMode.entries
+            .getOrElse(initialRepeatMode) { RepeatLoopMode.OFF }
+        livePlayer.shuffleModeEnabled = initialShuffle
+        livePlayer.repeatMode = when (ui.repeatMode.value) {
+            RepeatLoopMode.OFF -> Player.REPEAT_MODE_OFF
+            RepeatLoopMode.ONE -> Player.REPEAT_MODE_ONE
+            RepeatLoopMode.ALL -> Player.REPEAT_MODE_ALL
+        }
+    }
+
+
     ZoomRestoreEffect(initialZoomIdx, ui)
     // Mirror the restored speed into the player; the livePlayer key re-runs
     // this on every decoder swap.
@@ -581,6 +663,16 @@ fun PlayerScreen(
             // v0.7.2: shares the device's own sync decisions (see SyncLogShare).
             onShareSyncLog = onShareSyncLog,
             onOpenSettings = onOpenSettings,
+        )
+
+        // ── Ribbon customise sheet — backs the ribbon's "Customise" tool.
+        //    A sheet (not an inline tray) because reordering needs a tall
+        //    scrollable list; the video keeps playing behind it.
+        RibbonCustomiseSheet(
+            visible = quick.showRibbonCustomise.value,
+            actions = actions,
+            accent = accent,
+            onDismiss = { /* state is already closed by the action */ },
         )
 
         // ── A-B repeat chip (tap advances the cycle: set B / clear) ──

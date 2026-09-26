@@ -50,8 +50,9 @@ interface MediaStateDao {
         "INSERT OR IGNORE INTO media_state(" +
             "uri, playback_position_ms, external_subtitle_uris, subtitle_choice, " +
             "subtitle_delay_ms, auto_sync_offset_ms, auto_sync_speed_factor, " +
-            "auto_sync_piecewise, auto_sync_checked_at_ms, playback_speed, video_scale, finished" +
-        ") VALUES(:uri, 0, '', '', 0, 0, 1.0, '', 0, 1.0, 1.0, 0)"
+            "auto_sync_piecewise, auto_sync_checked_at_ms, playback_speed, video_scale, " +
+            "shuffle_enabled, repeat_mode, finished" +
+        ") VALUES(:uri, 0, '', '', 0, 0, 1.0, '', 0, 1.0, 1.0, 0, 0, 0)"
     )
     suspend fun ensureRow(uri: String)
 
@@ -148,4 +149,19 @@ interface MediaStateDao {
             "last_played_time_ms = :lastPlayedMs WHERE uri = :uri"
     )
     suspend fun updateZoomFields(uri: String, scale: Float, lastPlayedMs: Long)
+
+    /**
+     * Persist playlist shuffle + repeat mode in ONE statement, so the two
+     * can never land as a half-applied pair.
+     */
+    @Query(
+        "UPDATE media_state SET shuffle_enabled = :shuffle, repeat_mode = :repeatMode, " +
+            "last_played_time_ms = :lastPlayedMs WHERE uri = :uri"
+    )
+    suspend fun updatePlaylistModeFields(
+        uri: String,
+        shuffle: Boolean,
+        repeatMode: Int,
+        lastPlayedMs: Long,
+    )
 }

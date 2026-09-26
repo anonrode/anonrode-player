@@ -6,7 +6,7 @@ import java.nio.charset.CodingErrorAction
 
 /**
  * Character-set detection for sidecar subtitle files — the real-world gap
- * between "supports SRT" and VLC: Chinese releases routinely ship GBK /
+ * between "handles UTF-8" and full CJK coverage: Chinese releases routinely ship GBK /
  * Big5 / UTF-16 files, and a UTF-8-only reader shows mojibake or nothing.
  *
  * Detection ladder:

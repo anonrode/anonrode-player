@@ -47,6 +47,19 @@ data class MediaStateEntity(
     @ColumnInfo(name = "auto_sync_checked_at_ms") val autoSyncCheckedAtMs: Long = 0L,
     @ColumnInfo(name = "playback_speed") val playbackSpeed: Float = 1f,
     @ColumnInfo(name = "video_scale") val videoScale: Float = 1f,
+    /**
+     * Persisted playlist shuffle (0/1). The player's Shuffle ribbon tool used
+     * to flip a Compose flag that reset on every open; this makes the
+     * choice survive a re-open of the same video.
+     */
+    @ColumnInfo(name = "shuffle_enabled", defaultValue = "0") val shuffleEnabled: Boolean = false,
+    /**
+     * Persisted repeat mode: 0 = off, 1 = repeat one, 2 = repeat all. Mirrors
+     * [dev.anonrode.player.ui.RepeatLoopMode] ordinals; stored as an Int
+     * rather than an enum name so a future enum change cannot strand old
+     * rows with an unparseable value.
+     */
+    @ColumnInfo(name = "repeat_mode", defaultValue = "0") val repeatMode: Int = 0,
     @ColumnInfo(name = "last_played_time_ms") val lastPlayedTimeMs: Long? = null,
     @ColumnInfo(name = "finished") val finished: Boolean = false,
 )

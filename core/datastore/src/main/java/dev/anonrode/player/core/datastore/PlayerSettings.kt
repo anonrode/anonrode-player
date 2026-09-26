@@ -37,6 +37,16 @@ data class PlayerSettings(
     val autoAdvance: Boolean = true,
     val keepScreenOn: Boolean = true,
     val backgroundPlayback: Boolean = true,
+    /**
+     * "Audio Effect" / voice clarity (v0.8.9). Applies a dialogue-focused
+     * gain tilt to the audio pipeline. Off by default so a user's audio is
+     * untouched until they opt in from the player's ribbon.
+     *
+     * Distinct from [volumeBoostPct]: that is a flat over-amplification of
+     * the whole mix, this is a spectral tilt that lifts dialogue relative
+     * to the rest of the mix.
+     */
+    val audioEffectEnabled: Boolean = false,
     val subtitleSize: Int = 1,          // 0=S 1=M 2=L 3=XL
     val subtitlePosition: Int = 1,      // 0=LOW 1=MID 2=HIGH 3=TOP
     // Default high-contrast bold outlined look the renderer ships.

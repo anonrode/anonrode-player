@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [MediaStateEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class MediaDatabase : RoomDatabase() {
@@ -56,6 +56,23 @@ abstract class MediaDatabase : RoomDatabase() {
             }
         }
 
+        /** v5: persisted playlist shuffle + repeat mode. The player's Shuffle
+         *  and Loop ribbon tools used to reset on every open; these columns
+         *  make the choice survive a re-open. Same shape as the migrations
+         *  above — NOT NULL with the DEFAULT its @ColumnInfo declares, so
+         *  Room's post-migration schema validation passes on rows written by
+         *  the v4-era entity. */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE media_state ADD COLUMN shuffle_enabled INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE media_state ADD COLUMN repeat_mode INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         @Volatile private var instance: MediaDatabase? = null
 
         fun get(context: Context): MediaDatabase =
@@ -64,7 +81,12 @@ abstract class MediaDatabase : RoomDatabase() {
                     context.applicationContext,
                     MediaDatabase::class.java,
                     "media_db",
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
+                ).addMigrations(
+                    MIGRATION_1_2,
+                    MIGRATION_2_3,
+                    MIGRATION_3_4,
+                    MIGRATION_4_5,
+                ).build().also { instance = it }
             }
     }
 }

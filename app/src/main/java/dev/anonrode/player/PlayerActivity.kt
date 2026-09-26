@@ -1,7 +1,6 @@
 package dev.anonrode.player
 
 import android.app.PictureInPictureParams
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -349,6 +348,14 @@ class PlayerActivity : ComponentActivity() {
     /** Per-video zoom index restored from Room (0=FIT 1=CROP 2=STR). */
     private var savedZoomIdx by mutableIntStateOf(0)
 
+    /**
+     * Per-video playlist mode restored from Room. The Shuffle and Loop
+     * ribbon tools used to reset on every open because their state lived
+     * only in Compose; these carry the saved choice into the screen.
+     */
+    private var savedShuffleOn by mutableStateOf(false)
+    private var savedRepeatModeOrdinal by mutableIntStateOf(0)
+
     /** Explicit ordered queue from library multi-select ([EXTRA_QUEUE_URIS]);
      *  null = derive the queue from folder siblings as usual. */
     private var explicitQueueUris: List<String>? = null
@@ -583,6 +590,7 @@ class PlayerActivity : ComponentActivity() {
         lifecycleScope.launch {
             var appliedBoostPct = Int.MIN_VALUE
             var appliedSubSync: Boolean? = null
+            var appliedAudioEffect: Boolean? = null
             app.playerSettingsDataStore.data.collect { s ->
                 currentSettings = s
                 subStyle = s.toSubtitleStyle()
@@ -605,6 +613,13 @@ class PlayerActivity : ComponentActivity() {
                 if (s.subtitleAutoSyncEnabled != appliedSubSync) {
                     appliedSubSync = s.subtitleAutoSyncEnabled
                     engine.setSubSyncEnabled(s.subtitleAutoSyncEnabled)
+                }
+                // Same guard for the dialogue-clarity stage: it is a pure
+                // mirror of a persisted field, so only a real change is
+                // worth touching the audio pipeline for.
+                if (s.audioEffectEnabled != appliedAudioEffect) {
+                    appliedAudioEffect = s.audioEffectEnabled
+                    engine.setVoiceClarity(s.audioEffectEnabled)
                 }
             }
         }
@@ -805,6 +820,37 @@ class PlayerActivity : ComponentActivity() {
                                             },
                                         )
                                     }
+                                }
+                            },
+                            // The ribbon's "Background Play" tool writes the
+                            // SAME field the Settings screen owns and onStop
+                            // consults, so the toggle has one source of truth
+                            // instead of a private flag nothing read.
+                            onSetBackgroundPlayback = { enabled ->
+                                lifecycleScope.launch {
+                                    app.playerSettingsDataStore.updateData {
+                                        it.copy(backgroundPlayback = enabled)
+                                    }
+                                }
+                            },
+                            // "Audio Effect" -> the dialogue-clarity DSP stage
+                            // in the audio pipeline. Persisted so it survives
+                            // process death and applies on the next open.
+                            onSetAudioEffect = { enabled ->
+                                lifecycleScope.launch {
+                                    app.playerSettingsDataStore.updateData {
+                                        it.copy(audioEffectEnabled = enabled)
+                                    }
+                                }
+                            },
+                            initialBackgroundPlay = settings.backgroundPlayback,
+                            initialAudioEffect = settings.audioEffectEnabled,
+                            // Restore this video's saved Shuffle/Loop choice.
+                            initialShuffle = savedShuffleOn,
+                            initialRepeatMode = savedRepeatModeOrdinal,
+                            onPersistPlaylistMode = { uri, shuffle, repeat ->
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    app.stateStore.updatePlaylistMode(uri, shuffle, repeat)
                                 }
                             },
                         )
@@ -1056,6 +1102,12 @@ class PlayerActivity : ComponentActivity() {
                 // 16:9, 4:3 → indices 0..4) so a stale/large value can't
                 // index out of bounds.
                 val zoomIdx = ((state?.videoScale ?: 1f) - 1f).toInt().coerceIn(0, 4)
+                // Per-video playlist mode. Clamped against the enum's real
+                // size so a row written by a future version (or a hand-edit)
+                // can never index out of bounds on the restore side.
+                val shuffleOn = state?.shuffleEnabled ?: false
+                val repeatOrdinal = (state?.repeatMode ?: 0)
+                    .coerceIn(0, dev.anonrode.player.ui.RepeatLoopMode.entries.lastIndex)
                 // Subtitle source: the picker's persisted choice wins;
                 // empty choice = MKV embedded fast-path, else auto-pick.
                 val choice = state?.subtitleChoice.orEmpty()
@@ -1194,6 +1246,8 @@ class PlayerActivity : ComponentActivity() {
                     if (gen != openGeneration) return@withContext
                     restoredSpeed = speed
                     savedZoomIdx = zoomIdx
+                    savedShuffleOn = shuffleOn
+                    savedRepeatModeOrdinal = repeatOrdinal
                     queue?.current?.title?.let { title = it }
                     val pending = PendingPlay(
                         uriStr = uriStr,

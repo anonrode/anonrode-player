@@ -642,6 +642,24 @@ fun SettingsScreen(
             // ══ AUDIO ════════════════════════════════════════════
             item("sec-audio") { SectionHeader(palette, "Audio") }
 
+            item("audioEffect") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.Headphones,
+                    title = "Audio effect",
+                    subtitle = "Lift dialogue and cut rumble",
+                    trailing = {
+                        ToggleSwitch(
+                            palette = palette,
+                            on = settings.audioEffectEnabled,
+                            onToggle = {
+                                persist { it.copy(audioEffectEnabled = !it.audioEffectEnabled) }
+                            },
+                        )
+                    },
+                )
+            }
+
             item("volumeBoost") {
                 SettingsRow(
                     palette = palette,
