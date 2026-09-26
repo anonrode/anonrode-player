@@ -32,6 +32,18 @@ import androidx.media3.ui.PlayerView
  * of type PlayerUiState across recompositions, which is the difference
  * between PlayerControlsOverlay getting skipped vs. recomposed every tick.
  */
+enum class RepeatLoopMode(val label: String) {
+    OFF("Loop Off"),
+    ONE("Repeat One"),
+    ALL("Repeat All");
+
+    fun next(): RepeatLoopMode = when (this) {
+        OFF -> ONE
+        ONE -> ALL
+        ALL -> OFF
+    }
+}
+
 @Stable
 @UnstableApi
 internal class PlayerUiState(initialIsPlaying: Boolean) {
@@ -47,7 +59,18 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
      * against re-entrant gestures double-applying the speed change.
      */
     val boostActive = mutableStateOf(false)
+    val boostSpeed = mutableFloatStateOf(2.0f)
     val showCC = mutableStateOf(true)
+
+    val nightMode = mutableStateOf(false)
+    val shuffleOn = mutableStateOf(false)
+    val repeatMode = mutableStateOf(RepeatLoopMode.OFF)
+    val isMuted = mutableStateOf(false)
+    val savedVolume = mutableIntStateOf(-1)
+    val abStartMs = mutableStateOf<Long?>(null)
+    val abEndMs = mutableStateOf<Long?>(null)
+    val audioEffectOn = mutableStateOf(false)
+    val backgroundPlayOn = mutableStateOf(false)
 
     /** Index into [ZoomModes]: FIT → CROP → STR → 16:9 → 4:3. */
     val zoomIdx = mutableIntStateOf(0)

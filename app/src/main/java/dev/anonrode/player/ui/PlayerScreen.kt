@@ -403,6 +403,12 @@ fun PlayerScreen(
     FirstFramePosterEffect(mediaId, context, ui)
     // v0.7.1: throttled frame previews for the scrub bubble.
     ScrubPreviewEffect(mediaId, context, ui, gestures)
+    AbRepeatEffect(
+        abStartMs = ui.abStartMs.value,
+        abEndMs = ui.abEndMs.value,
+        player = livePlayer,
+        positionSec = positionSec,
+    )
 
     // Overlays anchor off the MEASURED chrome heights (see the bars'
     // onSizeChanged publishers) — never below the status bar, never under
@@ -436,6 +442,15 @@ fun PlayerScreen(
             poster = ui.posterBitmap.value,
             onPlayerView = { ui.playerViewRef.value = it },
         )
+
+        // ── night mode eye-comfort scrim ──
+        if (ui.nightMode.value) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x40FF9800))
+            )
+        }
 
         // ── subtitle: high-contrast outline, draggable ──
         if (ui.showCC.value && !isPipMode) {
@@ -498,9 +513,7 @@ fun PlayerScreen(
         // ── controls overlay — the seek bar row inside stays visible even
         //    when the chrome is hidden (UI-4 fix); hidden entirely only
         //    while in PiP / locked.
-        // v0.9 Single-Plane Chrome — V9ControlsOverlay has the same parameter
-        // list as PlayerControlsOverlay, so this is the whole swap.
-        V9ControlsOverlay(
+        PlayerControlsOverlay(
             visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
             showSeekBar = !ui.locked.value && !isPipMode,
             title = title,
@@ -528,8 +541,8 @@ fun PlayerScreen(
         PlayerControlCenterSheet(
             visible = overflowOpen.value,
             state = ControlCenterState(
-                abStartMs = abStartMs,
-                abEndMs = abEndMs,
+                abStartMs = abStartMs ?: ui.abStartMs.value,
+                abEndMs = abEndMs ?: ui.abEndMs.value,
                 sleep = sleep,
                 skipIncrementSec = seekIncrementSec,
                 equalizerOn = quick.equalizerOn.value,
@@ -541,7 +554,10 @@ fun PlayerScreen(
             ),
             accent = accent,
             onDismiss = { overflowOpen.value = false },
-            onAbRepeat = onAbRepeatTap,
+            onAbRepeat = {
+                actions.cycleAbRepeat()
+                onAbRepeatTap()
+            },
             onSkipLengthCycle = {
                 // Same four steps the Settings screen offers. Stays open so
                 // the pill's value visibly advances.

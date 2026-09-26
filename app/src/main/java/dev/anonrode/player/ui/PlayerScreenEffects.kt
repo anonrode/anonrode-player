@@ -407,3 +407,24 @@ internal fun ScrubPreviewEffect(
         }
     }
 }
+
+/**
+ * A-B repeat playback loop: when both A and B timestamps are set and B > A,
+ * loops playback automatically when current position reaches or exceeds B.
+ */
+@Composable
+internal fun AbRepeatEffect(
+    abStartMs: Long?,
+    abEndMs: Long?,
+    player: Player,
+    positionSec: State<Float>,
+) {
+    if (abStartMs != null && abEndMs != null && abEndMs > abStartMs) {
+        val currentMs = (positionSec.value * 1000f).toLong()
+        LaunchedEffect(currentMs) {
+            if (currentMs >= abEndMs || currentMs < abStartMs) {
+                player.seekTo(abStartMs)
+            }
+        }
+    }
+}

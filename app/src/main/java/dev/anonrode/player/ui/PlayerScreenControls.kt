@@ -17,23 +17,45 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.sp
+import kotlin.math.abs
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.State
@@ -224,105 +246,225 @@ internal fun PlayerScreenTopBar(
             )
         }
 
-        // ── Row 2: Horizontally scrollable and collapsible Quick Ribbon ──
+        // ── Row 2: 13-item Quick Access Ribbon ──
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 2.dp),
+                .padding(top = 4.dp, bottom = 2.dp)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AnimatedVisibility(
-                // v0.9: always visible. The collapse chevron is removed — it
-                // was a 36dp hit target (under PlayerDimens.touchMin) with a
-                // dimmed 0.75-alpha tint, so the control that REVEALED the
-                // tools rendered smaller and more "disabled" than the tools it
-                // revealed. The rail scrolls instead; nothing hides.
-                visible = true,
-                modifier = Modifier.weight(1f),
-                enter = fadeIn(tween(180)) + expandHorizontally(tween(220)),
-                exit = fadeOut(tween(180)) + shrinkHorizontally(tween(220)),
-            ) {
-                Row(
+            // 1. Night Mode
+            RibbonToolItem(
+                icon = Icons.Filled.Bedtime,
+                label = "Night Mode",
+                accent = accent,
+                selected = actions.ui.nightMode.value,
+                onClick = { actions.toggleNightMode() },
+            )
+
+            // 2. Customise Items
+            RibbonToolItem(
+                icon = Icons.Filled.Edit,
+                label = "Customise",
+                accent = accent,
+                selected = false,
+                onClick = { actions.showTransientToast("Customise: long-press to pin items") },
+            )
+
+            // 3. Shuffle
+            RibbonToolItem(
+                icon = Icons.Filled.Shuffle,
+                label = "Shuffle",
+                accent = accent,
+                selected = actions.ui.shuffleOn.value,
+                onClick = { actions.toggleShuffle() },
+            )
+
+            // 4. Loop
+            RibbonToolItem(
+                icon = if (actions.ui.repeatMode.value == RepeatLoopMode.ONE) Icons.Filled.RepeatOne
+                else Icons.Filled.Repeat,
+                label = when (actions.ui.repeatMode.value) {
+                    RepeatLoopMode.ONE -> "Loop 1"
+                    RepeatLoopMode.ALL -> "Loop All"
+                    RepeatLoopMode.OFF -> "Loop"
+                },
+                accent = accent,
+                selected = actions.ui.repeatMode.value != RepeatLoopMode.OFF,
+                onClick = { actions.cycleRepeatLoopMode() },
+            )
+
+            // 5. Mute
+            RibbonToolItem(
+                icon = if (actions.ui.isMuted.value) Icons.AutoMirrored.Filled.VolumeOff
+                else Icons.AutoMirrored.Filled.VolumeUp,
+                label = if (actions.ui.isMuted.value) "Muted" else "Mute",
+                accent = accent,
+                selected = actions.ui.isMuted.value,
+                onClick = { actions.toggleMute() },
+            )
+
+            // 6. Sleep Timer
+            RibbonToolItem(
+                icon = Icons.Filled.Timer,
+                label = "Sleep Timer",
+                accent = accent,
+                selected = false,
+                onClick = { actions.cycleSleepTimer() },
+            )
+
+            // 7. A - B Repeat
+            RibbonToolItem(
+                badgeText = "A⮂B",
+                label = when {
+                    actions.ui.abStartMs.value != null && actions.ui.abEndMs.value != null -> "Loop A-B"
+                    actions.ui.abStartMs.value != null -> "Set B"
+                    else -> "A - B Repeat"
+                },
+                accent = accent,
+                selected = actions.ui.abStartMs.value != null,
+                onClick = { actions.cycleAbRepeat() },
+            )
+
+            // 8. Audio Effect (with reference red active dot)
+            RibbonToolItem(
+                icon = Icons.Filled.GraphicEq,
+                label = "Audio Effect",
+                accent = accent,
+                selected = actions.ui.audioEffectOn.value,
+                hasActiveDot = actions.ui.audioEffectOn.value,
+                onClick = { actions.toggleAudioEffect() },
+            )
+
+            // 9. Equalizer
+            RibbonToolItem(
+                icon = Icons.Filled.Equalizer,
+                label = "Equalizer",
+                accent = accent,
+                selected = actions.quick.equalizerOn.value,
+                onClick = { actions.toggleEqualizer() },
+            )
+
+            // 10. Speed (showing current speed)
+            val curSpeed = actions.speeds[actions.speedIdx.intValue]
+            RibbonToolItem(
+                badgeText = speedLabel(curSpeed),
+                label = "Speed",
+                accent = accent,
+                selected = abs(curSpeed - 1f) > 0.05f,
+                onClick = { actions.cycleSpeed() },
+                onLongClick = { actions.setSpeed(1f) },
+            )
+
+            // 11. Screenshot
+            RibbonToolItem(
+                icon = Icons.Filled.PhotoCamera,
+                label = "Screenshot",
+                accent = accent,
+                selected = false,
+                onClick = { actions.captureFrame() },
+            )
+
+            // 12. Background Play
+            RibbonToolItem(
+                icon = Icons.Filled.Headphones,
+                label = "Background",
+                accent = accent,
+                selected = actions.ui.backgroundPlayOn.value,
+                onClick = { actions.toggleBackgroundPlay() },
+            )
+
+            // 13. Screen Rotation
+            RibbonToolItem(
+                icon = Icons.Filled.ScreenRotation,
+                label = when (actions.quick.rotateMode.value) {
+                    RotateMode.SENSOR -> "Auto"
+                    RotateMode.LANDSCAPE -> "Landscape"
+                    RotateMode.PORTRAIT -> "Portrait"
+                },
+                accent = accent,
+                selected = actions.quick.rotateMode.value != RotateMode.SENSOR,
+                onClick = { actions.cycleRotateMode() },
+            )
+        }
+    }
+}
+
+/** Individual circular tool in the Quick Access Ribbon with text label underneath. */
+@Composable
+internal fun RibbonToolItem(
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    badgeText: String? = null,
+    label: String,
+    accent: Color,
+    selected: Boolean = false,
+    hasActiveDot: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
+    Column(
+        modifier = modifier
+            .widthIn(min = 56.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = ripple(bounded = false, radius = 24.dp, color = accent),
+                onClick = onClick,
+            )
+            .padding(vertical = 4.dp, horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(
+                    if (selected) accent.copy(alpha = 0.28f)
+                    else Color.White.copy(alpha = 0.12f)
+                )
+                .border(
+                    width = if (selected) 1.dp else 0.dp,
+                    color = if (selected) accent else Color.Transparent,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = if (selected) accent else Color.White,
+                    modifier = Modifier.size(18.dp),
+                )
+            } else if (badgeText != null) {
+                Text(
+                    text = badgeText,
+                    color = if (selected) accent else Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            if (hasActiveDot) {
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // v0.9: Lock lives here now — the transport row is pure
-                    // transport, and this rail is always visible so the door
-                    // in/out of lock mode is never hidden behind a toggle.
-                    ControlChip(
-                        icon = if (actions.ui.locked.value) Icons.Filled.Lock
-                        else Icons.Filled.LockOpen,
-                        contentDescription = if (actions.ui.locked.value) {
-                            "Controls locked"
-                        } else {
-                            "Lock controls"
-                        },
-                        accent = accent,
-                        selected = actions.ui.locked.value,
-                        onClick = { actions.lockControls() },
-                    )
-                    PlayerSubSyncToggle(
-                        enabled = actions.quick.subSyncEnabled.value,
-                        running = actions.quick.subSyncRunning.value,
-                        offsetMs = liveOffsetMs,
-                        accent = accent,
-                        onEnable = { actions.setSubSyncEnabled(true) },
-                        onOpenPopover = { actions.openSyncPopover() },
-                        onResync = { actions.resyncNow() },
-                        compact = true,
-                    )
-                    ControlChip(
-                        icon = Icons.Filled.Equalizer,
-                        contentDescription = "Equalizer",
-                        accent = accent,
-                        selected = actions.quick.equalizerOn.value,
-                        onClick = { actions.toggleEqualizer() },
-                    )
-                    // v0.9: subtitle style tunes in place — this is its one
-                    // always-visible entry point (the tray replaces the host's
-                    // modal sheet, so the cue stays on screen while tuned).
-                    ControlChip(
-                        icon = Icons.Filled.ClosedCaption,
-                        contentDescription = "Subtitle style",
-                        accent = accent,
-                        selected = actions.quick.showStyleTray.value,
-                        onClick = {
-                            if (actions.quick.showStyleTray.value) {
-                                actions.closeStyleTray()
-                            } else {
-                                actions.openStyleTray()
-                            }
-                        },
-                    )
-                    PlayerScreenRotateButton(
-                        mode = actions.quick.rotateMode.value,
-                        accent = accent,
-                        onCycle = { actions.cycleRotateMode() },
-                        onSetMode = { actions.setRotateMode(it) },
-                    )
-                    ControlChip(
-                        icon = Icons.Filled.PictureInPictureAlt,
-                        contentDescription = "Picture-in-picture",
-                        accent = accent,
-                        onClick = { actions.enterPip() },
-                    )
-                    ControlChip(
-                        icon = Icons.Filled.PhotoCamera,
-                        contentDescription = "Capture frame",
-                        accent = accent,
-                        onClick = { actions.captureFrame() },
-                    )
-                    ControlChip(
-                        icon = Icons.Filled.Cast,
-                        contentDescription = "Cast",
-                        accent = accent,
-                        onClick = { actions.openCastPicker() },
-                    )
-                }
+                        .size(6.dp)
+                        .align(Alignment.TopEnd)
+                        .offset(x = (-3).dp, y = 3.dp)
+                        .background(Color(0xFFFF3B30), CircleShape)
+                )
             }
         }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = label,
+            color = if (selected) accent else Color.White.copy(alpha = 0.85f),
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }

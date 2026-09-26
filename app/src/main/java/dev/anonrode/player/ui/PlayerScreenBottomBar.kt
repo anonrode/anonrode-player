@@ -33,7 +33,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -181,6 +183,8 @@ internal fun PlayerScreenBottomBar(
             localSeek = localSeek,
             pendingSeekMs = actions.gestures.pendingSeekMs,
             scrubPreview = actions.ui.scrubPreview,
+            abStartMs = actions.ui.abStartMs.value,
+            abEndMs = actions.ui.abEndMs.value,
             onSeekCommitted = { sec ->
                 actions.livePlayer.seekTo((sec * 1000).toLong())
             },
@@ -188,8 +192,6 @@ internal fun PlayerScreenBottomBar(
 
         // ── 2) Transport + utility — auto-hide together (one AnimatedVisibility
         //    so they never disagree about when the chrome is up).
-        var showSpeedStrip by remember { mutableStateOf(false) }
-
         androidx.compose.animation.AnimatedVisibility(
             visible = visible,
             enter = fadeIn(animationSpec = tween(220)) +
@@ -198,30 +200,12 @@ internal fun PlayerScreenBottomBar(
                 slideOutVertically(animationSpec = tween(220)) { it / 2 },
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
-                if (showSpeedStrip) {
-                    SpeedSelectorRow(
-                        speeds = actions.speeds,
-                        selectedSpeed = actions.speeds[actions.speedIdx.intValue],
-                        accent = accent,
-                        onSelectSpeed = { sp ->
-                            actions.setSpeed(sp)
-                            showSpeedStrip = false
-                        },
-                    )
-                    Spacer(Modifier.height(PlayerDimens.gapXs))
-                }
                 Spacer(Modifier.height(PlayerDimens.gapSm))
                 TransportRow(
                     accent = accent,
                     isPlaying = isPlaying,
-                    hasPreviousEpisode = hasPreviousEpisode,
-                    hasNextEpisode = hasNextEpisode,
                     seekIncrementSec = seekIncrementSec,
                     actions = actions,
-                    showSpeedStrip = showSpeedStrip,
-                    onToggleSpeedStrip = { showSpeedStrip = !showSpeedStrip },
-                    onPlayPrevious = onPlayPrevious,
-                    onPlayNext = onPlayNext,
                     onPlayPause = { actions.togglePlayPause() },
                     onSeekBack = { actions.seekBy(-seekIncrementSec) },
                     onSeekForward = { actions.seekBy(seekIncrementSec) },
@@ -251,6 +235,8 @@ internal fun SeekBarRow(
     pendingSeekMs: MutableFloatState,
     /** Throttled frame preview for the scrub bubble — see ScrubPreviewEffect. */
     scrubPreview: State<ImageBitmap?>,
+    abStartMs: Long? = null,
+    abEndMs: Long? = null,
     onSeekCommitted: (Float) -> Unit,
 ) {
     var showRemainingOnLeft by remember { mutableStateOf(false) }
@@ -328,6 +314,38 @@ internal fun SeekBarRow(
                         .clip(CircleShape)
                         .background(accent)
                 )
+                if (abStartMs != null) {
+                    val aFrac = (abStartMs.toFloat() / (dur * 1000f)).coerceIn(0f, 1f)
+                    Box(
+                        Modifier
+                            .align(Alignment.CenterStart)
+                            .fillMaxWidth(aFrac)
+                    ) {
+                        Box(
+                            Modifier
+                                .align(Alignment.CenterEnd)
+                                .size(width = 3.dp, height = 12.dp)
+                                .clip(RoundedCornerShape(1.dp))
+                                .background(Color(0xFFFFB300))
+                        )
+                    }
+                }
+                if (abEndMs != null) {
+                    val bFrac = (abEndMs.toFloat() / (dur * 1000f)).coerceIn(0f, 1f)
+                    Box(
+                        Modifier
+                            .align(Alignment.CenterStart)
+                            .fillMaxWidth(bFrac)
+                    ) {
+                        Box(
+                            Modifier
+                                .align(Alignment.CenterEnd)
+                                .size(width = 3.dp, height = 12.dp)
+                                .clip(RoundedCornerShape(1.dp))
+                                .background(Color(0xFFFFB300))
+                        )
+                    }
+                }
             }
             Slider(
                 value = visualPos.coerceIn(0f, dur),
@@ -443,19 +461,13 @@ private fun ScrubBubble(
     }
 }
 
-/* ── Transport row — clean 3-cluster layout: Lock · [‹N ⏮ ▶(64) ⏭ N›] · [Speed Pill · Aspect] ── */
+/* ── Transport row — faithful reference: [🔒]  [⏮ 10s] [▶/⏸] [⏭ 10s]  [◫] [⤢] ── */
 @Composable
 private fun TransportRow(
     accent: Color,
     isPlaying: Boolean,
-    hasPreviousEpisode: Boolean,
-    hasNextEpisode: Boolean,
     seekIncrementSec: Int,
     actions: PlayerScreenActions,
-    showSpeedStrip: Boolean,
-    onToggleSpeedStrip: () -> Unit,
-    onPlayPrevious: () -> Unit,
-    onPlayNext: () -> Unit,
     onPlayPause: () -> Unit,
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
@@ -465,17 +477,18 @@ private fun TransportRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // v0.9 "Single-Plane Chrome": PURE transport.
-        // The lock chip that used to sit here moved to the always-visible tool
-        // rail. Locking is a MODE, not a transport action, and parking it on
-        // this row's left edge forced the five transport controls off-centre.
-        // A same-footprint spacer keeps the 5-cluster optically centred in the
-        // SpaceBetween row, so the thumb still finds PLAY where it expects it.
-        Spacer(Modifier.size(PlayerDimens.touchMin))
+        // Far Left: Lock controls
+        ControlChip(
+            icon = if (actions.ui.locked.value) Icons.Filled.Lock else Icons.Filled.LockOpen,
+            contentDescription = if (actions.ui.locked.value) "Controls locked" else "Lock controls",
+            accent = accent,
+            selected = actions.ui.locked.value,
+            onClick = { actions.lockControls() },
+        )
 
-        // Center: Transport cluster (⟲, ⏮, ▶/⏸, ⏭, ⟳)
+        // Center: Transport cluster (⏮ 10s, ▶/⏸, ⏭ 10s)
         Row(
-            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapSm, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapLg, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TimeSeekButton(
@@ -484,17 +497,7 @@ private fun TransportRow(
                 accent = accent,
                 onClick = onSeekBack,
             )
-            EpisodeJumpButton(
-                direction = EpisodeJumpDirection.PREVIOUS,
-                enabled = hasPreviousEpisode,
-                onClick = onPlayPrevious,
-            )
             BigPlayPauseButton(isPlaying = isPlaying, accent = accent, onClick = onPlayPause)
-            EpisodeJumpButton(
-                direction = EpisodeJumpDirection.NEXT,
-                enabled = hasNextEpisode,
-                onClick = onPlayNext,
-            )
             TimeSeekButton(
                 direction = TimeSeekDirection.FORWARD,
                 seconds = seekIncrementSec,
@@ -503,18 +506,11 @@ private fun TransportRow(
             )
         }
 
-        // Right: Speed pill & Aspect ratio
+        // Far Right: Aspect ratio & Fullscreen / Rotate
         Row(
-            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs, Alignment.End),
+            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapSm, Alignment.End),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextPill(
-                text = speedLabel(actions.speeds[actions.speedIdx.intValue]),
-                accent = accent,
-                selected = showSpeedStrip || abs(actions.speeds[actions.speedIdx.intValue] - 1f) >= 0.05f,
-                onClick = onToggleSpeedStrip,
-                onLongClick = { actions.setSpeed(1f) },
-            )
             var aspectMenu by remember { mutableStateOf(false) }
             Box {
                 ControlChip(
@@ -559,6 +555,12 @@ private fun TransportRow(
                     }
                 }
             }
+            ControlChip(
+                icon = Icons.Filled.CropFree,
+                contentDescription = "Fullscreen",
+                accent = accent,
+                onClick = { actions.cycleRotateMode() },
+            )
         }
     }
 }

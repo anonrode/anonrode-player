@@ -271,9 +271,10 @@ internal fun Modifier.playerGestureLayer(
                 if (!activated) return@awaitEachGesture
                 // Long-press survived — engage the boost.
                 ui.boostActive.value = true
+                ui.boostSpeed.floatValue = BOOST_SPEED
                 actions.view.haptic(HapticFeedbackConstants.LONG_PRESS)
                 (actions.engine?.player ?: actions.livePlayer).setPlaybackSpeed(BOOST_SPEED)
-                actions.showHud(Icons.Filled.FastForward, "2× speed")
+                actions.showHud(Icons.Filled.FastForward, "2× speed · ↔ Slide to adjust")
                 try {
                     // Hold until the finger lifts; a second finger going
                     // down aborts the boost. Consume the changes so the
@@ -282,8 +283,19 @@ internal fun Modifier.playerGestureLayer(
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         event.changes.forEach { it.consume() }
                         val pressed = event.changes.filter { it.pressed }
-                        val held = event.changes.any { it.id == down.id && it.pressed }
-                        if (!held || pressed.isEmpty() || pressed.size > 1) break
+                        val heldPointer = event.changes.firstOrNull { it.id == down.id && it.pressed }
+                        if (heldPointer == null || pressed.isEmpty() || pressed.size > 1) break
+
+                        // Horizontal movement while holding adjusts temporary speed
+                        val deltaX = heldPointer.position.x - down.position.x
+                        val speedDelta = (deltaX / (gestures.scrW.floatValue * 0.35f)) * 1.5f
+                        val rawTarget = (BOOST_SPEED + speedDelta).coerceIn(1.0f, 3.5f)
+                        val steppedSpeed = (rawTarget * 4f).roundToInt() / 4f
+                        if (steppedSpeed != ui.boostSpeed.floatValue) {
+                            ui.boostSpeed.floatValue = steppedSpeed
+                            (actions.engine?.player ?: actions.livePlayer).setPlaybackSpeed(steppedSpeed)
+                            actions.showHud(Icons.Filled.FastForward, "%.2f× speed · ↔ Slide".format(steppedSpeed))
+                        }
                     }
                 } finally {
                     // Restore exactly once per activation, to the user's
@@ -291,9 +303,10 @@ internal fun Modifier.playerGestureLayer(
                     // fresh off the engine: a decoder rebuild mid-hold
                     // swaps the ExoPlayer instance under us.
                     ui.boostActive.value = false
-                    (actions.engine?.player ?: actions.livePlayer).setPlaybackSpeed(actions.speeds[actions.speedIdx.intValue])
+                    val normalSpeed = actions.speeds[actions.speedIdx.intValue]
+                    (actions.engine?.player ?: actions.livePlayer).setPlaybackSpeed(normalSpeed)
                     actions.showHud(Icons.Filled.FastForward,
-                        speedLabel(actions.speeds[actions.speedIdx.intValue]) + " speed")
+                        speedLabel(normalSpeed) + " speed")
                 }
             }
         }

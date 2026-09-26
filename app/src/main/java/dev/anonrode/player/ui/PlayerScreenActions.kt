@@ -102,6 +102,104 @@ internal class PlayerScreenActions(
         ui.showCC.value = !ui.showCC.value
     }
 
+    fun toggleNightMode() {
+        ui.nightMode.value = !ui.nightMode.value
+        view.haptic()
+        showTransientToast(if (ui.nightMode.value) "Night mode on" else "Night mode off")
+    }
+
+    fun toggleShuffle() {
+        ui.shuffleOn.value = !ui.shuffleOn.value
+        view.haptic()
+        (livePlayer as? ExoPlayer)?.shuffleModeEnabled = ui.shuffleOn.value
+        showTransientToast(if (ui.shuffleOn.value) "Shuffle on" else "Shuffle off")
+    }
+
+    fun cycleRepeatLoopMode() {
+        val next = ui.repeatMode.value.next()
+        ui.repeatMode.value = next
+        view.haptic()
+        val exoMode = when (next) {
+            RepeatLoopMode.OFF -> Player.REPEAT_MODE_OFF
+            RepeatLoopMode.ONE -> Player.REPEAT_MODE_ONE
+            RepeatLoopMode.ALL -> Player.REPEAT_MODE_ALL
+        }
+        livePlayer.repeatMode = exoMode
+        showTransientToast(next.label)
+    }
+
+    fun toggleMute() {
+        val maxV = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val currentV = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        if (ui.isMuted.value) {
+            val restoreV = if (ui.savedVolume.intValue > 0) ui.savedVolume.intValue else (maxV / 2)
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, restoreV, 0)
+            ui.isMuted.value = false
+            view.haptic()
+            showTransientToast("Unmuted")
+        } else {
+            ui.savedVolume.intValue = currentV
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+            ui.isMuted.value = true
+            view.haptic()
+            showTransientToast("Muted")
+        }
+    }
+
+    fun cycleSleepTimer() {
+        val options = SleepOptions
+        val currentIdx = options.indexOfFirst { sleep.isSelected(it) }.coerceAtLeast(0)
+        val nextIdx = (currentIdx + 1) % options.size
+        val nextOpt = options[nextIdx]
+        selectSleep(nextOpt)
+        view.haptic()
+        showTransientToast("Sleep: ${nextOpt.label}")
+    }
+
+    fun cycleAbRepeat() {
+        val curPos = livePlayer.currentPosition
+        when {
+            ui.abStartMs.value == null -> {
+                ui.abStartMs.value = curPos
+                view.haptic()
+                showTransientToast("Point A set: ${fmtTime(curPos)}")
+            }
+            ui.abEndMs.value == null -> {
+                if (curPos > ui.abStartMs.value!!) {
+                    ui.abEndMs.value = curPos
+                    view.haptic()
+                    showTransientToast("Point B set: ${fmtTime(curPos)} · Looping A-B")
+                } else {
+                    showTransientToast("Point B must be after Point A")
+                }
+            }
+            else -> {
+                ui.abStartMs.value = null
+                ui.abEndMs.value = null
+                view.haptic()
+                showTransientToast("A-B repeat cleared")
+            }
+        }
+    }
+
+    fun toggleAudioEffect() {
+        ui.audioEffectOn.value = !ui.audioEffectOn.value
+        view.haptic()
+        showTransientToast(if (ui.audioEffectOn.value) "Voice clarity on" else "Audio effect off")
+    }
+
+    fun cycleSpeed() {
+        val nextIdx = (speedIdx.intValue + 1) % speeds.size
+        setSpeed(speeds[nextIdx])
+        view.haptic()
+    }
+
+    fun toggleBackgroundPlay() {
+        ui.backgroundPlayOn.value = !ui.backgroundPlayOn.value
+        view.haptic()
+        showTransientToast(if (ui.backgroundPlayOn.value) "Background play on" else "Background play off")
+    }
+
     fun openSyncPopover() {
         // v0.9: only one tray may cover the transport at a time.
         quick.showStyleTray.value = false
