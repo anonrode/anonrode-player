@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anonrode Player — Player Screen (exact)</title>
+<style>
+/* EXACT SPEC PORT — values lifted from the Kotlin source.
+   Scale: 1dp = 2px (S=2). Frame 393dp x 200dp landscape. */
+:root{
+  --S: 2px;
+  --gap-xs: calc(4 * var(--S));
+  --gap-sm: calc(8 * var(--S));
+  --gap-md: calc(12 * var(--S));
+  --gap-lg: calc(16 * var(--S));
+  --touch-min: calc(48 * var(--S));
+  --chip-visual: calc(40 * var(--S));
+  --chip-md: calc(48 * var(--S));
+  --play-big: calc(64 * var(--S));
+  --glyph-md: calc(22 * var(--S));
+  --glyph-play: calc(32 * var(--S));
+  --skip-w: calc(48 * var(--S));
+  --skip-h: calc(44 * var(--S));
+  --pill-h: calc(40 * var(--S));
+  --time-label-min-w: calc(52 * var(--S));
+  --accent: #2563EB;
+  --accent-rgb: 37,99,235;
+  --sync-locked: #49D6A0;
+  --sync-running: #FFC247;
+  --active-dot: #FF3B30;
+  --ab-amber: #FFB300;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#07080B;font-family:Roboto,"Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:28px 20px 60px}
+
+.stage{display:flex;flex-direction:column;align-items:center;gap:22px;margin-bottom:44px}
+.stage-label{color:#8A93A6;font:600 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;
+  text-transform:uppercase}
+.phone{position:relative;width:calc(393 * var(--S));height:calc(200 * var(--S));
+  border-radius:calc(14 * var(--S));background:#000;overflow:hidden;
+  box-shadow:0 0 0 calc(2*var(--S)) #23262E, 0 24px 60px rgba(0,0,0,.65)}
+
+/* the "video frame" stand-in */
+.video{position:absolute;inset:0;
+  background:radial-gradient(120% 90% at 22% 18%, #2C3E5C 0%, rgba(44,62,92,0) 55%),
+             radial-gradient(90% 80% at 82% 78%, #6B4A2E 0%, rgba(107,74,46,0) 60%),
+             linear-gradient(168deg,#141A24 0%,#0C1016 52%,#1A1410 100%)}
+.video::after{content:"";position:absolute;inset:0;
+  background:radial-gradient(38% 46% at 36% 62%, rgba(255,196,140,.16), rgba(255,196,140,0) 70%),
+             radial-gradient(30% 34% at 68% 40%, rgba(140,190,255,.13), rgba(140,190,255,0) 70%)}
+
+/* TOP BAR — scrim BEFORE insets; padding(h gapSm 8, v gapXs 4) */
+.topbar{position:absolute;top:0;left:0;right:0;z-index:20;
+  background:linear-gradient(180deg, rgba(0,0,0,.85) 0%, rgba(0,0,0,0) 100%);
+  padding:var(--gap-sm) var(--gap-sm) var(--gap-xs);
+  display:flex;flex-direction:column;gap:var(--gap-xs)}
+.statusbar{position:absolute;top:0;left:0;right:0;height:calc(22*var(--S));z-index:40;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 calc(14*var(--S));color:rgba(255,255,255,.92);
+  font:600 calc(10.5*var(--S))/1 Roboto,sans-serif;pointer-events:none}
+.row1{display:flex;align-items:center;width:100%}
+.ibtn{width:var(--touch-min);height:var(--touch-min);flex:0 0 auto;display:grid;
+  place-items:center;color:#fff;cursor:pointer}
+.ibtn svg{width:calc(24*var(--S));height:calc(24*var(--S))}
+.title{flex:1 1 auto;min-width:0;padding:0 var(--gap-xs);color:#fff;
+  font-size:calc(14*var(--S));font-weight:500;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+/* ControlChip: 48dp cell, 40dp painted circle, 22dp glyph */
+.chip{width:var(--touch-min);height:var(--touch-min);flex:0 0 auto;display:grid;
+  place-items:center;cursor:pointer}
+.chip i{display:grid;place-items:center;width:var(--chip-visual);height:var(--chip-visual);
+  border-radius:50%;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.20)}
+.chip svg{width:var(--glyph-md);height:var(--glyph-md);color:#fff}
+.chip.sel i{background:rgba(var(--accent-rgb),.20);border-color:rgba(var(--accent-rgb),.65)}
+.chip.sel svg{color:var(--accent)}
+
+/* TextPill: 48dp cell, pillH 40dp inner, 13sp SemiBold */
+.tpill{height:var(--touch-min);padding:0 var(--gap-xs);display:flex;align-items:center;
+  cursor:pointer;flex:0 0 auto}
+.tpill span{height:var(--pill-h);display:flex;align-items:center;
+  padding:0 calc(10*var(--S));border-radius:999px;background:rgba(0,0,0,.35);
+  border:1px solid rgba(255,255,255,.20);color:#fff;font-size:calc(13*var(--S));
+  font-weight:600;letter-spacing:.2px}
+.tpill.sel span{background:rgba(var(--accent-rgb),.20);
+  border-color:rgba(var(--accent-rgb),.65);color:var(--accent)}
+
+/* RIBBON — Row(horizontalScroll, spacedBy gapXs 4) */
+.ribbon{display:flex;align-items:center;gap:var(--gap-xs);width:100%;overflow:hidden;
+  padding:calc(2*var(--S)) 0}
+/* RibbonToolItem: widthIn(min 56dp) · 34dp circle · 18dp glyph · 9sp label + 3dp */
+.tool{flex:0 0 auto;width:calc(56*var(--S));display:flex;flex-direction:column;
+  align-items:center;padding:var(--gap-xs) calc(2*var(--S));cursor:pointer}
+.tool .orb{position:relative;width:calc(34*var(--S));height:calc(34*var(--S));
+  border-radius:50%;display:grid;place-items:center;
+  background:rgba(255,255,255,.12);border:0 solid transparent}
+.tool.sel .orb{background:rgba(var(--accent-rgb),.28);border:1px solid var(--accent)}
+.tool svg{width:calc(18*var(--S));height:calc(18*var(--S));color:#fff}
+.tool.sel svg{color:var(--accent)}
+.tool.badge .orb{font-size:calc(11*var(--S));font-weight:700;color:#fff}
+.tool.sel.badge .orb{color:var(--accent)}
+.tool .orb .dot{position:absolute;top:calc(1*var(--S));right:calc(1*var(--S));
+  width:calc(6*var(--S));height:calc(6*var(--S));border-radius:50%;
+  background:var(--active-dot)}
+.tool .lab{margin-top:calc(3*var(--S));font-size:calc(9*var(--S));font-weight:500;
+  color:rgba(255,255,255,.85);white-space:nowrap;max-width:100%;overflow:hidden;
+  text-overflow:ellipsis}
+.tool.sel .lab{color:var(--accent)}
+
+.night{position:absolute;inset:0;z-index:15;background:rgba(255,152,0,.25);display:none}
+
+/* SUBTITLE — centred at .5 / .66, bold + black outline */
+.subs{position:absolute;left:50%;top:66%;transform:translate(-50%,-50%);z-index:16;
+  text-align:center;max-width:76%;pointer-events:none}
+.subs span{display:inline-block;color:#fff;font-size:calc(16*var(--S));font-weight:700;
+  line-height:1.28;paint-order:stroke fill;
+  -webkit-text-stroke:calc(3*var(--S)) rgba(0,0,0,.92)}
+/* BOTTOM BAR — scrim first, then insets, then padding
+   (start/end gapLg 16, top gapSm 8, bottom gapXs 4) + navBars */
+.bottom{position:absolute;left:0;right:0;bottom:0;z-index:20;
+  background:linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.85) 100%);
+  padding:var(--gap-sm) var(--gap-lg) var(--gap-lg);
+  display:flex;flex-direction:column;gap:var(--gap-xs)}
+
+/* StatusStrip — 26dp pills, black@46%, 1dp border, 7dp dot, 11.5sp SemiBold */
+.strip{display:flex;align-items:center;gap:var(--gap-xs);margin-bottom:var(--gap-xs)}
+.pill{display:flex;align-items:center;gap:calc(6*var(--S));height:calc(26*var(--S));
+  padding:0 calc(10*var(--S));border-radius:999px;background:rgba(0,0,0,.46);
+  border:1px solid rgba(255,255,255,.10);color:var(--accent);
+  font-size:calc(11.5*var(--S));font-weight:600;white-space:nowrap}
+.pill .sdot{width:calc(7*var(--S));height:calc(7*var(--S));border-radius:50%;
+  background:var(--accent);flex:0 0 auto}
+.pill.locked{color:var(--sync-locked);border-color:rgba(73,214,160,.38)}
+.pill.locked .sdot{background:var(--sync-locked)}
+.pill.running{color:var(--sync-running);border-color:rgba(255,194,71,.38)}
+.pill.running .sdot{background:var(--sync-running)}
+.pill.txt{font-family:"SF Mono",Menlo,Consolas,monospace;min-width:calc(44*var(--S));
+  justify-content:center}
+.pill.txt.emph{color:var(--accent)}
+.spacer{flex:1 1 auto}
+
+/* SeekBarRow — labels 14sp Medium white@75%, min-w 52dp.
+   Track 4dp: base white@22% / buffered white@45% / played accent.
+   A-B pins 3x12dp #FFB300. Thumb 14dp white + 2dp shadow. */
+.seek{display:flex;align-items:center;width:100%}
+.tlabel{color:rgba(255,255,255,.75);font-size:calc(14*var(--S));font-weight:500;
+  min-width:var(--time-label-min-w);white-space:nowrap;cursor:pointer;user-select:none}
+.tlabel.r{text-align:right}
+.trackwrap{flex:1 1 auto;position:relative;height:calc(32*var(--S));
+  margin:0 var(--gap-sm);cursor:pointer}
+.track{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);
+  height:calc(4*var(--S));border-radius:999px;background:rgba(255,255,255,.22)}
+.buf{position:absolute;left:0;top:0;bottom:0;border-radius:999px;
+  background:rgba(255,255,255,.45)}
+.play{position:absolute;left:0;top:0;bottom:0;border-radius:999px;
+  background:var(--accent)}
+.ab{position:absolute;top:50%;transform:translateY(-50%);width:calc(3*var(--S));
+  height:calc(12*var(--S));border-radius:calc(1*var(--S));background:var(--ab-amber);
+  box-shadow:0 0 calc(2*var(--S)) rgba(0,0,0,.6)}
+.thumb{position:absolute;top:50%;width:calc(14*var(--S));height:calc(14*var(--S));
+  border-radius:50%;background:#fff;transform:translate(-50%,-50%);
+  box-shadow:0 calc(2*var(--S)) calc(4*var(--S)) rgba(0,0,0,.5)}
+
+/* TransportRow — SpaceBetween */
+.transport{display:flex;align-items:center;justify-content:space-between;
+  width:100%;margin-top:var(--gap-xs)}
+.center{display:flex;align-items:center;gap:var(--gap-lg)}
+.right{display:flex;align-items:center;gap:var(--gap-sm)}
+/* TimeSeekButton — 48x44 pill, radius 10, accent@22% bg, accent@55% border, 14sp Black */
+.seekbtn{width:var(--chip-md);height:var(--chip-md);display:grid;place-items:center;
+  cursor:pointer}
+.seekbtn i{display:flex;align-items:center;justify-content:center;gap:calc(1*var(--S));
+  width:var(--skip-w);height:var(--skip-h);border-radius:calc(10*var(--S));
+  background:rgba(var(--accent-rgb),.22);border:1px solid rgba(var(--accent-rgb),.55);
+  color:var(--accent);font-size:calc(14*var(--S));font-weight:900;line-height:1;
+  font-style:normal}
+/* BigPlayPauseButton — 64dp, 2dp white border, 32dp glyph */
+.playbtn{width:var(--play-big);height:var(--play-big);border-radius:50%;
+  border:calc(2*var(--S)) solid #fff;display:grid;place-items:center;cursor:pointer}
+.playbtn svg{width:var(--glyph-play);height:var(--glyph-play);color:#fff}
+
+/* GestureHudPill — black@75%, radius 22, 16/8 padding, 18dp icon */
+.hud{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:30;
+  display:flex;align-items:center;gap:var(--gap-sm);
+  padding:calc(8*var(--S)) calc(16*var(--S));border-radius:calc(22*var(--S));
+  background:rgba(0,0,0,.75);color:#fff;font-size:calc(14*var(--S));font-weight:500;
+  white-space:nowrap}
+.hud svg{width:calc(18*var(--S));height:calc(18*var(--S))}
+/* DoubleTapFlash — 120dp wide column, white@12% */
+.flash{position:absolute;top:0;bottom:0;width:calc(120*var(--S));z-index:18;
+  background:rgba(255,255,255,.12);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:var(--gap-sm);color:#fff}
+.flash svg{width:calc(34*var(--S));height:calc(34*var(--S))}
+.flash b{font-size:calc(14*var(--S));font-weight:500}
+/* AbRepeatChip — 12sp, under the top bar */
+.abchip{position:absolute;left:50%;transform:translateX(-50%);z-index:22;
+  padding:calc(6*var(--S)) calc(12*var(--S));border-radius:999px;
+  background:rgba(0,0,0,.72);border:1px solid rgba(255,176,0,.45);color:#fff;
+  font-size:calc(12*var(--S));white-space:nowrap}
+/* PlayerOverlayToast — #0D0F16@92%, accent@45% border, radius 999 */
+.toast{position:absolute;left:50%;transform:translateX(-50%);z-index:32;
+  padding:calc(10*var(--S)) calc(18*var(--S));border-radius:999px;
+  background:rgba(13,15,22,.92);border:1px solid rgba(var(--accent-rgb),.45);
+  color:#DFFFF4;font-size:calc(14*var(--S));font-weight:600;white-space:nowrap}
+/* LockBadge */
+.lockbadge{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:30;
+  width:calc(72*var(--S));height:calc(72*var(--S));border-radius:50%;
+  background:rgba(0,0,0,.55);display:grid;place-items:center}
+.lockbadge svg{width:calc(30*var(--S));height:calc(30*var(--S));color:#fff}
+
+.legend{max-width:786px;color:#8A93A6;font:12px/1.7 ui-monospace,Menlo,monospace;
+  border-left:2px solid #1F2430;padding-left:16px}
+.legend b{color:#C7CEDB;font-weight:600}
+</style>
+</head>
+<body>
+
+<svg style="display:none">
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-audio" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z" fill="currentColor"/></symbol>
+  <symbol id="i-cc" viewBox="0 0 24 24"><path d="M19 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zM11 11H9.5v-.5h-2v.5H6v1h1.5V13H6v1h1.5v.5h2V14H11v-1h1.5v-1H11zm3.5 3H14v-1h.5v-.5h-2v.5H12v1h.5V13h-.5v1.5h2V14h.5v-1h-.5V13z" fill="currentColor"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="currentColor"/></symbol>
+  <symbol id="i-lock-open" viewBox="0 0 24 24"><path d="M4 11h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zm4 0V7a4 4 0 0 1 7.5-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path d="M4 11h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zm4 0V7a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-aspect" viewBox="0 0 24 24"><path d="M19 12h-2v3h-3v2h5v-5zm-1-6H6v5h2V8h8v10h-6v2h6a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2z" fill="currentColor"/></symbol>
+  <symbol id="i-full" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"/></symbol>
+  <symbol id="i-ff" viewBox="0 0 24 24"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" fill="currentColor"/></symbol>
+  <symbol id="i-night" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 14a5 5 0 1 1 0-10 5 5 0 0 1 0 10z" fill="currentColor"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" fill="currentColor"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M10.59 9.17 5.41 4 4 5.41l5.17 5.18 1.42-1.42zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41-1.41 1.42 5.66 5.65L20.5 19.1l-5.67-5.69z" fill="currentColor"/></symbol>
+  <symbol id="i-loop" viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" fill="currentColor"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12z" fill="currentColor"/></symbol>
+  <symbol id="i-mute" viewBox="0 0 24 24"><path d="M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.42.05-.63zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25A6.9 6.9 0 0 1 14 18.7v2.06a9 9 0 0 0 3.69-1.53L19.73 21 21 19.73 12 10.73 4.27 3zM12 4 9.91 6.09 12 8.18V4z" fill="currentColor"/></symbol>
+  <symbol id="i-timer" viewBox="0 0 24 24"><path d="M15 1H9v2h6v16H9v2h6a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2zm-4 8H8.5L5 5.5v13L8.5 15H11v-6z" fill="currentColor"/></symbol>
+  <symbol id="i-fx" viewBox="0 0 24 24"><path d="M7 18h2V6H7v12zm-4 0h2V6H3v12zm14-6a4 4 0 0 0-4-4v8a4 4 0 0 0 4-4zm-2-6.3v12.6a5.3 5.3 0 0 0 0-12.6z" fill="currentColor"/></symbol>
+  <symbol id="i-eq" viewBox="0 0 24 24"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z" fill="currentColor"/></symbol>
+  <symbol id="i-cam" viewBox="0 0 24 24"><path d="M9 2 7.17 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3.17L15 2H9zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" fill="currentColor"/></symbol>
+  <symbol id="i-bgp" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9v6a3 3 0 0 0 3 3h1a1 1 0 0 0 1-1v-7a1 1 0 0 0-1-1H5a5 5 0 0 1 10 0h-2a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1a3 3 0 0 0 3-3v-6a9 9 0 0 0-9-9z" fill="currentColor"/></symbol>
+  <symbol id="i-rot" viewBox="0 0 24 24"><path d="M7 2h10v2H7zM5 6h14v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6zm2 2v10h10V8H7z" fill="currentColor"/></symbol>
+</svg>
+<!-- ════════ STATE 1 · DEFAULT ════════ -->
+<div class="stage">
+  <div class="stage-label">State 1 · default — chrome visible, playing, sync locked</div>
+  <div class="phone">
+    <div class="video"></div>
+    <div class="statusbar"><span>8:41</span><span>▮▮▮ 100%</span></div>
+
+    <div class="topbar">
+      <div class="row1">
+        <div class="ibtn"><svg><use href="#i-back"/></svg></div>
+        <div class="title">Growling Tiger And Roaring Dragon 2017 EP07 HD1080P</div>
+        <div class="chip"><i><svg><use href="#i-audio"/></svg></i></div>
+        <div class="chip sel"><i><svg><use href="#i-cc"/></svg></i></div>
+        <div class="tpill sel"><span>HW</span></div>
+        <div class="chip"><i><svg><use href="#i-more"/></svg></i></div>
+      </div>
+      <div class="ribbon">
+        <div class="tool"><div class="orb"><svg><use href="#i-night"/></svg></div><div class="lab">Night Mode</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-edit"/></svg></div><div class="lab">Customise</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-shuffle"/></svg></div><div class="lab">Shuffle</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-loop"/></svg></div><div class="lab">Loop</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-vol"/></svg></div><div class="lab">Mute</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-timer"/></svg></div><div class="lab">Sleep Timer</div></div>
+        <div class="tool badge"><div class="orb">A⮂B</div><div class="lab">A - B Repeat</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-fx"/></svg></div><div class="lab">Audio Effect</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-eq"/></svg></div><div class="lab">Equalizer</div></div>
+        <div class="tool sel badge"><div class="orb">1.5X</div><div class="lab">Speed</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-cam"/></svg></div><div class="lab">Screenshot</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-bgp"/></svg></div><div class="lab">Background</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-rot"/></svg></div><div class="lab">Auto</div></div>
+      </div>
+    </div>
+
+    <div class="subs"><span>You really think this is going to work out for you?</span></div>
+
+    <div class="bottom">
+      <div class="strip">
+        <div class="pill locked"><i class="sdot"></i>Synced +1.2s</div>
+        <div class="pill txt emph">1.5X</div>
+        <div class="spacer"></div>
+        <div class="pill txt">38:53</div>
+      </div>
+      <div class="seek">
+        <div class="tlabel">14:15</div>
+        <div class="trackwrap">
+          <div class="track"></div>
+          <div class="buf" style="width:38%"></div>
+          <div class="play" style="width:26.7%"></div>
+          <div class="thumb" style="left:26.7%"></div>
+        </div>
+        <div class="tlabel r">53:08</div>
+      </div>
+      <div class="transport">
+        <div class="chip"><i><svg><use href="#i-lock-open"/></svg></i></div>
+        <div class="center">
+          <div class="seekbtn"><i>‹10</i></div>
+          <div class="playbtn"><svg><use href="#i-pause"/></svg></div>
+          <div class="seekbtn"><i>10›</i></div>
+        </div>
+        <div class="right">
+          <div class="chip"><i><svg><use href="#i-aspect"/></svg></i></div>
+          <div class="chip"><i><svg><use href="#i-full"/></svg></i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- ════════ STATE 2 · BOOST + A-B ARMED + AUDIO EFFECT ON ════════ -->
+<div class="stage">
+  <div class="stage-label">State 2 · long-press boost · A-B armed · audio effect on · paused</div>
+  <div class="phone">
+    <div class="video"></div>
+    <div class="statusbar"><span>8:41</span><span>▮▮▮ 100%</span></div>
+
+    <div class="topbar">
+      <div class="row1">
+        <div class="ibtn"><svg><use href="#i-back"/></svg></div>
+        <div class="title">Growling Tiger And Roaring Dragon 2017 EP07 HD1080P</div>
+        <div class="chip"><i><svg><use href="#i-audio"/></svg></i></div>
+        <div class="chip sel"><i><svg><use href="#i-cc"/></svg></i></div>
+        <div class="tpill sel"><span>HW</span></div>
+        <div class="chip"><i><svg><use href="#i-more"/></svg></i></div>
+      </div>
+      <div class="ribbon">
+        <div class="tool sel"><div class="orb"><svg><use href="#i-night"/></svg></div><div class="lab">Night Mode</div></div>
+        <div class="tool sel"><div class="orb"><svg><use href="#i-edit"/></svg></div><div class="lab">Customise</div></div>
+        <div class="tool sel"><div class="orb"><svg><use href="#i-shuffle"/></svg></div><div class="lab">Shuffle</div></div>
+        <div class="tool sel"><div class="orb"><svg><use href="#i-loop"/></svg></div><div class="lab">Loop All</div></div>
+        <div class="tool sel"><div class="orb"><svg><use href="#i-mute"/></svg></div><div class="lab">Muted</div></div>
+        <div class="tool sel"><div class="orb"><svg><use href="#i-timer"/></svg></div><div class="lab">Sleep Timer</div></div>
+        <div class="tool sel badge"><div class="orb">A⮂B</div><div class="lab">Loop A-B</div></div>
+        <div class="tool sel"><div class="orb"><span class="dot"></span><svg><use href="#i-fx"/></svg></div><div class="lab">Audio Effect</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-eq"/></svg></div><div class="lab">Equalizer</div></div>
+        <div class="tool badge"><div class="orb">1X</div><div class="lab">Speed</div></div>
+        <div class="tool"><div class="orb"><svg><use href="#i-cam"/></svg></div><div class="lab">Screenshot</div></div>
+        <div class="tool sel"><div class="orb"><svg><use href="#i-bgp"/></svg></div><div class="lab">Background</div></div>
+        <div class="tool sel"><div class="orb"><svg><use href="#i-rot"/></svg></div><div class="lab">Landscape</div></div>
+      </div>
+    </div>
+
+    <div class="abchip" style="top:calc(96*var(--S))">A = 14:15 — now set B</div>
+    <div class="subs"><span>You really think this is going to work out for you?</span></div>
+
+    <div class="hud"><svg><use href="#i-ff"/></svg>2.75× speed · ↔ Slide</div>
+
+    <div class="bottom">
+      <div class="strip">
+        <div class="pill running"><i class="sdot"></i>Syncing…</div>
+        <div class="spacer"></div>
+        <div class="pill txt">38:53</div>
+      </div>
+      <div class="seek">
+        <div class="tlabel">14:15</div>
+        <div class="trackwrap">
+          <div class="track"></div>
+          <div class="buf" style="width:38%"></div>
+          <div class="play" style="width:26.7%"></div>
+          <div class="ab" style="left:26.7%"></div>
+          <div class="ab" style="left:34.2%"></div>
+          <div class="thumb" style="left:29.4%"></div>
+        </div>
+        <div class="tlabel r">53:08</div>
+      </div>
+      <div class="transport">
+        <div class="chip sel"><i><svg><use href="#i-lock"/></svg></i></div>
+        <div class="center">
+          <div class="seekbtn"><i>‹10</i></div>
+          <div class="playbtn"><svg><use href="#i-play"/></svg></div>
+          <div class="seekbtn"><i>10›</i></div>
+        </div>
+        <div class="right">
+          <div class="chip sel"><i><svg><use href="#i-aspect"/></svg></i></div>
+          <div class="chip"><i><svg><use href="#i-full"/></svg></i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ STATE 3 · LOCKED + NIGHT MODE + DOUBLE-TAP ════════ -->
+<div class="stage">
+  <div class="stage-label">State 3 · controls locked · night mode on · double-tap +10s</div>
+  <div class="phone">
+    <div class="video"></div>
+    <div class="night" style="display:block"></div>
+    <div class="statusbar"><span>8:41</span><span>▮▮▮ 100%</span></div>
+    <div class="flash" style="right:0">
+      <svg><use href="#i-ff"/></svg><b>+10s</b>
+    </div>
+    <div class="lockbadge"><svg><use href="#i-lock"/></svg></div>
+    <div class="subs"><span>You really think this is going to work out for you?</span></div>
+    <div class="toast" style="top:calc(26*var(--S))">Audio effect off</div>
+  </div>
+</div>
+
+<div class="legend">
+  <b>Scale</b> 1dp = 2px · frame 393×200dp landscape · accent <code>#2563EB</code> (default skin)<br>
+  <b>Tokens</b> gapXs 4 · gapSm 8 · gapMd 12 · gapLg 16 · touchMin 48 · chipVisual 40 · playBig 64 ·
+  glyphMd 22 · glyphPlay 32 · skipW/H 48×44 · pillH 40 · timeLabelMinW 52<br>
+  <b>Sync colours</b> locked <code>#49D6A0</code> · running <code>#FFC247</code> · off white@28% ·
+  A-B pin <code>#FFB300</code> · active dot <code>#FF3B30</code> · night scrim <code>#40FF9800</code><br>
+  <b>Sources</b> PlayerDimens.kt · PlayerScreenControls.kt · PlayerScreenBottomBar.kt ·
+  PlayerScreenStatusStrip.kt · PlayerScreenChips.kt · PlayerScreenHud.kt · Theme.kt
+</div>
+
+</body>
+</html>
+
+.legend code{color:#7FB2FF}
