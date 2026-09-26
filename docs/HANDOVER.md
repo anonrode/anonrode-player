@@ -1,6 +1,11 @@
 # HANDOVER NOTE — anonrode-player
 
-_Date: 2026-09-25 · Written after the v0.8.8 release · Read this before touching anything._
+_Date: 2026-09-26 · Written after the v0.8.8 release + the v0.8.9 functional pass · Read this before touching anything._
+
+> **Read `.agents/AGENTS.md` first.** It holds the non-negotiable operating
+> rules. Most important: *never* defer or simplify a deliverable because this
+> machine has no Java/Android SDK and cannot compile locally. CI is the gate;
+> write the complete correct code and let CI prove it.
 
 ---
 
@@ -16,8 +21,63 @@ _Date: 2026-09-25 · Written after the v0.8.8 release · Read this before touchi
 
 ---
 
-## 2. What v0.8.8 Contains (Full Sub-Sync Reliability & Player Screen V2 Clean-Sheet Redesign)
+## 1b. v0.8.9 — Functional Pass (commit `18cb8fa`, NOT yet pushed)
 
+An audit of v0.8.8 found several controls that looked real but did nothing,
+plus dead code. All of it is fixed. **Nothing in the sync engine was touched** —
+`core/media/.../sync/` is byte-identical to v0.8.8 by design.
+
+### Controls that were decorative and now work
+
+| Tool | Was | Now |
+|---|---|---|
+| `Audio Effect` | Flipped a Compose flag nothing read; showed a toast | Real DSP: `VoiceClarityProcessor` (RBJ high-shelf + rumble high-pass, clamped against clipping), persisted in `PlayerSettings.audioEffectEnabled`, also exposed in Settings → Audio |
+| `Background Play` | Flipped a flag nothing read | Writes the real `PlayerSettings.backgroundPlayback`, the same field `PlayerActivity.onStop` already consulted |
+| `Customise` | Toast only — no reorder existed | Real editor (`PlayerScreenRibbonSheet.kt`): reorder + hide/show, persisted to `PlayerPrefs` |
+| `Shuffle` / `Loop` | Reset to OFF on every open | Persisted per-video (Room v5), restored on open |
+| `Speed` long-press | Was wired to `setSpeed(1f)` | Now `resetSpeed()` — distinct code path, confirms "already 1×" instead of a silent no-op |
+
+### Speed list corrected
+
+The reference spec requires `0.5, 0.75, 1, 1.25, 1.5, 1.75, 2`. The code was
+missing **1.75×**. Fixed at `PlayerScreen.kt`.
+
+### New architecture
+
+- **`RibbonTool` enum** (`PlayerScreenCommon.kt`) — the ribbon now renders
+  from a user-editable ordered list instead of 13 hard-coded calls. This is
+  what made `Customise` possible. Persistence stores enum **names** (newline
+  joined), so reordering the declaration never invalidates a saved layout;
+  unknown names are dropped and new tools append in catalogue order.
+- **`VoiceClarityProcessor`** (`core/media/audio/`) — chain position is
+  load-bearing: `syncAnalyzer → voiceClarity → volumeBoost`. It must sit
+  *after* the sync analyzer or the VAD's energy floor moves, and *before* the
+  boost so the existing hard-clip ceiling stays last.
+- **Room v5 migration** adds `shuffle_enabled` + `repeat_mode`. Per the
+  `ensureRow` KDoc, both new NOT NULL columns are bound in the INSERT —
+  forgetting that silently disables every writer.
+
+### R8 now enabled on `releaseWithDebugSigning`
+
+That build type shipped **unshrunk** because "R8 breaks DataStore/
+serialization" and the keep rules were never written. They now exist in
+`proguard-rules.pro` (kotlinx.serialization companions/serializers, coroutine
+`SafeContinuation`, Room, enum `values()`/`valueOf`), and `isMinifyEnabled`
+/ `isShrinkResources` are both `true`.
+
+### Dead code removed
+
+`PlayerScreenChrome.kt` (517 lines) — a complete second generation of the
+player chrome (`V9ControlsOverlay`, `V9TopBar`, `V9BottomZone`,
+`V9TransportRow`, `V9ToolRail`) with **zero** call sites. Deleted.
+
+### Rule compliance
+
+Zero competitor brand names remain in code, comments, docs, and the manifest.
+
+---
+
+## 2. What v0.8.8 Contains (Full Sub-Sync Reliability & Player Screen V2 Clean-Sheet Redesign)
 v0.8.8 resolves two major systems:
 1. Complete Sub-Sync Reliability & Deadlock Fixes (root causes from live device logs on Infinix X669 · Android API 31).
 2. Clean-Sheet Player Screen V2 Redesign (ripping out incremental band-aids and establishing a strict 3-tier hierarchy matching the reference screenshots and screen recordings).
