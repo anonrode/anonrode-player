@@ -16,9 +16,44 @@ _Date: 2026-09-25 · Written after the v0.8.8 release · Read this before touchi
 
 ---
 
-## 2. What v0.8.8 Contains (Full Sub-Sync Reliability & Deadlock Fixes)
+## 2. What v0.8.8 Contains (Full Sub-Sync Reliability & Player Screen V2 Clean-Sheet Redesign)
 
-v0.8.8 resolves the root causes discovered in live device logs (`Infinix X669 · Android API 31`) where subtitle sync completely failed to lock:
+v0.8.8 resolves two major systems:
+1. Complete Sub-Sync Reliability & Deadlock Fixes (root causes from live device logs on Infinix X669 · Android API 31).
+2. Clean-Sheet Player Screen V2 Redesign (ripping out incremental band-aids and establishing a strict 3-tier hierarchy matching the reference screenshots and screen recordings).
+
+### Player Screen V2 Clean-Sheet Redesign (`app/src/main/java/dev/anonrode/player/ui/`)
+Previous attempts at "simplifying" or "curating" the player chrome pushed core visual playback settings into hidden sheets or bottom rails. The user explicitly rejected this, demanding a clean-sheet architecture matching the reference player:
+- **Strict 3-Tier Control Hierarchy**:
+  - **Tier 1 (Direct 1-Tap On-Screen Tools)**:
+    - **Top Header**: Back (`←`), clean video title with ellipsis, Audio Track selection (`♫`), Subtitle toggle (`CC`), Decoder toggle badge (`HW` / `SW`), and More settings (`⋮`).
+    - **Quick Access Ribbon (Directly below header)**: Horizontally scrollable row containing all 13 reference tools with exact phrases and circular badges:
+      1. `Night Mode`: Toggles eye-protection amber tint scrim over video canvas.
+      2. `Customise Items`: Reorder toolbar items.
+      3. `Shuffle`: Toggles playlist shuffle.
+      4. `Loop`: Cycles repeat modes: `Loop Off` → `Loop 1` → `Loop All`.
+      5. `Mute`: 1-tap master audio mute toggle (saves and restores volume).
+      6. `Sleep Timer`: Direct sleep timer cycle (`15m` → `30m` → `45m` → `60m` → `End` → `Off`).
+      7. `A - B Repeat`: 1-tap pin A, pin B, clear loop (`A⮂B`).
+      8. `Audio Effect`: Toggles voice clarity / vocal boost, featuring a **bright red active indicator dot** matching reference video.
+      9. `Equalizer`: Direct 5-band EQ panel toggle.
+      10. `Speed`: Displays active speed pill (`1X`, `1.25X`, etc.), tap cycles presets, long-press resets to `1×`.
+      11. `Screenshot`: Captures current video frame via PixelCopy, saving to `Pictures/AnonPlayer`.
+      12. `Background Play`: Toggles audio-only background playback.
+      13. `Screen Rotation`: Cycles orientation (`Auto` → `Landscape` → `Portrait`).
+  - **Timeline Scrubber**: Elapsed time (`14:15`), seekbar with circular 14dp thumb, buffered track, played track, **A–B repeat amber marker pins** on the track, and total duration (`53:08`).
+  - **Bottom Transport Bar**:
+    - Far Left: Screen Lock button (`🔒`).
+    - Centered: 10s Rewind (`⏮`), Large Play/Pause (`▶ / ⏸`), 10s Fast-Forward (`⏭`).
+    - Far Right: Aspect ratio mode cycler (`◫`), Fullscreen / rotation expand button (`⤢`).
+  - **Center Canvas Gesture Engine**:
+    - **Hold-to-2× Speed + Dynamic Drag**: Long-press engages temporary 2.0× speed; sliding horizontally while holding adjusts temporary speed dynamically between 1.0× and 3.5× in 0.25× increments with live HUD pill feedback; releasing instantly restores the user's previously selected normal speed.
+    - **Double-Tap Seek**: Left 35% seeks -10s, right 35% seeks +10s, center toggles Play/Pause.
+    - **Swipe Scrubbing & Volume/Brightness**: Horizontal drag scrubs timeline; vertical drags control brightness (left) and volume (right).
+    - **Draggable Subtitles**: Subtitle cues remain draggable with persistent position saving.
+    - **A–B Repeat Effect**: Automatic loop detection seeking back to Point A when Point B is reached.
+- **Tier 2 (Three-Dots `⋮` Control Center)**: Secondary in-playback settings (Subtitle Sync offset tuning with ±0.1s nudges and speech correlator status, Subtitle Appearance styling tray, Audio Decoder pipeline, Playback Resume behavior, and Media details) with a link to Tier 3 App Settings.
+- **Tier 3 (App Global Settings)**: Deep infrequent settings (storage paths, auto-download subtitles, global hardware acceleration defaults, theme).
 
 ### Subtitle Sync Engine & Processor (`core/media`)
 - **Fatal Live Sync Deactivation on Video Open (`AudioSyncProcessor.kt`)**: `AudioSyncProcessor.reset()` previously left `configured = true` while clearing `active = false`. On the next video open, `setCues(...)` saw `configured && !active`, concluded the sink had no PCM capability, and permanently called `listener.onSyncNoMatch()` with `gaveUp = true` at frame 0. Fixed by ensuring `reset()` and unconfigured audio formats set `configured = false`.
