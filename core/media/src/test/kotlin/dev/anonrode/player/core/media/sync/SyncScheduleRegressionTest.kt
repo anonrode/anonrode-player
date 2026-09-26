@@ -143,7 +143,7 @@ class SyncScheduleRegressionTest {
         // THE regression assertion. On v0.8.6 this scheduled ~21 extra passes
         // — every threshold already crossed, re-crossed — inside 0.2 s of
         // audio, each one resetting stableHits and driving the budget toward
-        // gaveUp. On fixed code it schedules none: the next threshold is 2280
+        // gaveUp. On fixed code it schedules none: the next threshold is 2250
         // bins and binCount is only ~2000. Note that `passesUsed` ALONE cannot
         // see this — a reset re-climbs the same thresholds and converges back
         // to the same value, which is why the 09-19 log was the only place the

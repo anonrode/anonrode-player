@@ -621,12 +621,14 @@ class AudioSyncProcessor(
                 return
             }
             is SpeechCorrelator.Outcome.NoMatch -> {
-                // Judged and refused: breaks the agreement chain — a lock
-                // needs two CONSECUTIVE agreeing MATCH passes (13/30
-                // false locks proved that in simulation without it).
-                stableHits = 0
-                lastOffset = Double.NaN
-                AppLog.d("SYNC", "pass t=${req.posMs / 1000}s bc=${req.binCount}: judged, gates refused")
+                // Judged and refused: decay agreement hits rather than instantly
+                // dropping tentative lock progress on a momentary speech pause.
+                if (stableHits > 0) {
+                    stableHits--
+                } else {
+                    lastOffset = Double.NaN
+                }
+                AppLog.d("SYNC", "pass t=${req.posMs / 1000}s bc=${req.binCount}: judged, gates refused (hits=$stableHits)")
                 return
             }
             is SpeechCorrelator.Outcome.Match -> outcome.result

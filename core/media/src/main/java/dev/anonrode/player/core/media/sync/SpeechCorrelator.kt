@@ -86,9 +86,8 @@ object SpeechCorrelator {
      * schedule on every position reset / fresh cue attach.
      */
     val PASS_BINS = intArrayOf(
-        80, 100, 120, 140, 160, 180,
-        230, 280, 330, 380, 430, 480, 530, 580, 630, 680,
-        780, 1080, 1380, 1680, 1980, 2280, 2580, 2880,
+        160, 180, 205, 230, 260, 295, 335, 380, 430, 490, 560, 640, 730, 840, 960,
+        1100, 1260, 1450, 1680, 1950, 2250, 2600, 2950, 3300,
     )
 
     // ── v0.8 gates (see class KDoc for the measurements behind each) ──
@@ -260,7 +259,7 @@ object SpeechCorrelator {
         val containment = inside.toFloat() / hard
 
         val z = peak * sqrt(n.toDouble())
-        val zFloor = if (n < 240) Z_SMALL else Z_LARGE
+        val zFloor = if (n <= 160) Z_SMALL else Z_SMALL - (Z_SMALL - Z_LARGE) * minOf(1.0, (n - 160.0) / 120.0)
         val lockable = peak >= PEAK_MIN && margin >= PROM_MIN && z >= zFloor
         // Renderer convention: applied offset = −peak (subs late → negative).
         val offset = -bestShift * ALIGN_BIN
@@ -331,11 +330,8 @@ object SpeechCorrelator {
         val lastBits = n and 63
 
         data class Peak(val alpha: Double, val shift: Int, val r: Double)
-        var globalBest = Peak(1.0, 0, -2.0)
-        val allPeaks = ArrayList<Peak>()
 
-        // Coarse shift stride = 2 (0.2s) across all slopes
-        for (alpha in alphaCandidates) {
+        fun buildSubtitleBitmask(alpha: Double): Pair<LongArray, Int> {
             val lastCueSec = cues.last().end
             val bTotal = maxOf(n, (lastCueSec * alpha / ALIGN_BIN).toInt() + 600)
             val bWords = (bTotal + 63) / 64
@@ -354,60 +350,10 @@ object SpeechCorrelator {
                     B[wEnd] = B[wEnd] or maskRange(0, (i1 and 63) + 1)
                 }
             }
-
-            for (shift in lo..hi step 2) {
-                shiftB(B, bWords, dest, words, shift)
-                if (lastBits != 0) dest[words - 1] = dest[words - 1] and ((1L shl lastBits) - 1)
-                var sB = 0
-                for (k in 0 until words) sB += java.lang.Long.bitCount(dest[k])
-                if (sB < 10 || sB > n - 10) continue
-
-                var sAB = 0L
-                for (p in 0 until 8) {
-                    val pl = planes[p]
-                    var c = 0
-                    for (k in 0 until words) c += java.lang.Long.bitCount(pl[k] and dest[k])
-                    if (c != 0) sAB += (1L shl p) * c
-                }
-
-                val num = n * (sAB.toDouble() / 255.0) - sumA * sB
-                val varB = n.toDouble() * sB - (sB.toDouble() * sB)
-                val den = sqrt(varA * varB)
-                if (den < 1e-9) continue
-                val r = num / den
-                if (r > 0.05) {
-                    allPeaks.add(Peak(alpha, shift, r))
-                }
-                if (r > globalBest.r) {
-                    globalBest = Peak(alpha, shift, r)
-                }
-            }
+            return Pair(B, bTotal)
         }
 
-        if (globalBest.r <= 0.08) return null
-
-        // Fine search around best: test step 1 (0.1s) and sub-bin parabola
-        val bestAlpha = globalBest.alpha
-        val lastCueSec = cues.last().end
-        val bTotal = maxOf(n, (lastCueSec * bestAlpha / ALIGN_BIN).toInt() + 600)
-        val bWords = (bTotal + 63) / 64
-        val B = LongArray(bWords)
-        for (cue in cues) {
-            val i0 = maxOf(0, ((cue.start * bestAlpha) / ALIGN_BIN).toInt())
-            val i1 = minOf(bTotal - 1, ((cue.end * bestAlpha) / ALIGN_BIN).toInt())
-            if (i0 > i1) continue
-            val w0 = i0 shr 6
-            val wEnd = i1 shr 6
-            if (w0 == wEnd) {
-                B[w0] = B[w0] or maskRange(i0 and 63, (i1 and 63) + 1)
-            } else {
-                B[w0] = B[w0] or maskRange(i0 and 63, 64)
-                for (k in w0 + 1 until wEnd) B[k] = -1L
-                B[wEnd] = B[wEnd] or maskRange(0, (i1 and 63) + 1)
-            }
-        }
-
-        fun evalShift(sh: Int): Double {
+        fun evalShift(B: LongArray, bWords: Int, sh: Int): Double {
             shiftB(B, bWords, dest, words, sh)
             if (lastBits != 0) dest[words - 1] = dest[words - 1] and ((1L shl lastBits) - 1)
             var sB = 0
@@ -426,94 +372,146 @@ object SpeechCorrelator {
             return if (den < 1e-9) -2.0 else num / den
         }
 
-        val fineShifts = (globalBest.shift - 5)..(globalBest.shift + 5)
-        var fineBestShift = globalBest.shift
-        var fineBestR = globalBest.r
-        for (sh in fineShifts) {
-            val r = evalShift(sh)
-            if (r > fineBestR) {
-                fineBestR = r
-                fineBestShift = sh
+        fun verifyAndCreateLock(
+            bestAlpha: Double,
+            bestShift: Int,
+            B: LongArray,
+            bTotal: Int,
+            bWords: Int,
+            allPeaks: List<Peak>,
+        ): JointResult? {
+            // Fine search around best: test step 1 (0.1s)
+            val fineShifts = (bestShift - 5)..(bestShift + 5)
+            var fineBestShift = bestShift
+            var fineBestR = -2.0
+            for (sh in fineShifts) {
+                val r = evalShift(B, bWords, sh)
+                if (r > fineBestR) {
+                    fineBestR = r
+                    fineBestShift = sh
+                }
+            }
+            if (fineBestR <= 0.08) return null
+
+            // Sub-bin parabolic peak interpolation
+            val r0 = fineBestR
+            val rm1 = evalShift(B, bWords, fineBestShift - 1)
+            val rp1 = evalShift(B, bWords, fineBestShift + 1)
+            var subShift = fineBestShift.toDouble()
+            val denom = 2.0 * (rm1 - 2.0 * r0 + rp1)
+            if (abs(denom) > 1e-6) {
+                val delta = (rm1 - rp1) / denom
+                if (abs(delta) <= 1.0) subShift += delta
+            }
+
+            // Prominence above second-best peak at distance >= 2.0s (20 bins)
+            val secondBest = allPeaks
+                .filter { abs(it.shift - fineBestShift) >= EXCLUSION_BINS }
+                .maxOfOrNull { it.r } ?: -2.0
+            val margin = if (secondBest <= -2.0) fineBestR else fineBestR - secondBest
+
+            // Cross-half check on the winning trajectory:
+            // audio[i] matched B[i + fineBestShift]
+            val mid = n / 2
+            fun evalHalf(startBin: Int, endBin: Int): Double {
+                val span = endBin - startBin
+                if (span < 100) return 0.0
+                var sA_h = 0.0; var sA2_h = 0.0
+                for (i in startBin until endBin) {
+                    val v = audio[i].toDouble()
+                    sA_h += v; sA2_h += v * v
+                }
+                val vA_h = span * sA2_h - sA_h * sA_h
+                if (vA_h <= 1e-9) return 0.0
+
+                var sB_h = 0.0; var sAB_h = 0.0
+                for (i in startBin until endBin) {
+                    val subIdx = i + fineBestShift
+                    val bv = if (subIdx in 0 until bTotal) {
+                        ((B[subIdx shr 6] ushr (subIdx and 63)) and 1L).toDouble()
+                    } else 0.0
+                    val av = audio[i].toDouble()
+                    sB_h += bv
+                    sAB_h += av * bv
+                }
+                val vB_h = span * sB_h - sB_h * sB_h
+                val den_h = sqrt(vA_h * vB_h)
+                return if (den_h < 1e-9) 0.0 else (span * sAB_h - sA_h * sB_h) / den_h
+            }
+            val r1 = evalHalf(0, mid)
+            val r2 = evalHalf(mid, n)
+            val halfOk = (r1 > 0.02 && r2 > 0.02 && minOf(r1, r2) >= 0.20 * maxOf(r1, r2))
+
+            // Subtitle cue speech recall: fraction of cue intervals covering speech
+            // audio_bin = cue_bin - fineBestShift
+            var cueHits = 0
+            for (cue in cues) {
+                val aStart = maxOf(0, (((cue.start * bestAlpha) / ALIGN_BIN) - fineBestShift).toInt())
+                val aEnd = minOf(n - 1, (((cue.end * bestAlpha) / ALIGN_BIN) - fineBestShift).toInt())
+                var hit = false
+                for (i in aStart..aEnd) {
+                    if (audio[i] > 0.3f) { hit = true; break }
+                }
+                if (hit) cueHits++
+            }
+            val recall = cueHits.toDouble() / cues.size
+
+            val betaSeconds = -subShift * ALIGN_BIN
+            val lockable = fineBestR >= 0.10 && margin >= 0.03 && (halfOk || recall >= 0.35)
+            return if (lockable) {
+                JointResult(
+                    alpha = bestAlpha,
+                    beta = betaSeconds,
+                    score = fineBestR,
+                    margin = margin,
+                    recall = recall,
+                    halfOk = halfOk,
+                )
+            } else null
+        }
+
+        // ── Stage 1: Fast-path for nominal framerate (alpha = 1.0) ──────────
+        val (bNominal, bNomTotal) = buildSubtitleBitmask(1.0)
+        val bNomWords = (bNomTotal + 63) / 64
+        val nominalPeaks = ArrayList<Peak>()
+        var nominalBest = Peak(1.0, 0, -2.0)
+        for (shift in lo..hi) {
+            val r = evalShift(bNominal, bNomWords, shift)
+            if (r > 0.05) nominalPeaks.add(Peak(1.0, shift, r))
+            if (r > nominalBest.r) nominalBest = Peak(1.0, shift, r)
+        }
+
+        // If nominal framerate has a high-confidence lock, return immediately
+        if (nominalBest.r >= 0.25) {
+            val candidate = verifyAndCreateLock(1.0, nominalBest.shift, bNominal, bNomTotal, bNomWords, nominalPeaks)
+            if (candidate != null && (candidate.score >= 0.30 || candidate.halfOk)) {
+                return candidate
             }
         }
 
-        // Sub-bin parabolic peak interpolation
-        val r0 = fineBestR
-        val rm1 = evalShift(fineBestShift - 1)
-        val rp1 = evalShift(fineBestShift + 1)
-        var subShift = fineBestShift.toDouble()
-        val denom = 2.0 * (rm1 - 2.0 * r0 + rp1)
-        if (abs(denom) > 1e-6) {
-            val delta = (rm1 - rp1) / denom
-            if (abs(delta) <= 1.0) subShift += delta
+        // ── Stage 2: Framerate drift search across candidate slopes ──────────
+        val allPeaks = ArrayList<Peak>(nominalPeaks)
+        var globalBest = nominalBest
+        val bCache = HashMap<Double, Pair<LongArray, Int>>()
+        bCache[1.0] = Pair(bNominal, bNomTotal)
+
+        // Coarse shift stride = 4 (0.4s) across candidate slopes
+        for (alpha in alphaCandidates) {
+            if (alpha == 1.0) continue
+            val (B, bTotal) = bCache.getOrPut(alpha) { buildSubtitleBitmask(alpha) }
+            val bWords = (bTotal + 63) / 64
+            for (shift in lo..hi step 4) {
+                val r = evalShift(B, bWords, shift)
+                if (r > 0.05) allPeaks.add(Peak(alpha, shift, r))
+                if (r > globalBest.r) globalBest = Peak(alpha, shift, r)
+            }
         }
 
-        // Prominence above second-best peak at distance >= 2.0s (20 bins)
-        val secondBest = allPeaks
-            .filter { abs(it.shift - fineBestShift) >= EXCLUSION_BINS }
-            .maxOfOrNull { it.r } ?: -2.0
-        val margin = if (secondBest <= -2.0) fineBestR else fineBestR - secondBest
+        if (globalBest.r <= 0.08) return null
 
-        // Cross-half check on the winning trajectory
-        val mid = n / 2
-        fun evalHalf(startBin: Int, endBin: Int): Double {
-            val span = endBin - startBin
-            if (span < 100) return 0.0
-            var sA_h = 0.0; var sA2_h = 0.0
-            for (i in startBin until endBin) {
-                val v = audio[i].toDouble()
-                sA_h += v; sA2_h += v * v
-            }
-            val vA_h = span * sA2_h - sA_h * sA_h
-            if (vA_h <= 1e-9) return 0.0
-
-            var sB_h = 0.0; var sAB_h = 0.0
-            for (i in startBin until endBin) {
-                val subIdx = (i - fineBestShift)
-                val bv = if (subIdx in 0 until bTotal) {
-                    ((B[subIdx shr 6] ushr (subIdx and 63)) and 1L).toDouble()
-                } else 0.0
-                val av = audio[i].toDouble()
-                sB_h += bv
-                sAB_h += av * bv
-            }
-            val vB_h = span * sB_h - sB_h * sB_h
-            val den_h = sqrt(vA_h * vB_h)
-            return if (den_h < 1e-9) 0.0 else (span * sAB_h - sA_h * sB_h) / den_h
-        }
-        val r1 = evalHalf(0, mid)
-        val r2 = evalHalf(mid, n)
-        val halfOk = (r1 > 0.02 && r2 > 0.02 && minOf(r1, r2) >= 0.20 * maxOf(r1, r2))
-
-        // Subtitle cue speech recall: fraction of cue intervals covering speech
-        var cueHits = 0
-        for (cue in cues) {
-            val aStart = maxOf(0, (((cue.start * bestAlpha) / ALIGN_BIN) + fineBestShift).toInt())
-            val aEnd = minOf(n - 1, (((cue.end * bestAlpha) / ALIGN_BIN) + fineBestShift).toInt())
-            var hit = false
-            for (i in aStart..aEnd) {
-                if (audio[i] > 0.3f) { hit = true; break }
-            }
-            if (hit) cueHits++
-        }
-        val recall = cueHits.toDouble() / cues.size
-
-        // Applied beta: audio_time = alpha * sub_time + beta
-        // In shiftB: dest[i] = B[i + shift] => cue_bin = audio_bin + shift => audio_bin = cue_bin - shift
-        // so beta = -subShift * ALIGN_BIN
-        val betaSeconds = -subShift * ALIGN_BIN
-
-        val lockable = fineBestR >= 0.10 && margin >= 0.03 && (halfOk || recall >= 0.35)
-        return if (lockable) {
-            JointResult(
-                alpha = bestAlpha,
-                beta = betaSeconds,
-                score = fineBestR,
-                margin = margin,
-                recall = recall,
-                halfOk = halfOk,
-            )
-        } else null
+        val (bestB, bestBTotal) = bCache.getOrPut(globalBest.alpha) { buildSubtitleBitmask(globalBest.alpha) }
+        val bestBWords = (bestBTotal + 63) / 64
+        return verifyAndCreateLock(globalBest.alpha, globalBest.shift, bestB, bestBTotal, bestBWords, allPeaks)
     }
 
     // ── word-array helpers ──────────────────────────────────────────────

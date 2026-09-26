@@ -22,9 +22,15 @@ v0.8.8 resolves the root causes discovered in live device logs (`Infinix X669 ·
 
 ### Subtitle Sync Engine & Processor (`core/media`)
 - **Fatal Live Sync Deactivation on Video Open (`AudioSyncProcessor.kt`)**: `AudioSyncProcessor.reset()` previously left `configured = true` while clearing `active = false`. On the next video open, `setCues(...)` saw `configured && !active`, concluded the sink had no PCM capability, and permanently called `listener.onSyncNoMatch()` with `gaveUp = true` at frame 0. Fixed by ensuring `reset()` and unconfigured audio formats set `configured = false`.
-- **Dialogue Pause Agreement Retention (`AudioSyncProcessor.kt`)**: During normal conversational pauses, `SpeechCorrelator.Outcome.NotReady` no longer wipes `stableHits` to 0. The agreement chain is preserved across dialogue gaps so two consecutive agreeing passes can reliably achieve a lock.
+- **Dialogue Pause Agreement Retention & Leaky Integrator (`AudioSyncProcessor.kt`)**: On `SpeechCorrelator.Outcome.NoMatch`, tentative agreement progress is decayed rather than instantly wiped, and `SpeechCorrelator.Outcome.NotReady` preserves `stableHits` so natural conversational pauses don't reset progress toward the required 2 consecutive agreeing passes.
+- **Hierarchical 2-Stage Continuous Envelope Engine (`SpeechCorrelator.kt`)**:
+  - **Stage 1 (Nominal $\alpha = 1.0$ Fast Path)**: Evaluates nominal framerate across full $\pm 60$s shift range (stride 1) with 3-point sub-bin parabolic interpolation. Locks standard videos in $< 100$ms instead of brute-forcing all slopes.
+  - **Stage 2 (Multi-Resolution Framerate Drift)**: For videos with PAL / telecine speedup/slowdown, searches candidate slopes in a coarse-to-fine hierarchy (stride 4, then fine refinement at stride 1).
+  - **Verification Gate Sign Inversion Fix**: Corrected the mathematical inversion in `evalHalf` (`i + fineBestShift`) and `cueHits / recall` (`cue_bin - fineBestShift`), which previously caused 100% of shifted continuous envelope locks to fail validation.
 - **Pearson Subtitle Grid Negative Headroom (`SpeechCorrelator.kt`)**: Added `padBins = (maxOffsetSec / ALIGN_BIN).toInt()` headroom to the subtitle grid $B$ and search loop. Subtitle cues leading audio (negative shift) no longer clamp to bin 0 or read zero-fill, restoring true Pearson correlation peaks on mid-video resumes.
-- **Graceful Gate Handling on Warmup (`SpeechCorrelator.kt`)**: Returns `Outcome.NotReady` rather than `Outcome.NoMatch` when bin count is below `ELIGIBLE_BINS` (160 bins), preventing premature gate failure logs during the initial warmup window.
+- **Live Pass Scheduler Alignment & Continuous Z-Score (`SpeechCorrelator.kt` & `AudioSyncProcessor.kt`)**:
+  - Aligned `PASS_BINS` to start at eligible window `160` (16.0s) and distributed 24 evaluation thresholds logarithmically, eliminating the first 4 dead passes that were guaranteed to return `NotReady`.
+  - Replaced the abrupt $zFloor$ step drop at 240 bins with a smooth continuous curve transitioning from 9.0 to 7.0 between 160 and 280 bins.
 
 ### Concurrency, Cancellation & State Store (`app/` & `core/media`)
 - **Decode Semaphore Deadlock Prevention (`SyncFingerprintJob.kt` & `OnsetExtractor.kt`)**: Added cooperative cancellation checks (`isCancelled()`) inside `OnsetExtractor.decodeAudio`'s `while (!outputDone)` loop. Cancelling an abandoned episode's background job now instantly breaks out of `MediaCodec` and frees `DECODE_GATE` (Semaphore(1)). In `SyncFingerprintJob`, replaced `tryAcquire()` with `tryAcquire(3, TimeUnit.SECONDS)` so a new video cleanly waits for a cancelled predecessor to release the gate instead of bouncing to exponential backoff.
@@ -32,7 +38,8 @@ v0.8.8 resolves the root causes discovered in live device logs (`Infinix X669 ·
 - **Room State Collector per Video (`PlayerActivity.kt`)**: Replaced the blocked `while (true)` Room flow collector with `startStateStoreCollector(uriStr)`, which cancels the previous collector and starts a fresh collector per media item so Room locks for subsequent episodes are immediately applied.
 - **Fresh UI State Reset (`PlayerActivity.kt`)**: Explicitly reset `lastCues = emptyList()` on video open to avoid carrying over cue state between media items.
 
-### Regression Unit Tests
+### Automated Unit Test Suite
+- Added `SpeechCorrelatorTest.kt` unit test suite covering positive/negative nominal shifts, PAL framerate drift detection, live correlator thresholding, and verification gate correctness.
 - Added `reset followed by setCues does not trigger false give-up or analyzer inactive` regression test to `SyncScheduleRegressionTest.kt`.
 
 ---
