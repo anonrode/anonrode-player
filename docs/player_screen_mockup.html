@@ -6,9 +6,10 @@
 <title>Anonrode Player — Player Screen (exact)</title>
 <style>
 /* EXACT SPEC PORT — values lifted from the Kotlin source.
-   Scale: 1dp = 2px (S=2). Frame 393dp x 200dp landscape. */
+   Scale: 1dp = 1.5px (S=1.5). Frame 873dp x 393dp = a real phone in
+   landscape (1080x2400 @ 2.75 density -> 393x873dp portrait, rotated). */
 :root{
-  --S: 2px;
+  --S: 1.5px;
   --gap-xs: calc(4 * var(--S));
   --gap-sm: calc(8 * var(--S));
   --gap-md: calc(12 * var(--S));
@@ -37,7 +38,7 @@ html,body{background:#07080B;font-family:Roboto,"Helvetica Neue",Arial,sans-seri
 .stage{display:flex;flex-direction:column;align-items:center;gap:22px;margin-bottom:44px}
 .stage-label{color:#8A93A6;font:600 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;
   text-transform:uppercase}
-.phone{position:relative;width:calc(393 * var(--S));height:calc(200 * var(--S));
+.phone{position:relative;width:calc(873 * var(--S));height:calc(393 * var(--S));
   border-radius:calc(14 * var(--S));background:#000;overflow:hidden;
   box-shadow:0 0 0 calc(2*var(--S)) #23262E, 0 24px 60px rgba(0,0,0,.65)}
 
@@ -55,10 +56,15 @@ html,body{background:#07080B;font-family:Roboto,"Helvetica Neue",Arial,sans-seri
   background:linear-gradient(180deg, rgba(0,0,0,.85) 0%, rgba(0,0,0,0) 100%);
   padding:var(--gap-sm) var(--gap-sm) var(--gap-xs);
   display:flex;flex-direction:column;gap:var(--gap-xs)}
-.statusbar{position:absolute;top:0;left:0;right:0;height:calc(22*var(--S));z-index:40;
+.statusbar{position:absolute;top:0;left:0;right:0;height:calc(24*var(--S));z-index:40;
   display:flex;align-items:center;justify-content:space-between;
-  padding:0 calc(14*var(--S));color:rgba(255,255,255,.92);
-  font:600 calc(10.5*var(--S))/1 Roboto,sans-serif;pointer-events:none}
+  padding:0 calc(16*var(--S));color:rgba(255,255,255,.92);
+  font:600 calc(13*var(--S))/1 Roboto,sans-serif;pointer-events:none}
+/* nav-bar inset (drawn for reference; the bars pad around it) */
+.navbar{position:absolute;bottom:0;left:0;right:0;height:calc(20*var(--S));z-index:40;
+  display:flex;align-items:center;justify-content:center;pointer-events:none}
+.navbar::after{content:"";width:calc(120*var(--S));height:calc(4*var(--S));
+  border-radius:999px;background:rgba(255,255,255,.35)}
 .row1{display:flex;align-items:center;width:100%}
 .ibtn{width:var(--touch-min);height:var(--touch-min);flex:0 0 auto;display:grid;
   place-items:center;color:#fff;cursor:pointer}
@@ -208,7 +214,7 @@ html,body{background:#07080B;font-family:Roboto,"Helvetica Neue",Arial,sans-seri
   background:rgba(0,0,0,.55);display:grid;place-items:center}
 .lockbadge svg{width:calc(30*var(--S));height:calc(30*var(--S));color:#fff}
 
-.legend{max-width:786px;color:#8A93A6;font:12px/1.7 ui-monospace,Menlo,monospace;
+.legend{max-width:1310px;color:#8A93A6;font:13px/1.7 ui-monospace,Menlo,monospace;
   border-left:2px solid #1F2430;padding-left:16px}
 .legend b{color:#C7CEDB;font-weight:600}
 </style>
@@ -246,6 +252,7 @@ html,body{background:#07080B;font-family:Roboto,"Helvetica Neue",Arial,sans-seri
   <div class="phone">
     <div class="video"></div>
     <div class="statusbar"><span>8:41</span><span>▮▮▮ 100%</span></div>
+    <div class="navbar"></div>
 
     <div class="topbar">
       <div class="row1">
@@ -313,6 +320,7 @@ html,body{background:#07080B;font-family:Roboto,"Helvetica Neue",Arial,sans-seri
   <div class="phone">
     <div class="video"></div>
     <div class="statusbar"><span>8:41</span><span>▮▮▮ 100%</span></div>
+    <div class="navbar"></div>
 
     <div class="topbar">
       <div class="row1">
@@ -340,7 +348,7 @@ html,body{background:#07080B;font-family:Roboto,"Helvetica Neue",Arial,sans-seri
       </div>
     </div>
 
-    <div class="abchip" style="top:calc(96*var(--S))">A = 14:15 — now set B</div>
+    <div class="abchip" style="top:calc(143*var(--S))">A = 14:15 — now set B</div>
     <div class="subs"><span>You really think this is going to work out for you?</span></div>
 
     <div class="hud"><svg><use href="#i-ff"/></svg>2.75× speed · ↔ Slide</div>
@@ -386,17 +394,19 @@ html,body{background:#07080B;font-family:Roboto,"Helvetica Neue",Arial,sans-seri
     <div class="video"></div>
     <div class="night" style="display:block"></div>
     <div class="statusbar"><span>8:41</span><span>▮▮▮ 100%</span></div>
+    <div class="navbar"></div>
     <div class="flash" style="right:0">
       <svg><use href="#i-ff"/></svg><b>+10s</b>
     </div>
     <div class="lockbadge"><svg><use href="#i-lock"/></svg></div>
     <div class="subs"><span>You really think this is going to work out for you?</span></div>
-    <div class="toast" style="top:calc(26*var(--S))">Audio effect off</div>
+    <div class="toast" style="top:calc(32*var(--S))">Audio effect off</div>
   </div>
 </div>
 
 <div class="legend">
-  <b>Scale</b> 1dp = 2px · frame 393×200dp landscape · accent <code>#2563EB</code> (default skin)<br>
+  <b>Scale</b> 1dp = 1.5px · frame 873×393dp landscape (1080×2400 @ 2.75 density) ·
+  status bar 24dp · nav bar 20dp · accent <code>#2563EB</code> (default skin)<br>
   <b>Tokens</b> gapXs 4 · gapSm 8 · gapMd 12 · gapLg 16 · touchMin 48 · chipVisual 40 · playBig 64 ·
   glyphMd 22 · glyphPlay 32 · skipW/H 48×44 · pillH 40 · timeLabelMinW 52<br>
   <b>Sync colours</b> locked <code>#49D6A0</code> · running <code>#FFC247</code> · off white@28% ·
