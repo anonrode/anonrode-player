@@ -18,6 +18,7 @@ import dev.anonrode.player.core.model.SubtitleCue
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
 /**

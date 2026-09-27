@@ -45,23 +45,6 @@ internal class LiveVad private constructor(
     private val vad: SileroVad,
 ) : AutoCloseable {
 
-    private companion object {
-        const val TAG = "LIVEVAD"
-
-        /**
-         * Pending PCM capacity in bytes — about 2 s of 48 kHz stereo 16-bit.
-         * Big enough to absorb a scheduling hiccup, small enough that losing
-         * the tail on overflow is brief and self-healing.
-         */
-        const val PENDING_BYTES = 192 * 1024
-
-        /** Published envelope length in 100 ms bins (400 s of history, covering the 3300 PASS_BINS max). */
-        const val ENVELOPE_BINS = 4000
-
-        /** Below this the model has not seen enough audio to be worth trusting. */
-        const val MIN_WARM_BINS = 80   // 8 s
-    }
-
     private val lock = Object()
     private val pending = ByteArray(PENDING_BYTES)
     private var pendingLen = 0
@@ -146,8 +129,9 @@ internal class LiveVad private constructor(
                 }
             }
             val toCopy = need - skip
-            buf.duplicate().order(buf.order()).position(buf.position() + skip)
-                .get(pending, pendingLen, toCopy)
+            val dup = buf.duplicate().order(buf.order())
+            (dup as java.nio.Buffer).position(buf.position() + skip)
+            dup.get(pending, pendingLen, toCopy)
             pendingLen += toCopy
             lock.notifyAll()
         }
@@ -235,6 +219,21 @@ internal class LiveVad private constructor(
     }
 
     companion object {
+        private const val TAG = "LIVEVAD"
+
+        /**
+         * Pending PCM capacity in bytes — about 2 s of 48 kHz stereo 16-bit.
+         * Big enough to absorb a scheduling hiccup, small enough that losing
+         * the tail on overflow is brief and self-healing.
+         */
+        private const val PENDING_BYTES = 192 * 1024
+
+        /** Published envelope length in 100 ms bins (400 s of history, covering the 3300 PASS_BINS max). */
+        private const val ENVELOPE_BINS = 4000
+
+        /** Below this the model has not seen enough audio to be worth trusting. */
+        private const val MIN_WARM_BINS = 80   // 8 s
+
         /** Returns null when the model is unavailable; caller uses energy instead. */
         fun create(context: Context): LiveVad? = try {
             if (!SileroVad.modelAvailable(context)) {

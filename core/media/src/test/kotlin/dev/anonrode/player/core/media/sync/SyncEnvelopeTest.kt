@@ -133,8 +133,12 @@ class SyncEnvelopeTest {
 
         feedDialogue(p, segs)
 
-        // Allow background worker thread a moment to finish correlation passes
-        Thread.sleep(250)
+        // Allow background worker thread to finish correlation passes
+        var waited = 0
+        while (listener.lockedOffset == null && waited < 2500) {
+            Thread.sleep(50)
+            waited += 50
+        }
 
         val offset = listener.lockedOffset
         assertTrue(

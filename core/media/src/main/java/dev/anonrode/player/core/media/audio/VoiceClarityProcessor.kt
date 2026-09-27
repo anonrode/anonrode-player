@@ -126,8 +126,8 @@ class VoiceClarityProcessor : AudioProcessor {
         val sr = sampleRate.toDouble()
         // Clamp both corners below Nyquist: a corner at/over it would make
         // the coefficients blow up (or divide by ~0) and emit full scale.
-        val corner = cornerHz.coerceIn(200.0, sr * 0.45)
-        val gain = gainDb.coerceIn(0.0, 12.0)
+        val corner = cornerHz.toDouble().coerceIn(200.0, sr * 0.45)
+        val gain = gainDb.toDouble().coerceIn(0.0, 12.0)
 
         val a = Math.pow(10.0, gain / 40.0)
         val w0 = 2.0 * PI * corner / sr
@@ -152,7 +152,7 @@ class VoiceClarityProcessor : AudioProcessor {
         // Rumble rolloff: a one-pole high-pass pre-filter coefficient pair,
         // applied as y = x - hpA1*prevX, folded into the same delay lines by
         // feeding its output into the biquad.
-        val hp = highPassHz.coerceIn(20.0, sr * 0.45)
+        val hp = highPassHz.toDouble().coerceIn(20.0, sr * 0.45)
         val rc = 1.0 / (2.0 * PI * hp)
         val dt = 1.0 / sr
         val alphaHp = rc / (rc + dt)
