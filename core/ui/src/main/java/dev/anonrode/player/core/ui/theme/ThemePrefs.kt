@@ -59,7 +59,7 @@ class ThemePrefs private constructor(
         _skin.value = skin
     }
 
-    /** Cycle MX → SIGNAL → LIGHT → BLACK → MX. */
+    /** Cycle COBALT → AMBER → LIGHT → OBSIDIAN → COBALT. */
     fun cycleSkin(): Skin {
         val next = skin.value.next()
         setSkin(next)

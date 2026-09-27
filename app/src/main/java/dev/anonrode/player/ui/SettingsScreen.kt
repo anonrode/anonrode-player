@@ -116,7 +116,7 @@ import kotlinx.coroutines.withContext
  *   GESTURES          double-tap / swipe seek · volume / brightness
  *                     gestures · pinch zoom · seek step · auto-hide ·
  *                     fast-seek threshold
- *   AUDIO             volume boost
+ *   AUDIO             audio effect · volume boost
  *   APPEARANCE        theme (skin picker, live preview)
  *   LIBRARY & DATA    rescan library · clear playback progress
  *
