@@ -61,8 +61,10 @@ shipping. That is the point of the method.
 | 10 | Subtitles | `parseSidecar` returns unsorted cues; callers must remember to sort | **OPEN** |
 | 11 | Subtitles | `Decoded.charset` / `decodeWithCharset` exist for a UI override, nothing calls them | **OPEN** |
 | 12 | Player chrome | `isRebuildingDecoder` captured in a `remember` without being a key | **OPEN** |
-| 13 | **Video pipeline** | Not yet audited in depth | **NOT STARTED** |
-| 14 | **Audio pipeline** | Not yet audited in depth | **NOT STARTED** |
+| 13 | **Video pipeline** | Surface/decoder/aspect/seek path read end to end — sound. `PlayerView` uses a SurfaceView; default z-order puts it behind the window, so Compose overlays and the poster still composite correctly (the code comment's reasoning is wrong, the behaviour is right). | **REVIEWED, SOUND** |
+| 14 | **Audio pipeline** | `VoiceClarityProcessor` "rumble high-pass" was a **low-pass**: flat +6 dB from DC to 1 kHz, −10.8 dB at 20 kHz. Amplified the rumble it claimed to clear, into a hard clamp | **DONE** `a4226a9` |
+| 14b | **Audio pipeline** | `VolumeBoostProcessor` reviewed — buffer sizing, input consumption and clamping all correct | **REVIEWED, SOUND** |
+| 14c | **Audio pipeline** | No `LoadControl` configured; Media3 defaults apply (50 s min/max buffer, 0 s back buffer) | **OPEN — needs on-device data** |
 | 15 | Library / scanner | Not audited | **NOT STARTED** |
 | 16 | Settings | Not audited | **NOT STARTED** |
 
@@ -75,13 +77,26 @@ Kept so they are not re-raised:
 - *"Render tick runs at 125 Hz."* `delayMs` has an 8 ms floor, but ordinary
   cue boundaries clamp to 100 ms. The floor is a floor, not the norm. Not a
   defect.
+- *"The poster is drawn under the SurfaceView."* `PlayerView` does default to
+  a SurfaceView here, but the default z-order places that surface BEHIND the
+  window, which the window punches a hole for. Compose content in the window
+  therefore still composites over the video. The comment in
+  `PlayerScreenVideo.kt` reasons about it wrongly; the behaviour is correct.
+  Not changed — a "fix" would have been a regression.
+- *"VolumeBoostProcessor wastes a memcpy at unity gain."* True, but
+  `isActive()` is consulted when Media3 builds the chain, and `gain` is a
+  user-adjustable `@Volatile`. Gating the processor on it risks the chain not
+  re-configuring, which would break the feature outright. Not worth one
+  20 ms memcpy that cannot be tested here.
 - *"Subtitle files are misdecoded on this library."* All 724 sidecar files
   here are valid UTF-8, which short-circuits ahead of the charset ladder. The
   charset bug is real but does not affect current content.
 - *"Every control/section is broken."* Several areas were read end to end and
   are sound: surface lifecycle and `key(player)` handling, renderers-factory
   wiring for all three decoder profiles, build-time fallback that writes
-  `decoderMode` back, seek-parameter usage, lifecycle release.
+  `decoderMode` back, seek-parameter usage, lifecycle release,
+  `VolumeBoostProcessor`, `SubtitleParser` timestamp edge cases (hours > 24,
+  missing hours, comma decimals, BOM, CRLF, lone CR, blank cue indices).
 
 ---
 
