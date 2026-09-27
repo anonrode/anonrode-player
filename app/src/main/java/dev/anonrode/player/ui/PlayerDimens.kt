@@ -12,8 +12,15 @@ import androidx.compose.ui.unit.dp
  * object is scoped to the `ui/Player*` files. Before this round most of
  * these tokens were fiction (defined but never used, with component files
  * hardcoding one-off sizes that then drifted from the docs); the redesign
- * made them real: every value here is consumed, every consumed size lives
- * here.
+ * made them real — every value declared below has at least one consumer.
+ *
+ * The invariant here is one-directional: EVERY value declared in this
+ * object is consumed. The converse is deliberately NOT claimed — geometry
+ * that is intrinsic to a single component stays beside that component
+ * rather than becoming a token with exactly one user. Those live with
+ * their component today: the status strip's 26dp pill, the style tray's
+ * 16dp radius / 13×12dp padding / 34dp option height, the ribbon cell's
+ * 34dp circle + 18dp glyph, and the Control Center tile's 88dp/32dp.
  *
  * Spacing rhythm (4/8dp grid):
  *   gapXs 4 · gapSm 8 · gapMd 12 · gapLg 16
