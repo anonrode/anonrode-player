@@ -199,6 +199,40 @@ class SileroVad(context: Context) : AutoCloseable {
     /** Absolute media time (s) the collected bins cover (call after [finish]). */
     fun coveredSec(): Double = onsetOffsetSec + bins.size * FRAME_SEC
 
+    /**
+     * Clears every piece of accumulated state so the detector can be re-anchored
+     * to a new media position, WITHOUT reloading the model.
+     *
+     * The live sync path needs this on every seek and every cue-track change:
+     * its bin grid re-anchors at the new position, and an envelope still
+     * describing the old position would be compared against cues on a
+     * different timeline — which is exactly the "seek poisoning" class of bug.
+     * Reloading the ONNX session per seek would be far too expensive, so the
+     * state is cleared in place instead.
+     *
+     * Everything that carries meaning across calls is reset: the bin history,
+     * the probability history, the recurrent `state` tensor the model threads
+     * between windows, the trailing-context samples, the partial chunk, the
+     * resampler tail, and the "first window has no context" flag. Missing any
+     * one of those leaves the model primed on audio from before the seek.
+     *
+     * The ONNX session itself is deliberately kept — it is the expensive part
+     * and it holds no timeline state.
+     *
+     * @param newOnsetOffsetSec absolute media time the next window belongs to.
+     */
+    fun reset(newOnsetOffsetSec: Double = onsetOffsetSec) {
+        bins.clear()
+        probBins.clear()
+        onsetOffsetSec = newOnsetOffsetSec
+        java.util.Arrays.fill(state, 0f)
+        java.util.Arrays.fill(contextSamples, 0f)
+        java.util.Arrays.fill(chunk, 0f)
+        chunkN = 0
+        hasContext = false
+        resampler.reset()
+    }
+
     override fun close() {
         try { session?.close() } catch (_: Throwable) {}
         // env is the shared singleton; never close it
@@ -297,6 +331,20 @@ class SileroVad(context: Context) : AutoCloseable {
             }
             fracPos = p - n
             prevLast = pending[n - 1]
+            n = 0
+        }
+
+        /**
+         * Clears rate/phase/history so a re-anchored stream does not resume
+         * mid-interpolation. Called from [SileroVad.reset] on seek: keeping
+         * `prevLast` would blend one sample from before the seek into the
+         * first window after it, and keeping `fracPos` would shift the whole
+         * 16 kHz grid by a fraction of a sample.
+         */
+        fun reset() {
+            srcRate = 0
+            fracPos = 0.0
+            prevLast = 0f
             n = 0
         }
     }
