@@ -140,14 +140,35 @@ fun PlayerScreen(
     /** Long-press on the sync hero chip: "Resync now". */
     onResyncNow: () -> Unit = {},
     /**
-     * Request a real HW/SW decoder swap. The host rebuilds the ExoPlayer
+     * Request a real decoder profile swap. The host rebuilds the ExoPlayer
      * via [dev.anonrode.player.feature.player.PlaybackEngine.rebuild] and
      * returns the new audio session id (0 if the swap is still in flight).
-     * The screen keeps the [quick.hwDecoder] state in sync with the
-     * requested value and shows a transient "Rebuilding…" banner until the
-     * host confirms the new player is ready.
+     *
+     * The engine has THREE profiles (HW+SW -> APP -> HW) and the host always
+     * advances one step, so the `Boolean` this callback is handed is advisory
+     * only: the screen derives its chip from [decoderModeLabel] instead, which
+     * the host refreshes from the engine after every swap. The argument is kept
+     * for the existing signature.
      */
     onRebuildDecoder: (Boolean) -> Int = { _ -> 0 },
+    /**
+     * The decoder profile the engine is actually on: "HW+SW", "APP" or "HW".
+     *
+     * The screen no longer keeps its own HW/SW boolean. The engine has three
+     * profiles and a two-state flag cannot name them, so the chip used to
+     * disagree with the engine — it could read "SW" while the engine ran the
+     * default HW+SW hybrid. Mirrors `PlaybackEngine.decoderModeLabel`; passed
+     * down because the engine's own field is not observable and would not
+     * trigger a recomposition. The Boolean argument of [onRebuildDecoder] is
+     * retained only so existing call sites keep compiling; it is ignored.
+     */
+    decoderModeLabel: String = "HW+SW",
+    /**
+     * Tell the host whether the user has pinned rotation. When false, the
+     * host's auto-landscape-on-widescreen behaviour stays out of the way —
+     * otherwise it overwrote an explicit lock that nothing ever restored.
+     */
+    onAutoRotateChanged: (Boolean) -> Unit = {},
     /**
      * Toggle the system equalizer (Control Center tile). The host creates /
      * enables / disables the [android.media.audiofx.Equalizer] bound to the
@@ -313,7 +334,7 @@ fun PlayerScreen(
     val hud = remember { HudUiState() }
     val sleep = remember { SleepTimerUiState() }
     val gestures = remember { GestureUiState() }
-    val quick = remember { QuickRowUiState(initialHwDecoder = engine?.isHw ?: true) }
+    val quick = remember { QuickRowUiState() }
 
     val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
     // Keyed on initialSpeed so the pill re-syncs when the activity restores
@@ -343,8 +364,21 @@ fun PlayerScreen(
     // fresh actions instance (decoder swap → new player, lost engine, new
     // holders from a remount). When those keys stay stable, actions stays
     // stable; pointerInput blocks see no relaunch; gestures stay smooth.
+    //
+    // decoderModeLabel MUST be a key: actions captures it as a plain String,
+    // not as State, so without this key the chip would keep rendering the
+    // label from before the swap — exactly the staleness this wiring replaced.
     val captureScope = rememberCoroutineScope()
-    val actions = remember(livePlayer, engine, ui, hud, sleep, gestures, quick, captureScope) {
+    // `isRebuildingDecoder` MUST be a key. It is the only thing gating
+    // cycleDecoderMode(), and the host toggles it without touching any other
+    // key here — so a recomposition landing while the flag was true rebuilt
+    // `actions` with the stale `true`, and because the guard is what triggers
+    // the rebuild, nothing would ever change the value again: the decoder chip
+    // stayed locked out until the screen was left and re-entered.
+    val actions = remember(
+        livePlayer, engine, ui, hud, sleep, gestures, quick, captureScope,
+        decoderModeLabel, isRebuildingDecoder,
+    ) {
         PlayerScreenActions(
             context = context,
             view = view,
@@ -358,6 +392,8 @@ fun PlayerScreen(
             sleep = sleep,
             gestures = gestures,
             quick = quick,
+            decoderModeLabel = decoderModeLabel,
+            onAutoRotateChanged = onAutoRotateChanged,
             speedIdx = speedIdx,
             speeds = speeds,
             seekIncrementSec = seekIncrementSec,
@@ -382,11 +418,48 @@ fun PlayerScreen(
     }
 
     // ── side-effects: same keys and order as before the split ──
-    // Restore the persisted ribbon arrangement ONCE per screen entry. Keyed
-    // on nothing (runs a single time) so a user's reorder survives without
-    // re-reading SharedPreferences on every recomposition. Unknown/stale
-    // names are dropped and any newly added tool is appended in catalogue
-    // order inside PlayerPrefs, so this can never yield a partial ribbon.
+
+    // Ribbon scroll restore + persistence.
+    //
+    // This sits here, ABOVE the chrome AnimatedVisibility, on purpose. A
+    // LaunchedEffect started inside the controls subtree is disposed the
+    // moment the controls auto-hide, which cancels the debounce delay
+    // mid-flight and drops the pending write. The most common way to end a
+    // ribbon scroll is exactly that — scroll, then let the chrome fade — so a
+    // collector living down there would lose the offset precisely when it
+    // matters most.
+    //
+    // Phase 1 restores. ScrollState.maxValue is 0 until layout runs and
+    // scrollTo() clamps into that range, so restoring before the row has been
+    // measured would silently throw the stored offset away. In a window too
+    // wide to scroll, maxValue never rises and the restore simply stays
+    // pending for the next narrow one.
+    //
+    // Phase 2 follows, started only once the restore has landed so the
+    // pre-layout value can never be persisted over it. collectLatest + delay
+    // debounces a fling into a single write.
+    LaunchedEffect(quick.ribbonScroll) {
+        snapshotFlow { quick.ribbonScroll.maxValue }.first { it > 0f }
+        quick.tryRestoreRibbonScroll()
+        snapshotFlow { quick.ribbonScroll.value.toInt() }
+            .distinctUntilChanged()
+            .collectLatest { px ->
+                delay(RIBBON_SCROLL_PERSIST_DEBOUNCE_MS)
+                actions.onRibbonScrolled(px)
+            }
+    }
+
+    // Restore the persisted ribbon arrangement AND its scroll offset ONCE
+    // per screen entry. Keyed on nothing (runs a single time) so a user's
+    // reorder survives without re-reading SharedPreferences on every
+    // recomposition. Unknown/stale names are dropped and any newly added
+    // tool is appended in catalogue order inside PlayerPrefs, so this can
+    // never yield a partial ribbon.
+    //
+    // The offset is handed to loadRibbon rather than scrolled here: this
+    // runs before the ribbon row has been measured, and a scrollTo into an
+    // unmeasured (maxValue == 0) row would silently discard it. The ribbon's
+    // own effect applies it once layout has run.
     LaunchedEffect(Unit) {
         val canonical = RibbonTool.entries.map { it.name }
         val order = PlayerPrefs.ribbonOrder(context, canonical)
@@ -395,7 +468,11 @@ fun PlayerScreen(
             .mapNotNull { name -> RibbonTool.entries.firstOrNull { it.name == name } }
             .toSet()
         // A tool can't be both visible and hidden; visible wins.
-        quick.loadRibbon(order, hidden - order.toSet())
+        quick.loadRibbon(
+            order = order,
+            hidden = hidden - order.toSet(),
+            scrollPx = PlayerPrefs.ribbonScrollPx(context),
+        )
     }
 
     // Seed the two settings-backed ribbon toggles from the persisted values
@@ -630,7 +707,10 @@ fun PlayerScreen(
                 equalizerOn = quick.equalizerOn.value,
                 castRouteName = castRouteName,
                 subtitleChoiceLabel = subtitleChoiceLabel,
-                decoderModeLabel = engine?.decoderModeLabel ?: "HW+SW",
+                // Read the same host-mirrored value the dock chip uses, not the
+                // engine directly: two surfaces reading two sources is how they
+                // came to disagree in the first place.
+                decoderModeLabel = decoderModeLabel,
                 rebuildingDecoder = isRebuildingDecoder,
                 volumeBoostPct = volumeBoostPct,
             ),
@@ -654,7 +734,7 @@ fun PlayerScreen(
             onAudioOutput = { actions.openCastPicker() },
             onVolumeBoost = onVolumeBoostCycle,
             onCaptureFrame = { actions.captureFrame() },
-            onDecoder = { actions.toggleHwDecoder() },
+            onDecoder = { actions.cycleDecoderMode() },
             onSubtitleSource = onOpenSubtitlePicker,
             // v0.9: subtitle style now tunes IN PLACE (the inline tray) rather
             // than handing off to the host's modal sheet, so the cue the user

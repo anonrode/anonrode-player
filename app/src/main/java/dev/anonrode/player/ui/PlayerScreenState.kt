@@ -1,6 +1,7 @@
 package dev.anonrode.player.ui
 
 import android.view.View
+import androidx.compose.foundation.ScrollState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -275,9 +276,8 @@ internal class GestureUiState {
  * (never read) are gone.
  */
 @Stable
-internal class QuickRowUiState(initialHwDecoder: Boolean) {
+internal class QuickRowUiState {
     val equalizerOn = mutableStateOf(false)
-    val hwDecoder = mutableStateOf(initialHwDecoder)
 
     /**
      * Three-state rotation mode (sensor / landscape / portrait) — the
@@ -330,6 +330,38 @@ internal class QuickRowUiState(initialHwDecoder: Boolean) {
     val showRibbonCustomise = mutableStateOf(false)
 
     /**
+     * Horizontal scroll position of the Quick Access Ribbon, in px.
+     *
+     * It lives HERE, not as a `rememberScrollState()` inside the ribbon, and
+     * that is the whole point of this field. The ribbon is the second row of
+     * `PlayerScreenTopBar`, which is the content of the chrome's
+     * `AnimatedVisibility` — so the moment the controls auto-hide, Compose
+     * disposes that subtree and throws away every `remember` inside it. A
+     * scroll state created in there came back at 0 on every single re-show,
+     * which is exactly what the screen capture shows: the ribbon sits at a
+     * scrolled-in position and the user has to swipe it back out to reach the
+     * first tool, again and again, and again after the process restarts.
+     *
+     * [QuickRowUiState] is created once with `remember {}` in `PlayerScreen`,
+     * above the AnimatedVisibility, so this instance — and the offset in it —
+     * outlives every hide/show cycle.
+     */
+    val ribbonScroll = ScrollState(0)
+
+    /**
+     * The offset that should be persisted. Seeded from prefs by [loadRibbon],
+     * then owned by the user's scrolling.
+     */
+    private var ribbonScrollPx by mutableIntStateOf(0)
+
+    /**
+     * False until the seeded offset has been applied to (or found
+     * unnecessary by) the measured row. Guards the restore/persist ordering —
+     * see [tryRestoreRibbonScroll] and [onRibbonScrolled].
+     */
+    private var ribbonScrollRestored by mutableStateOf(false)
+
+    /**
      * Tools the user has hidden. The full catalogue is always
      * [RibbonTool.entries]; [ribbonOrder] is the visible sequence, so a
      * hidden tool simply drops out of it. Keeping one ordered list (rather
@@ -338,10 +370,62 @@ internal class QuickRowUiState(initialHwDecoder: Boolean) {
      */
     private val hiddenTools = mutableStateOf(emptySet<RibbonTool>())
 
-    /** Load the persisted arrangement. Called once when the screen is built. */
-    fun loadRibbon(order: List<RibbonTool>, hidden: Set<RibbonTool>) {
+    /**
+     * Load the persisted arrangement and ribbon offset. Called once when the
+     * screen is built.
+     *
+     * [scrollPx] is only seeded, not applied: the row has not been measured
+     * yet, and [ScrollState.scrollTo] clamps to `maxValue`, which is 0 until
+     * layout has run. [tryRestoreRibbonScroll] does the applying.
+     */
+    fun loadRibbon(order: List<RibbonTool>, hidden: Set<RibbonTool>, scrollPx: Int) {
         ribbonOrder = order
         hiddenTools.value = hidden
+        ribbonScrollPx = scrollPx.coerceAtLeast(0)
+        ribbonScrollRestored = false
+    }
+
+    /**
+     * Apply the seeded offset. Call from a layout-gated effect until it
+     * returns true.
+     *
+     * Returns false while the ribbon row is still unmeasured (`maxValue == 0`
+     * means the content is not known to be scrollable yet) so the caller
+     * keeps waiting instead of restoring into a 0px range and losing the
+     * offset. When the content genuinely does not overflow — which is the
+     * normal case in landscape, where 13 tools at 56dp + 4dp spacing come to
+     * 776dp inside an 873dp window — this returns true on the first call
+     * without scrolling, and the stored offset is left untouched so it can be
+     * re-applied verbatim once the window is narrow enough to scroll.
+     */
+    fun tryRestoreRibbonScroll(): Boolean {
+        if (ribbonScrollRestored) return true
+        if (ribbonScroll.maxValue <= 0f) return false
+        val px = ribbonScrollPx
+        if (px > 0) {
+            // Clamp: hiding tools since the offset was stored can leave the
+            // row shorter than it was, and an out-of-range scrollTo would
+            // land the ribbon on a blank tail.
+            ribbonScroll.scrollTo(px.toFloat().coerceAtMost(ribbonScroll.maxValue))
+        }
+        ribbonScrollRestored = true
+        return true
+    }
+
+    /**
+     * Record a settled scroll position. Returns true when the persisted value
+     * actually changed, so the caller can skip a pointless write.
+     *
+     * Ignored before the restore lands: the value observed then is the
+     * pre-layout default, and persisting it would wipe the stored offset that
+     * [tryRestoreRibbonScroll] is about to apply.
+     */
+    fun onRibbonScrolled(px: Int): Boolean {
+        if (!ribbonScrollRestored) return false
+        val safe = px.coerceAtLeast(0)
+        if (safe == ribbonScrollPx) return false
+        ribbonScrollPx = safe
+        return true
     }
 
     fun openRibbonCustomise() {

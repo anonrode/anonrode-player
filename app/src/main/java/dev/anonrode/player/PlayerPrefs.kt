@@ -25,6 +25,7 @@ object PlayerPrefs {
     private const val KEY_SUB_POS_MRU = "sub_pos_mru"
     private const val KEY_RIBBON_ORDER = "ribbon_order"
     private const val KEY_RIBBON_HIDDEN = "ribbon_hidden"
+    private const val KEY_RIBBON_SCROLL = "ribbon_scroll_px"
     private const val SUB_POS_PREFIX = "sub_pos_"
     private const val MAX_SUB_POS_ENTRIES = 256
 
@@ -130,6 +131,22 @@ object PlayerPrefs {
 
     fun saveRibbonHidden(context: Context, hidden: Set<String>) {
         prefs(context).edit().putString(KEY_RIBBON_HIDDEN, hidden.joinToString("\n")).apply()
+    }
+
+    /**
+     * The ribbon's horizontal scroll offset, in px. 0 when nothing is stored.
+     *
+     * Stored in px rather than dp on purpose: it is the unit [androidx.compose.foundation.ScrollState]
+     * speaks, so restoring it needs no density lookup, and converting on the way
+     * in would let a stale density round the offset away from a tool boundary.
+     * Coerced non-negative on read so a truncated or hand-edited prefs file can
+     * never ask for a negative offset.
+     */
+    fun ribbonScrollPx(context: Context): Int =
+        prefs(context).getInt(KEY_RIBBON_SCROLL, 0).coerceAtLeast(0)
+
+    fun saveRibbonScrollPx(context: Context, px: Int) {
+        prefs(context).edit().putInt(KEY_RIBBON_SCROLL, px.coerceAtLeast(0)).apply()
     }
 
     private fun parse(value: String): Pair<Float, Float>? {

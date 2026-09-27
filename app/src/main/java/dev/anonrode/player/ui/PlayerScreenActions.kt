@@ -73,6 +73,18 @@ internal class PlayerScreenActions(
     private val onOpenCastPicker: () -> Unit,
     private val onOpenAudioTrackPicker: () -> Unit,
     private val onRebuildDecoder: (Boolean) -> Int,
+
+    /**
+     * The decoder profile the engine is on, mirrored from the host so the chip
+     * shows the truth rather than a local guess. See [cycleDecoderMode].
+     */
+    val decoderModeLabel: String = "HW+SW",
+    /**
+     * Reports whether the user has pinned rotation, so the host can stop its
+     * auto-landscape-on-widescreen behaviour from overriding an explicit lock.
+     * True means "auto-rotate is welcome" (mode == SENSOR).
+     */
+    private val onAutoRotateChanged: (Boolean) -> Unit = {},
     private val onNudgeSubtitle: (Long) -> Unit,
     private val onEnterPip: () -> Unit,
     /**
@@ -319,6 +331,22 @@ internal class PlayerScreenActions(
         )
     }
 
+    /**
+     * Persist the ribbon's horizontal scroll offset.
+     *
+     * Separate from [persistRibbon] because the trigger is different in kind:
+     * the arrangement writes are user-initiated and rare, whereas this one
+     * arrives on every settled scroll. The collector in
+     * `PlayerScreenTopBar` debounces it, and [QuickRowUiState.onRibbonScrolled]
+     * reports whether the value actually moved, so a no-op scroll costs
+     * nothing.
+     */
+    fun onRibbonScrolled(px: Int) {
+        if (quick.onRibbonScrolled(px)) {
+            dev.anonrode.player.PlayerPrefs.saveRibbonScrollPx(context, px)
+        }
+    }
+
     fun openSyncPopover() {
         // v0.9: only one tray may cover the transport at a time.
         quick.showStyleTray.value = false
@@ -363,21 +391,30 @@ internal class PlayerScreenActions(
         onOpenCastPicker()
     }
 
-    fun toggleHwDecoder() {
+    /**
+     * Advance the decoder one step through the engine's real three profiles
+     * (HW+SW -> APP -> HW -> HW+SW).
+     *
+     * This used to be `toggleHwDecoder`, which flipped a local `hwDecoder`
+     * boolean and handed it to the host. The host ignored that boolean and
+     * called `cycleDecoderMode()` anyway, so the chip could land on any of
+     * three engine states while showing two — including reading "SW" while
+     * the engine sat in the default HW+SW hybrid. The label the chip renders
+     * now comes from the host, which reads it back off the engine.
+     */
+    fun cycleDecoderMode() {
         if (isRebuildingDecoder) {
             showTransientToast("Decoder swap in progress…")
             return
         }
-        val newHw = !quick.hwDecoder.value
-        quick.hwDecoder.value = newHw
-        AppLog.d("PLAYER", "decoder request hw=" + newHw)
-        showTransientToast(if (newHw) "Switching to hardware decoder…" else "Switching to software decoder…")
+        AppLog.d("PLAYER", "decoder request: cycle, current=" + decoderModeLabel)
+        showTransientToast("Switching decoder profile…")
         // Fire the real rebuild via the host. The host tears down the
-        // ExoPlayer, builds a new one with the requested renderers factory,
-        // and re-anchors the sync processor at the saved position. The
-        // on-screen chip shows "…" while isRebuildingDecoder is true; the
-        // host clears it after the new player reports STATE_READY.
-        onRebuildDecoder(newHw)
+        // ExoPlayer, builds a new one with the next renderers factory, and
+        // re-anchors the sync processor at the saved position. The chip shows
+        // "…" while isRebuildingDecoder is true; the host clears it once the
+        // new player reports STATE_READY and refreshes decoderModeLabel.
+        onRebuildDecoder(decoderModeLabel != "APP")
     }
 
     /** Step the 3-state rotation mode forward (sensor → landscape →
@@ -395,6 +432,11 @@ internal class PlayerScreenActions(
 
     private fun applyRotateMode(mode: RotateMode) {
         quick.rotateMode.value = mode
+        // Tell the host whether it may auto-orient. Without this, the host's
+        // onVideoSizeChanged keeps forcing landscape for widescreen video and
+        // the explicit lock here is silently overwritten (the DisposableEffect
+        // in RotationLockEffect is keyed on `mode` and never re-fires).
+        onAutoRotateChanged(mode == RotateMode.SENSOR)
         AppLog.d("PLAYER", "rotate mode=" + mode)
         showTransientToast(
             when (mode) {

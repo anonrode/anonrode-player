@@ -21,7 +21,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -51,9 +50,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -63,6 +65,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.util.UnstableApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+
+/**
+ * How long the ribbon's scroll offset must sit still before it is written to
+ * SharedPreferences. A fling emits a value per frame; without a settle window
+ * that is a disk write per frame. 400ms is long enough to swallow a drag and
+ * short enough that the offset is on disk before the user can plausibly kill
+ * the app.
+ */
+private const val RIBBON_SCROLL_PERSIST_DEBOUNCE_MS = 400L
 
 /* ── Player controls chrome (v0.7.3 curated dock) ─────────────────────────
  *
@@ -224,10 +239,13 @@ internal fun PlayerScreenTopBar(
                 )
             }
             TextPill(
-                text = if (actions.quick.hwDecoder.value) "HW" else "SW",
+                text = actions.decoderModeLabel,
                 accent = accent,
-                selected = actions.quick.hwDecoder.value,
-                onClick = { actions.toggleHwDecoder() },
+                // "Highlighted" means an override: the default hybrid HW+SW
+                // profile is the baseline, APP and HW-only are deliberate
+                // choices the user made to change decoding behaviour.
+                selected = actions.decoderModeLabel != "HW+SW",
+                onClick = { actions.cycleDecoderMode() },
             )
             ControlChip(
                 icon = Icons.Filled.MoreVert,
@@ -244,11 +262,21 @@ internal fun PlayerScreenTopBar(
         // the user's order (and hidden set) is a single persisted list the
         // ribbon and the customise sheet both read and write.
         val ribbonOrder = actions.quick.ribbonOrder
+        // Hoisted, not created here — see QuickRowUiState.ribbonScroll for
+        // why a scroll state born inside this (auto-hiding) subtree could
+        // never hold an offset.
+        //
+        // The observe/restore collectors deliberately do NOT live here
+        // either; they are hoisted into PlayerScreen, above the chrome's
+        // AnimatedVisibility. A LaunchedEffect started inside a subtree that
+        // Compose disposes on auto-hide is cancelled with it, which would drop
+        // the debounce delay mid-flight and lose the final offset exactly when
+        // the user scrolls and then lets the controls fade — the common case.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 4.dp, bottom = 2.dp)
-                .horizontalScroll(rememberScrollState()),
+                .horizontalScroll(actions.quick.ribbonScroll),
             horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs),
             verticalAlignment = Alignment.CenterVertically,
         ) {

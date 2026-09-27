@@ -240,6 +240,41 @@ class PlayerActivity : ComponentActivity() {
     private var isRebuildingDecoder by mutableStateOf(false)
 
     /**
+     * The decoder profile the engine is ACTUALLY on, as a display label.
+     *
+     * This replaces the screen's old two-state `hwDecoder` boolean, which was
+     * a Rule-11 violation: the chip flipped the flag, but the host ignored it
+     * and called `cycleDecoderMode()`, so the label and the engine disagreed.
+     * The engine has three profiles — HW+SW, APP (software-first), HW only —
+     * and a boolean cannot name three states, so the chip read "SW" while the
+     * engine sat in the default HW+SW hybrid.
+     *
+     * Kept here, next to [isRebuildingDecoder], because the engine's own
+     * `decoderMode` is a plain field: reading it during composition would not
+     * trigger a recomposition when the mode changes. This mirror is
+     * observable and is refreshed on every point the mode can move.
+     */
+    private var decoderModeLabel by mutableStateOf("HW+SW")
+
+    /**
+     * Whether auto-orientation may override the activity's orientation.
+     *
+     * `onVideoSizeChanged` forces landscape for any widescreen video. It used
+     * to do that unconditionally, which silently destroyed an explicit user
+     * rotation lock: `RotationLockEffect` is a `DisposableEffect(mode)`, so it
+     * only writes when the MODE CHANGES — the orientation the video callback
+     * overwrote was never restored. The practical effect was that a user who
+     * locked Portrait got flipped to landscape the moment a landscape episode
+     * loaded (or a decoder rebuild re-fired the callback), and the rotate
+     * button then appeared dead.
+     *
+     * The host cannot see the Compose [dev.anonrode.player.ui.RotateMode]
+     * state, so the screen pushes it here whenever the mode changes. True
+     * means "user has not pinned rotation", i.e. auto-orient is welcome.
+     */
+    @Volatile private var autoRotateEnabled = true
+
+    /**
      * Bound to the current audio session id; rebound on every decoder
      * rebuild. Persists across the activity so the EQ toggle state
      * survives a screen rotation.
@@ -367,11 +402,16 @@ class PlayerActivity : ComponentActivity() {
             // Re-bind the EQ every time the player transitions to a new
             // session id (decoder rebuild, or first prepared playback).
             if (playbackState == Player.STATE_READY) {
-                val sid = AnonrodeApp.get(this@PlayerActivity).engine.currentAudioSessionId
+                val engine = AnonrodeApp.get(this@PlayerActivity).engine
+                val sid = engine.currentAudioSessionId
                 if (sid != 0) equalizer.setSessionId(sid)
                 // The (rebuilt) player reached READY — unblock the HW chip
                 // right away; the 800ms postDelayed is only a fallback.
                 isRebuildingDecoder = false
+                // Re-read the label here too: a failed build falls back to
+                // MODE_DEVICE_ONLY and writes decoderMode back, so this is
+                // where the chip learns a swap did not land where it aimed.
+                decoderModeLabel = engine.decoderModeLabel
             }
         }
 
@@ -386,7 +426,7 @@ class PlayerActivity : ComponentActivity() {
             if (videoSize.width > 0 && videoSize.height > 0) {
                 pipAspectCacheW = videoSize.width
                 pipAspectCacheH = videoSize.height
-                if (videoSize.width > videoSize.height && !pipMode) {
+                if (videoSize.width > videoSize.height && !pipMode && autoRotateEnabled) {
                     requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 }
             }
@@ -741,7 +781,9 @@ class PlayerActivity : ComponentActivity() {
                                 }
                             },
                             isRebuildingDecoder = isRebuildingDecoder,
+                            decoderModeLabel = decoderModeLabel,
                             onRebuildDecoder = { newHw -> requestDecoderRebuild(newHw) },
+                            onAutoRotateChanged = { enabled -> autoRotateEnabled = enabled },
                             onToggleEqualizer = { request -> requestToggleEqualizer(request) },
                             onOpenCastPicker = { requestOpenCastPicker() },
                             onOpenEqPanel = { eqPanelOpen = true },
@@ -1331,6 +1373,10 @@ class PlayerActivity : ComponentActivity() {
                 engine.pendingSpeedOnRebuild = pending.speed
                 engine.rebuildMode(wantMode)
             }
+            // Mirror the mode the engine actually settled on — rebuildMode
+            // falls back to MODE_DEVICE_ONLY if the build throws, so this must
+            // read the engine rather than `wantMode`.
+            decoderModeLabel = engine.decoderModeLabel
             val player = engine.player
             player.setPlaybackSpeed(pending.speed)
             // Fresh resume point, read BEFORE the engine starts: a position
@@ -1592,8 +1638,18 @@ class PlayerActivity : ComponentActivity() {
      */
     private fun requestDecoderRebuild(newHw: Boolean): Int {
         val engine = AnonrodeApp.get(this).engine
-        if (engine.isHw == newHw) {
-            return engine.currentAudioSessionId
+        // The engine's profile is the truth, and it is a THREE-state cycle
+        // (HW+SW -> APP -> HW). The old guard compared a two-state boolean
+        // against a three-state field, so a tap whose boolean happened to match
+        // `isHw` did nothing at all while the chip had already flipped to the
+        // opposite label. A tap now always advances one step. The parameter is
+        // kept only for the legacy signature and is deliberately ignored.
+        if (newHw != engine.isHw) {
+            AppLog.d(
+                "PLAYER",
+                "decoder tap hw=" + newHw + " engine isHw=" + engine.isHw +
+                    " mode=" + engine.decoderModeLabel + " — cycling",
+            )
         }
         return performDecoderCycle(engine)
     }
@@ -1612,6 +1668,7 @@ class PlayerActivity : ComponentActivity() {
         isRebuildingDecoder = true
         return try {
             val newSessionId = engine.cycleDecoderMode()
+            decoderModeLabel = engine.decoderModeLabel
             AppLog.d("PLAYER", "decoder cycle complete: mode=" + engine.decoderModeLabel + " session=" + newSessionId)
             // Re-bind the Equalizer to the rebuilt player's session id. We
             // use the returned id (which may be 0 if the new player hasn't
