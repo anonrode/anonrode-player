@@ -398,15 +398,15 @@ internal class QuickRowUiState {
      * without scrolling, and the stored offset is left untouched so it can be
      * re-applied verbatim once the window is narrow enough to scroll.
      */
-    fun tryRestoreRibbonScroll(): Boolean {
+    suspend fun tryRestoreRibbonScroll(): Boolean {
         if (ribbonScrollRestored) return true
-        if (ribbonScroll.maxValue <= 0f) return false
+        if (ribbonScroll.maxValue <= 0) return false
         val px = ribbonScrollPx
         if (px > 0) {
             // Clamp: hiding tools since the offset was stored can leave the
             // row shorter than it was, and an out-of-range scrollTo would
             // land the ribbon on a blank tail.
-            ribbonScroll.scrollTo(px.toFloat().coerceAtMost(ribbonScroll.maxValue))
+            ribbonScroll.scrollTo(px.coerceAtMost(ribbonScroll.maxValue))
         }
         ribbonScrollRestored = true
         return true

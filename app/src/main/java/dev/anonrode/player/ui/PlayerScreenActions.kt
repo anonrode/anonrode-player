@@ -58,7 +58,7 @@ internal class PlayerScreenActions(
     private val captureScope: CoroutineScope,
     val ui: PlayerUiState,
     private val hud: HudUiState,
-    private val sleep: SleepTimerUiState,
+    val sleep: SleepTimerUiState,
     val gestures: GestureUiState,
     val quick: QuickRowUiState,
     val speedIdx: MutableIntState,

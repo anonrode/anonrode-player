@@ -18,14 +18,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 
-/**
- * How long the ribbon's scroll offset must sit still before it is written to
- * SharedPreferences. A fling emits a value per frame; without a settle window
- * that is a disk write per frame. 400ms is long enough to swallow a drag and
- * short enough that the offset is on disk before the user can plausibly kill
- * the app.
- */
-private const val RIBBON_SCROLL_PERSIST_DEBOUNCE_MS = 400L
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +38,15 @@ import dev.anonrode.player.audio.SubtitleStyle
 import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 import dev.anonrode.player.feature.player.PlaybackEngine
 import kotlin.math.abs
+
+/**
+ * How long the ribbon's scroll offset must sit still before it is written to
+ * SharedPreferences. A fling emits a value per frame; without a settle window
+ * that is a disk write per frame. 400ms is long enough to swallow a drag and
+ * short enough that the offset is on disk before the user can plausibly kill
+ * the app.
+ */
+private const val RIBBON_SCROLL_PERSIST_DEBOUNCE_MS = 400L
 
 /**
  * Full-bleed video player — v0.7.3 curated-dock chrome.
@@ -458,9 +459,9 @@ fun PlayerScreen(
     // pre-layout value can never be persisted over it. collectLatest + delay
     // debounces a fling into a single write.
     LaunchedEffect(quick.ribbonScroll) {
-        snapshotFlow { quick.ribbonScroll.maxValue }.first { it > 0f }
+        snapshotFlow { quick.ribbonScroll.maxValue }.first { it > 0 }
         quick.tryRestoreRibbonScroll()
-        snapshotFlow { quick.ribbonScroll.value.toInt() }
+        snapshotFlow { quick.ribbonScroll.value }
             .distinctUntilChanged()
             .collectLatest { px ->
                 delay(RIBBON_SCROLL_PERSIST_DEBOUNCE_MS)

@@ -487,9 +487,9 @@ object SpeechCorrelator {
         }
 
         // If nominal framerate has a high-confidence lock, return immediately
-        if (nominalBest.r >= 0.25) {
+        if (nominalBest.r >= 0.65) {
             val candidate = verifyAndCreateLock(1.0, nominalBest.shift, bNominal, bNomTotal, bNomWords, nominalPeaks)
-            if (candidate != null && (candidate.score >= 0.30 || candidate.halfOk)) {
+            if (candidate != null && candidate.score >= 0.65 && candidate.halfOk) {
                 return candidate
             }
         }
