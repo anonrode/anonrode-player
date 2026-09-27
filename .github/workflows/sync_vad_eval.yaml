@@ -1,0 +1,50 @@
+name: sync_vad_eval
+
+# The live sync path derives "is there speech" from window RMS, which cannot
+# separate speech from loud music, so it cannot sync content with a continuous
+# mix. The repo already contains a neural detector (SileroVad) that the
+# whole-file engine uses; this job measures, on the app's REAL model and a
+# 1:1 port of the live correlator, whether swapping the live path onto it is
+# actually worth doing.
+#
+# It exists as its own workflow because the dev machine's Windows
+# onnxruntime wheels segfault under sustained inference, so the question could
+# not be answered locally. This runs on Linux, where the wheels are stable.
+#
+# Deliberately NOT wired into android_build.yaml: it is an evaluation, not a
+# build gate, and it needs Python + ONNX rather than a JDK. It fails only when
+# the neural envelope stops beating the energy one on continuous content,
+# which would mean a future change had broken the reason to want it.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  vad_eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install onnxruntime
+        # numpy is pinned below 2: the onnxruntime builds are compiled against
+        # the NumPy 1.x C ABI and fail to import otherwise. This cost an
+        # afternoon to diagnose locally - see the smoke test history.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "numpy<2" onnxruntime
+
+      - name: Confirm the model is present
+        run: |
+          ls -l core/media/src/main/assets/silero_vad.onnx
+          test -f core/media/src/main/assets/silero_vad.onnx
+
+      - name: Compare the energy and neural speech envelopes
+        run: python .github/scripts/sync_vad_eval.py
