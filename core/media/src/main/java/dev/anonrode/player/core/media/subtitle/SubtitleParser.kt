@@ -22,6 +22,24 @@ import dev.anonrode.player.core.model.SubtitleCue
  */
 object SubtitleParser {
 
+    /**
+     * Returns cues sorted by start time, for every input format.
+     *
+     * The per-format parsers emit cues in FILE order, which is only the same
+     * as time order for a well-formed SRT. ASS `[Events]` are not required to
+     * be in chronological order, malformed files interleave badly, and any
+     * future format may not care at all.
+     *
+     * That matters because the render loop binary-searches this list: it
+     * assumes start-sorted input, and `CueLookup` finds the upper bound with
+     * `if (cues[mid].start <= t)`. Unsorted input makes that search silently
+     * skip cues, so a subtitle just never appears. Several call sites were
+     * defending themselves with `.sortedBy { it.start }`; sorting here makes
+     * the guarantee a property of the type's producer rather than something
+     * every future caller has to remember.
+     *
+     * Stable, so cues that share a start time keep file order.
+     */
     fun parse(fileName: String, raw: String): List<SubtitleCue> {
         val lower = fileName.lowercase()
         return when {
@@ -33,7 +51,7 @@ object SubtitleParser {
             lower.endsWith(".mpl") -> parseMicroDvd(raw, fps = 10.0) // MPL2 tenths-of-second
             lower.endsWith(".sub") -> parseSub(raw)
             else -> parseSrt(raw)
-        }
+        }.sortedBy { it.start }
     }
 
     /**
