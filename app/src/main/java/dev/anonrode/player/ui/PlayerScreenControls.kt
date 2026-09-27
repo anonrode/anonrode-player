@@ -415,6 +415,28 @@ private fun RibbonToolSlot(
     }
 }
 
+/**
+ * Minimum width of one Quick Access Ribbon cell, in dp.
+ *
+ * This is a deliberate overflow budget, not a tidy number. The catalogue is 13
+ * tools; each cell is this width plus 2dp padding per side, and the Row adds
+ * `Dimens.gapXs` (4dp) between neighbours:
+ *
+ *     13 * (64 + 4) + 12 * 4 = 932dp of track
+ *
+ * A landscape phone viewport is about 873dp before the top bar's own padding,
+ * so the full catalogue always overflows and the ribbon is genuinely
+ * scrollable there. At the previous 56dp minimum the track was only 828dp —
+ * it FIT, which meant `horizontalScroll` had nothing to scroll, `maxValue`
+ * stayed 0, and the whole restore-and-persist path (the reason the scroll
+ * state is hoisted at all) never ran. Persistence cannot work on a track that
+ * cannot scroll.
+ *
+ * 64dp is also well clear of the 48dp minimum touch target, so the wider
+ * pitch costs nothing ergonomically.
+ */
+private const val RIBBON_CELL_MIN_WIDTH_DP = 64
+
 /** Individual circular tool in the Quick Access Ribbon with text label underneath. */
 @Composable
 internal fun RibbonToolItem(
@@ -430,7 +452,7 @@ internal fun RibbonToolItem(
 ) {
     Column(
         modifier = modifier
-            .widthIn(min = 56.dp)
+            .widthIn(min = RIBBON_CELL_MIN_WIDTH_DP.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = ripple(bounded = false, radius = 24.dp, color = accent),
