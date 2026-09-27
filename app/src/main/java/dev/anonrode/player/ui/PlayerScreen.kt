@@ -357,8 +357,13 @@ fun PlayerScreen(
         mutableIntStateOf(speeds.indexOfFirst { abs(it - initialSpeed) < 0.05f }.takeIf { it >= 0 } ?: 2)
     }
 
-    // Shared "more" state — the top bar's ⋮ opens the Control Center
-    // (v0.7.3: the rail's second "more" is deleted, this is the only one).
+    // Shared "more" state — the top bar's ⋮ opens the Control Center and it
+    // is the ONLY thing that does: the rail's second "more" was deleted in
+    // v0.7.3, so the overflow control has exactly one home. That is a claim
+    // about the overflow control, not about every control — the ribbon is a
+    // shortcut strip over the sheet's full inventory, so a handful of tools
+    // legitimately show up in both (see the file header in
+    // PlayerScreenControls.kt for the list).
     val overflowOpen = remember { mutableStateOf(false) }
 
     // Action surface — INTENTIONALLY REMEMBERED on (livePlayer, engine, ui,

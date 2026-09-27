@@ -68,7 +68,15 @@ import androidx.media3.common.util.UnstableApi
  *
  *   Top bar (auto-hide)   ‹  Title                    ⧉  🔒  ⋮
  *   Right-edge rail       GONE — its five slots moved into the dock's
- *                         utility row / the sheet; "more" has one home.
+ *                         utility row / the sheet. The overflow control has
+ *                         one home: the top bar's ⋮, and nothing else opens
+ *                         the Control Center.
+ *   Ribbon vs. sheet      the ribbon is a user-curated SHORTCUT strip (its
+ *                         order and hidden set are persisted); the Control
+ *                         Center is the full inventory. A-B repeat, sleep
+ *                         timer, equalizer and capture frame therefore
+ *                         appear in both on purpose — a tool hidden from
+ *                         the ribbon must not become unreachable.
  *   Bottom block          seek (ALWAYS) / transport / utility
  *
  * Refactor (v0.7.3):
