@@ -55,6 +55,7 @@ import dev.anonrode.player.core.datastore.PlayerSettings
 import dev.anonrode.player.core.datastore.ResumeBehavior
 import dev.anonrode.player.core.datastore.playerSettingsDataStore
 import dev.anonrode.player.core.media.log.AppLog
+import dev.anonrode.player.core.media.subtitle.CueLookup
 import dev.anonrode.player.core.media.subtitle.SubtitleSourceResolver
 import dev.anonrode.player.core.media.sync.SyncFingerprint
 import dev.anonrode.player.core.model.SubtitleCue
@@ -1952,21 +1953,13 @@ class PlayerActivity : ComponentActivity() {
         handler.post(tick)
     }
 
-    /** Binary-search cue lookup with offset applied (ported from web player). */
-    private fun findCue(cues: List<SubtitleCue>, t: Double): SubtitleCue? {
-        var lo = 0
-        var hi = cues.size - 1
-        while (lo <= hi) {
-            val mid = (lo + hi) ushr 1
-            val c = cues[mid]
-            when {
-                t < c.start -> hi = mid - 1
-                t > c.end -> lo = mid + 1
-                else -> return c
-            }
-        }
-        return null
-    }
+    /**
+     * Cue lookup with offset already applied by the caller. The overlap
+     * handling and the measurements behind it live in [CueLookup], which is
+     * where the unit tests are.
+     */
+    private fun findCue(cues: List<SubtitleCue>, t: Double): SubtitleCue? =
+        CueLookup.find(cues, t)
 
     /** First cue whose start is after [t] (insertion point over the
      *  start-sorted list); null once [t] is past the last cue. */

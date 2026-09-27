@@ -480,3 +480,90 @@ correlation on that material is 0.26.
 (envelope discrimination), `diag.js` (feature decomposition), `unit_corr.js`
 (correlator unit check), `ascii.js` (visual alignment check).
 
+---
+
+## 8. Subtitle Pipeline Defects (2026-09-26)
+
+Three defects found by auditing against the real media library rather than by
+reading alone. All three are confirmed with measurements, not reasoning.
+
+### 8.1 Overlapping cues blanked the subtitle — FIXED
+
+`PlayerActivity.findCue` was a binary search that discarded half the range
+whenever `t` fell past `cues[mid].end`. That silently assumes cues never
+overlap. They do: ASS sign/song cues, two-speaker lines, bilingual tracks,
+SRT converted from any of those.
+
+Measured over 60 real subtitle files from the local library: **17 contain
+overlapping cues**. Inside those overlap windows the lookup returned null
+while a cue was demonstrably on screen — **31% of overlap instants** in
+`Better_Call_Saul_S6_E4`, 13% in `86_S1_E18`, 2% in `86_S1_E20`. The render
+tick retries on a timer and keeps getting null, so the subtitle is missing
+for the whole overlap, not one frame.
+
+Fix: `core/media/.../subtitle/CueLookup.kt` — upper-bound on `start`, then walk
+back for a cue that genuinely covers `t`. Ends are not monotonic, so "the last
+cue that started before t" is not sufficient: a long cue can start far earlier
+and still be running while later cues have ended.
+
+The walk is capped at 32 cues. The deepest walk any real file needed was **1**;
+the nearest wrong approach (early-exit on a running max end) was measured and
+rejected because it only sees already-visited cues and so cannot rule out
+earlier ones — it lost 39 samples where the capped walk lost 0. The predicate
+is `start <= t <= end`, so an over-deep overlap degrades to a *missing*
+subtitle, never a wrong one.
+
+Verified: 0 misses over 237,503 sampled instants. Regression test in
+`CueLookupTest`, including an exhaustive brute-force comparison; every case
+was re-run in Python before shipping because there is no JDK here.
+
+### 8.2 Charset detection was defeated by GB18030 — FIXED
+
+`SubtitleDecoder` walked `GB18030 → Big5 → EUC-KR → Shift_JIS` and returned
+the **first** that passed a "looks like CJK" gate. GB18030's two-byte space
+contains the Shift_JIS and Big5 spaces, so it decoded those without producing
+a single replacement character, cleared the gate, and won. Measured on
+synthetic files: **all four legacy charsets were detected as GB18030** —
+Japanese, Traditional Chinese and Korean subtitles all render as mojibake.
+
+Fix: score every candidate and keep the best. The discriminator is that a
+correct decode is overwhelmingly one script, while a wrong one scatters:
+
+| file | correct decode | wrong decode |
+|---|---|---|
+| Shift_JIS | 45/66 kana (68%) | 0 kana |
+| EUC-KR | 69/75 hangul (92%) | 0 hangul |
+| GB18030 | 0 script, 57 hanzi | 30 hangul + 27 hanzi (mixed) |
+| Big5 | 0 script, 57 hanzi | 18 kana + 24 hanzi (mixed) |
+
+A ≥60% kana decode is Japanese, ≥60% hangul is Korean; otherwise rank on hanzi
+count, which also rescues Big5 (a correct CJK decode yields more hanzi than a
+garbled one, 57 vs 24). 60% sits in the measured gap: the nearest wrong cases
+reach 48% hangul and 29% kana. Result: 5/5 correct, and GBK-vs-GB18030 is
+harmless since GBK is a strict subset.
+
+**Scope caveat, stated plainly:** all 724 subtitle files in the local library
+are valid UTF-8, which short-circuits ahead of this ladder entirely. So this
+bug does not affect the current library — it defeats the feature's stated
+purpose for anyone with legacy-encoded subs. Worth fixing, not an emergency.
+
+`Decoded.charset` and `decodeWithCharset` already existed for a UI override
+("loaded as Big5, tap to change") but nothing calls them. That override is
+the real fix for genuinely ambiguous pairs; not wired here.
+
+### 8.3 Not fixed — reported only
+
+* **`SubtitleParser` peak memory ~6-8x file size.** `readBytes` → decoded
+  `String` → two full `replace` copies → `List<String>` of every line. A 5 MB
+  ASS file transiently costs ~30-40 MB. `MAX_SIDECAR_BYTES` is 32 MB.
+* **`EmbeddedSubtitleExtractor` and `SubtitleSourceResolver` do redundant
+  container passes at startup** (per the call graph) — needs a trace on a real
+  large MKV before touching.
+* **Decoder chip can show `HW` while FFmpeg software decode runs.** The chip
+  renders a 2-state boolean while `PlaybackEngine` has 3 real profiles; the
+  Control Centre shows the truthful `decoderModeLabel`, so the two surfaces
+  disagree. This one is certain from the call graph and worth fixing next.
+* **`isRebuildingDecoder` is captured in a `remember(...)` that does not list
+  it as a key**, so the guard can read stale and permanently lock out the
+  decoder chip. Needs a runtime log to confirm the lockout is reachable.
+
