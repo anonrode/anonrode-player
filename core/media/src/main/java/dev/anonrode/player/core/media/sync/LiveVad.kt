@@ -55,8 +55,8 @@ internal class LiveVad private constructor(
          */
         const val PENDING_BYTES = 192 * 1024
 
-        /** Published envelope length in 100 ms bins (60 s of history). */
-        const val ENVELOPE_BINS = 600
+        /** Published envelope length in 100 ms bins (400 s of history, covering the 3300 PASS_BINS max). */
+        const val ENVELOPE_BINS = 4000
 
         /** Below this the model has not seen enough audio to be worth trusting. */
         const val MIN_WARM_BINS = 80   // 8 s

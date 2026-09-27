@@ -1,5 +1,6 @@
 package dev.anonrode.player.core.media.sync
 
+import android.content.Context
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.AudioProcessor.AudioFormat
@@ -21,26 +22,18 @@ interface SyncListener {
 /**
  * Live subtitle-sync audio analyzer, injected into Media3's audio sink.
  *
- * Pipeline: 10 ms windows -> multi-feature speech score (energy / syllable
- * variance / ZCR against an adaptive floor-peak VAD) -> one soft bin per
- * 100 ms of media time -> v0.8 pass schedule ([SpeechCorrelator.PASS_BINS]:
- * ~18 s of listening for clean pairs, ~4.8 min of accumulated audio for
- * tough ones) hands a snapshot of the bin window to [SyncAnalysisWorker],
- * which runs the expensive [SpeechCorrelator.findOffset] on a dedicated
- * low-priority thread and publishes the lock decision through [SyncListener].
- *
- * Audio-thread budget: this processor runs inside Media3's audio sink
- * thread, so [queueInput] does ONLY cheap, allocation-free work: a
- * single pass over the samples updating running window sums, a passthrough
- * copy into a reused output buffer, and (on the v0.8 pass schedule only) a
- * System.arraycopy snapshot under the worker's single-flight gate. All
- * correlation and lock decisions happen on the worker thread — running
- * findOffset here caused underruns on budget devices.
+ * Uses neural voice activity detection ([LiveVad]) on a low-priority background
+ * worker thread when available, with an asymmetric AGC energy envelope as a
+ * reliable zero-dependency fallback. Hands snapshots of the speech envelope
+ * to [SyncAnalysisWorker] on the [SpeechCorrelator.PASS_BINS] schedule.
  */
 @UnstableApi
 class AudioSyncProcessor(
     private val listener: SyncListener,
+    context: Context? = null,
 ) : AudioProcessor {
+
+    private val liveVad: LiveVad? = context?.let { LiveVad.create(it) }
 
     @Volatile private var sampleRate = 0
     @Volatile private var channelCount = 0
@@ -128,14 +121,9 @@ class AudioSyncProcessor(
     private var windowFillTarget = 0
     private var windowN = 0
     private var wSumSq = 0.0   // Σ x²
-    private var wSumAbs = 0.0  // Σ |x|
-    private var wSumSig = 0.0  // Σ x
-    private var wZcr = 0
-    private var wPrevSign = false
 
     private var floor = 0.0
     private var peak = 0.0
-    private var lastSpeech = 0.0
 
     private val driftTracker = DriftTracker()
     // Written by the eval worker, reset by the audio thread, read back by
@@ -156,6 +144,7 @@ class AudioSyncProcessor(
         val changed = this.cues != cues
         this.cues = cues
         if (cues.isNotEmpty() && changed) {
+            liveVad?.reanchor()
             // A fresh subtitle track is a fresh matching problem: re-arm the
             // attempt budget so a track attached after a previous give-up
             // still gets its chance (a seek/episode switch would re-arm via
@@ -300,6 +289,7 @@ class AudioSyncProcessor(
         if (active) {
             // ~10 ms of audio per window at the real sample rate.
             windowFillTarget = max(1, sampleRate / 100) * channelCount
+            liveVad?.setFormat(sampleRate, channelCount, inputIsFloat)
             resetAll()
         } else {
             // P2-1 (v0.8): encoded passthrough / offload output routes (AC-3,
@@ -373,6 +363,7 @@ class AudioSyncProcessor(
         cues = emptyList()
         active = false
         configured = false
+        liveVad?.reanchor()
         // The worker thread is deliberately kept alive: the processor is
         // reused across player rebuilds (reset() then configure() again).
     }
@@ -383,6 +374,7 @@ class AudioSyncProcessor(
     }
 
     private fun resetWindow(anchorPosMs: Long = -1L) {
+        liveVad?.reanchor()
         java.util.Arrays.fill(audioBins, 0f)
         // v0.8.2: anchor the bin grid AT the new position. With baseIdx=0
         // the first bin after a seek to media position P lands at
@@ -395,8 +387,8 @@ class AudioSyncProcessor(
         // baseIdx=idx) stays for position-unknown starts.
         baseIdx = if (anchorPosMs >= 0L) (anchorPosMs / 100L).toInt() else 0
         binCount = 0; totalFrames = 0
-        windowN = 0; wSumSq = 0.0; wSumAbs = 0.0; wSumSig = 0.0; wZcr = 0
-        floor = 0.0; peak = 0.0; lastSpeech = 0.0
+        windowN = 0; wSumSq = 0.0
+        floor = 0.0; peak = 0.0
         stableHits = 0; lastOffset = Double.NaN
         passesUsed = 0; gaveUp = false
         // P1-4: a fresh window must also drop the drift history. Without
@@ -434,6 +426,7 @@ class AudioSyncProcessor(
 
         val nCh = channelCount
         val frameBytes = (if (inputIsFloat) 4 else 2) * nCh
+        liveVad?.submit(pcm, sampleRate, nCh, inputIsFloat)
         if (inputIsFloat) {
             // Float input is converted to Q15 (clamped) so the features are
             // the same computation as native 16-bit input.
@@ -453,54 +446,33 @@ class AudioSyncProcessor(
 
     /** Folds one Q15 sample into the running window sums (no allocation). */
     private fun ingestSample(s: Int) {
-        val positive = s >= 0
-        if (windowN == 0) {
-            wSumSq = 0.0; wSumAbs = 0.0; wSumSig = 0.0; wZcr = 0
-            wPrevSign = positive
-        } else if (positive != wPrevSign) {
-            wZcr++
-            wPrevSign = positive
-        }
+        if (windowN == 0) wSumSq = 0.0
         wSumSq += s.toDouble() * s
-        wSumAbs += if (positive) s.toDouble() else -s.toDouble()
-        wSumSig += s
         windowN++
         if (windowN >= windowFillTarget) finishWindow()
     }
 
-    /** Computes the multi-feature speech score for one completed window. */
+    /**
+     * Computes the speech score for one completed window (energy fallback).
+     *
+     * The score is the window's RMS placed between an adaptive quiet floor
+     * and an adaptive loud peak, i.e. "how loud is this window relative to
+     * the range this track actually occupies".
+     */
     private fun finishWindow() {
         val n = windowN
         val rms = sqrt(wSumSq / n)
-        val meanAmp = (wSumAbs / n).toFloat()
-        // Var(x - meanAmp) = E[x²] - 2·meanAmp·E[x] + meanAmp² — identical
-        // to a second pass of (x - meanAmp)² but folded into the one pass
-        // above (values stay far inside double precision at Q15 scale).
-        val variance =
-            (wSumSq / n - 2.0 * meanAmp * (wSumSig / n) + meanAmp.toDouble() * meanAmp).toFloat()
-        val normVar = variance / max(meanAmp * meanAmp, 1f)
-        val zcrNorm = wZcr.toFloat() / n
 
-        val uf = floor * 1.08
-        val up = max(uf + 0.0012, peak)
-        val energyScore = ((rms - uf) / max(up - uf, 0.001)).coerceIn(0.0, 1.0).toFloat()
-        val varianceScore = min(normVar / 2f, 1f)
-        val zcrScore = when {
-            zcrNorm in 0.02f..0.15f -> 1f
-            zcrNorm < 0.02f -> 0.5f
-            else -> max(0f, 1f - (zcrNorm - 0.15f) / 0.2f)
-        }
-
-        val sp = (energyScore * 0.5f + varianceScore * 0.3f + zcrScore * 0.2f).coerceIn(0f, 1f)
-        lastSpeech = sp.toDouble() * 0.72 + lastSpeech * 0.28
-
-        // adapt floor/peak
-        if (floor == 0.0) {
-            floor = rms; peak = rms * 1.9 + 0.0001
+        if (floor <= 0.0) {
+            floor = rms
+            peak = rms * 2.0 + 0.0001
         } else {
-            floor = floor * 0.986 + min(rms, floor * 1.45) * 0.014
-            peak = max(floor + 0.00035, max(peak * 0.992, rms))
+            floor += (rms - floor) * (if (rms < floor) FLOOR_DOWN else FLOOR_UP)
+            peak += (rms - peak) * (if (rms > peak) PEAK_UP else PEAK_DOWN)
         }
+        val headroom = peak - floor
+        val sp = ((rms - floor) / max(headroom, peak * 0.05 + 0.0001))
+            .coerceIn(0.0, 1.0).toFloat()
 
         windowN = 0
         accumulateBin(sp)
@@ -568,23 +540,33 @@ class AudioSyncProcessor(
 
     /**
      * Hands a snapshot of the current bin window to the single-flight
-     * background worker. The audio render thread only pays one
-     * System.arraycopy (into the worker's preallocated snapshot buffer,
-     * under the single-flight gate); if an evaluation is still in flight
-     * the pass is dropped (v0.8: passes are scheduled by window growth,
-     * and a correlation now costs milliseconds — a drop means the worker
-     * was somehow slower than the audio thread, and the NEXT threshold
-     * re-arms it anyway).
+     * background worker. Uses the neural LiveVad envelope when available
+     * and warm, with the energy envelope as zero-dependency fallback.
      */
     private fun scheduleEvaluate(posMs: Long) {
-        worker.submit(
-            binCount = binCount,
-            baseSeconds = baseIdx * SpeechCorrelator.ALIGN_BIN,
-            cues = cues,
-            posMs = posMs,
-            generation = generation,
-        ) { snapshot ->
-            System.arraycopy(audioBins, 0, snapshot, 0, audioBins.size)
+        val vad = liveVad
+        val vadSnapshot = if (vad != null && !vad.isWarming) vad.snapshot() else null
+        if (vadSnapshot != null && vadSnapshot.size >= SpeechCorrelator.ELIGIBLE_BINS) {
+            val count = minOf(binCount, vadSnapshot.size)
+            worker.submit(
+                binCount = count,
+                baseSeconds = baseIdx * SpeechCorrelator.ALIGN_BIN,
+                cues = cues,
+                posMs = posMs,
+                generation = generation,
+            ) { snapshot ->
+                System.arraycopy(vadSnapshot, 0, snapshot, 0, count)
+            }
+        } else {
+            worker.submit(
+                binCount = binCount,
+                baseSeconds = baseIdx * SpeechCorrelator.ALIGN_BIN,
+                cues = cues,
+                posMs = posMs,
+                generation = generation,
+            ) { snapshot ->
+                System.arraycopy(audioBins, 0, snapshot, 0, audioBins.size)
+            }
         }
     }
 
@@ -659,6 +641,11 @@ class AudioSyncProcessor(
         // confirm — no failure is counted, the cadence bounds the cost.
     }
 
+    /** Releases background resources held by the neural VAD worker. */
+    fun release() {
+        liveVad?.close()
+    }
+
     companion object {
         /**
          * Bin window span in 100 ms bins: ±40 s of offset room x2 plus
@@ -667,5 +654,10 @@ class AudioSyncProcessor(
          * media-position bound.
          */
         private const val BIN_WINDOW = 40 * 10 * 2 + 15 * 60 * 10
+
+        private const val FLOOR_DOWN = 0.06
+        private const val FLOOR_UP = 0.0007
+        private const val PEAK_UP = 0.08
+        private const val PEAK_DOWN = 0.002
     }
 }

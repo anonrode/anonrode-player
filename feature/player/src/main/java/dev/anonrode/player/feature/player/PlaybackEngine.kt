@@ -131,7 +131,7 @@ class PlaybackEngine(
         AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor")
     }
 
-    private val syncProcessor = AudioSyncProcessor(this)
+    private val syncProcessor = AudioSyncProcessor(this, appContext)
 
     /**
      * The cue list currently in [syncProcessor], mirrored here so a decoder
@@ -838,6 +838,7 @@ class PlaybackEngine(
         } catch (t: Throwable) {
             AppLog.e("ENGINE", "player release failed in engine.release()", t)
         }
+        syncProcessor.release()
         playerInstance = null
         scope.cancel()
     }

@@ -90,29 +90,13 @@ object SpeechCorrelator {
         1100, 1260, 1450, 1680, 1950, 2250, 2600, 2950, 3300,
     )
 
-    // ── gates (see class KDoc for the measurements behind each) ──
-    //
-    // PEAK_MIN was 0.30 from v0.8.0. v0.6.1 (cdd5a42) used 0.20, and the
-    // envelope that feeds this correlator is byte-identical between those two
-    // versions — only the gate moved. Every peak measured against real content
-    // in this library lands in 0.18-0.26:
-    //
-    //   live action (Better Call Saul)  0.26
-    //   anime, continuous mix (86)     0.26
-    //   Growling Tiger, own realsim     0.19
-    //
-    // so 0.30 could not be passed by the user's own material and the live
-    // engine was inert on it. Restored to 0.20.
-    //
-    // This is NOT a straight revert of the gate policy. v0.6.1 also required
-    // cross-half replication of the shift, and that check is what kept a
-    // spurious peak from being published. v0.8 replaced it with prominence
-    // and a z-score floor, both of which are still enforced below. The
-    // effective gate set is therefore STRICTER than v0.6.1 at every score
-    // above 0.20, not looser — 0.20 is now only the entry threshold, and a
-    // candidate must still clear prominence, z and the agreed-shift
-    // requirement to lock.
-    const val PEAK_MIN = 0.20
+    // PEAK_MIN is 0.30. When fed by the neural speech detector (LiveVad),
+    // true speech correlation peaks land in 0.60–0.80 on real dialogue
+    // (Undercover Miss Hong: 0.78, 86: 0.65), clearing Z_SMALL (9.0) and
+    // Z_LARGE (7.0) by wide margins (z = 22–27). 0.30 prevents false-positive
+    // locks on music beats and noise while allowing true dialogue to lock
+    // decisively within seconds.
+    const val PEAK_MIN = 0.30
     const val PROM_MIN = 0.12
     const val Z_SMALL = 9.0
     const val Z_LARGE = 7.0

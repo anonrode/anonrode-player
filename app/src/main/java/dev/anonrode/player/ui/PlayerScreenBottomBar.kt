@@ -168,6 +168,7 @@ internal fun PlayerScreenBottomBar(
                 positionSec = positionSec.value,
                 durationSec = durationSec.value,
                 onTapSync = { actions.openSyncPopover() },
+                onResync = { actions.resyncNow() },
             )
         }
 

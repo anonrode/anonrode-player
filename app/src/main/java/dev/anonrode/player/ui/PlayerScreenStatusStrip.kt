@@ -1,8 +1,15 @@
 package dev.anonrode.player.ui
 
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,17 +18,26 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -61,6 +77,7 @@ internal fun StatusStrip(
     positionSec: Float,
     durationSec: Float,
     onTapSync: () -> Unit,
+    onResync: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -76,6 +93,7 @@ internal fun StatusStrip(
             running = syncRunning,
             offsetMs = offsetMs,
             onClick = onTapSync,
+            onResync = onResync,
         )
 
         // Speed only earns space when it differs from normal — a permanent
@@ -101,14 +119,14 @@ internal fun StatusStrip(
  * engine is doing, so the answer is legible without opening anything.
  * Four states derived from [enabled], [running] and [offsetMs] alone:
  *
- *   OFF      → grey dot,   "Sync off"
- *   working  → amber dot,  "Syncing…"
- *   armed    → accent dot, "Sync armed"
- *   locked   → green dot,  "Synced +0.06s"
+ *   OFF      → grey dot,      "Sync off"
+ *   working  → spinning ring, "Syncing…"
+ *   armed    → accent dot,    "Sync armed"
+ *   locked   → green dot,     "Synced +0.06s" (spring-bounces on lock)
  *
- * A lock is signalled by a non-zero offset: [offsetMs] moves off 0 when a
- * lock lands and back to 0 when it clears. This pill is the sole owner of
- * that contract — there is no second sync surface to agree with.
+ * Interactions:
+ *   tap         → open sync popover (nudge, settings, presets)
+ *   long-press  → "Resync now" (immediate fresh calibration)
  */
 @UnstableApi
 @Composable
@@ -118,9 +136,11 @@ private fun StatusSyncPill(
     running: Boolean,
     offsetMs: Long,
     onClick: () -> Unit,
+    onResync: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val locked = enabled && !running && offsetMs != 0L
+    val view = LocalView.current
+    val locked = enabled && offsetMs != 0L
     val dotColor = when {
         !enabled -> Color.White.copy(alpha = 0.28f)
         running -> Color(0xFFFFC247)
@@ -139,9 +159,32 @@ private fun StatusSyncPill(
         else -> if (running) Color(0xFFFFC247) else accent
     }
 
+    // Spinning ring while working: 360° rotation per 1.6s while engine runs
+    val ringRotation by animateFloatAsState(
+        targetValue = if (running) 360f else 0f,
+        animationSpec = tween(
+            durationMillis = if (running) 1600 else 220,
+            easing = LinearEasing,
+        ),
+        label = "statusSyncRing",
+    )
+
+    // Lock pulse: when offset value changes, pop the chip 0.88 -> 1.0 with a spring
+    val pulseKey = (offsetMs / 100).toInt()
+    val scaleAnim = remember(pulseKey) { Animatable(if (locked) 0.88f else 1f) }
+    LaunchedEffect(pulseKey) {
+        if (locked) {
+            scaleAnim.animateTo(1f, spring(dampingRatio = 0.5f, stiffness = 800f))
+        }
+    }
+
     Row(
         modifier = modifier
             .height(StatusPillH)
+            .graphicsLayer {
+                scaleX = scaleAnim.value
+                scaleY = scaleAnim.value
+            }
             .clip(RoundedCornerShape(999.dp))
             .background(Color.Black.copy(alpha = 0.46f))
             .border(
@@ -150,24 +193,39 @@ private fun StatusSyncPill(
                 else Color.White.copy(alpha = 0.12f),
                 RoundedCornerShape(999.dp),
             )
-            .clickable(
+            .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = ripple(bounded = true, color = accent),
-                onClick = onClick,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    onClick()
+                },
+                onLongClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    onResync()
+                },
             )
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        // The state dot — the whole point of the strip. Legible before the
-        // label is read, distinguishable from a metre away.
-        Box(
-            modifier = Modifier
-                .height(7.dp)
-                .widthIn(min = 7.dp)
-                .clip(CircleShape)
-                .background(dotColor),
-        )
+        if (running) {
+            Icon(
+                Icons.Filled.AutoAwesome,
+                contentDescription = "Syncing…",
+                tint = dotColor,
+                modifier = Modifier
+                    .size(13.dp)
+                    .rotate(ringRotation),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(dotColor),
+            )
+        }
         Text(
             text = label,
             color = contentColor,
