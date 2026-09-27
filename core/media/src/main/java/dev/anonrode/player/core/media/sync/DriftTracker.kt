@@ -85,8 +85,24 @@ class DriftTracker {
             return Pair(latest, 1f)
         }
         val r = rate.coerceIn(-MAX_RATE, MAX_RATE)
-        // Only apply drift correction if rate is significant (>0.1%)
-        if (abs(r) < 0.001) return Pair(base, 1f)
+        // Only apply drift correction if rate is significant (>0.1%).
+        //
+        // When it is NOT, the offset to apply is the freshly MEASURED one,
+        // not the fit's intercept. `base` is the LSQ intercept, i.e. the
+        // offset extrapolated back to t=0 — and t is ABSOLUTE media time.
+        // Returning it here applied a drift correction the branch had just
+        // decided was noise: at a 600 s position a 0.0009 rate (0.09 %,
+        // comfortably under the 0.1 % significance floor) shifted the
+        // subtitle 0.59 s, and on a one-hour episode the same rate shifted it
+        // 3.29 s — against a pass-to-pass stability tolerance of 0.25 s.
+        // Because [AudioSyncProcessor.evaluate] hands this pair straight to
+        // SyncListener.onSyncLocked, and PlaybackEngine persists it, that
+        // error was written to the database and replayed on every later
+        // viewing of the file. `latest` is what the correlator actually
+        // measured at this position, so it is the only value that is correct
+        // when there is no drift to correct — exactly what the small-span
+        // branch above already does.
+        if (abs(r) < 0.001) return Pair(latest, 1f)
         return Pair(base, (1.0 + r).toFloat())
     }
 

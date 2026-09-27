@@ -77,6 +77,132 @@ Zero competitor brand names remain in code, comments, docs, and the manifest.
 
 ---
 
+## 1c. Ribbon Scroll Position (uncommitted, on top of v0.8.9)
+
+**Symptom, from `screen-20260925-214743.mp4`:** the Quick Access Ribbon does not
+keep its place. It sits at a scrolled-in position and has to be swiped back out
+to reach the first tool — and it does this again after every chrome auto-hide
+and again after a process restart. The captures at 00:07 / 00:13 show the full
+list while 00:04 / 00:10 / 00:17 show it part-scrolled.
+
+**Root cause — a lifecycle bug, not a layout one.** The ribbon was
+
+```kotlin
+Row(Modifier.fillMaxWidth()
+        .padding(top = 4.dp, bottom = 2.dp)
+        .horizontalScroll(rememberScrollState()), …)
+```
+
+but that `Row` is the second child of `PlayerScreenTopBar`, which is the
+**content of the chrome's `AnimatedVisibility`**. The moment `controlsVisible`
+goes false, Compose finishes the exit fade and *disposes* that subtree, taking
+every `remember` in it with it. So the scroll state was rebuilt at offset 0 on
+every single re-show, and the ribbon could never hold an offset across a hide,
+a rotation, or a process restart. Nothing was ever persisted.
+
+**Fix — hoist, then persist, then re-apply:**
+
+| File | Change |
+|---|---|
+| `ui/PlayerScreenState.kt` | `QuickRowUiState.ribbonScroll: ScrollState` — owned by the holder that `PlayerScreen` builds with `remember {}` *above* the `AnimatedVisibility`, so it outlives every hide/show. Plus `loadRibbon(…, scrollPx)`, `tryRestoreRibbonScroll()`, `onRibbonScrolled(px)`. |
+| `ui/PlayerScreenControls.kt` | The ribbon uses the hoisted state. One `LaunchedEffect` does **restore first, then follow**: `snapshotFlow { maxValue }.first { it > 0f }` → `tryRestoreRibbonScroll()` → only then start collecting `value`. Writes are debounced 400 ms with `collectLatest { delay(…) }`. |
+| `PlayerPrefs.kt` | `ribbonScrollPx` / `saveRibbonScrollPx` under `ribbon_scroll_px`, alongside the existing order/hidden keys. Stored in **px** (the unit `ScrollState` speaks) so no density conversion can round the offset off a tool boundary. |
+| `ui/PlayerScreen.kt` | Seeds `loadRibbon(..., scrollPx = PlayerPrefs.ribbonScrollPx(context))` once per entry. |
+| `ui/PlayerScreenActions.kt` | `onRibbonScrolled(px)` — writes only when the value actually moved. |
+
+Three details that are load-bearing, do not "simplify" them:
+
+1. **The restore is gated on `maxValue > 0`.** `ScrollState.scrollTo` clamps to
+   `maxValue`, which is 0 until layout runs, so restoring eagerly would silently
+   discard the offset. In a window too wide to scroll the gate never opens and
+   the stored offset simply stays pending for the next narrow one.
+2. **Persisting starts only *after* the restore lands.** A collector started
+   earlier emits the pre-layout `0` and would overwrite the stored offset with
+   the default. Ordering the two phases in one effect is what prevents that.
+3. **It self-corrects.** Hiding tools shrinks `maxValue`; Compose re-clamps
+   `value`; the collector observes the new value and re-persists it. No explicit
+   re-clamp is needed on the customise path.
+
+### Compile break found and fixed on the way
+
+`PlayerScreenControls.kt` used `remember { MutableInteractionSource() }` in
+`RibbonToolItem` with **no** `import androidx.compose.runtime.remember` and no
+wildcard imports — v0.8.9 did not compile. Added. (CI would have caught this;
+worth remembering that it shipped in a committed state.)
+
+---
+
+## 1d. Sub-sync: drift-tracker offset bug (uncommitted)
+
+### How the engine is meant to work
+
+Two tiers, deliberately:
+
+- **Live** (`AudioSyncProcessor`, an `AudioProcessor` on the audio sink): PCM →
+  10 ms feature windows → one soft speech score per 100 ms bin. As the window
+  grows it fires passes on the `SpeechCorrelator.PASS_BINS` schedule (24
+  thresholds, ~18 s for clean pairs, ~4.8 min for hard ones). Each pass runs
+  `SpeechCorrelator.findOffset` on a single-flight worker thread. A lock needs
+  **two consecutive passes agreeing within 0.25 s** (`stableHits >= 2`).
+- **Whole-file** (`SyncFingerprintJob` → `SyncOrchestrator` → `SpeechCorrelator.findJointSync`
+  / `SyncBest` / `CutEnsemble`): decodes the file, fits `(alpha, beta)` and
+  optional piecewise cut segments, persists to Room.
+
+The invariant tying them together is that the applied pair is an affine map
+`audio_time = alpha * cue_time + beta`, which `PlayerActivity` inverts at render
+time as `cueTime = (mediaTime - beta) / alpha`.
+
+### The bug
+
+`DriftTracker.getCorrection()` returned the least-squares **intercept** in both
+the significant-rate and the insignificant-rate branch:
+
+```kotlin
+if (abs(r) < 0.001) return Pair(base, 1f)   // base, not latest
+```
+
+`base` is the offset extrapolated back to `t = 0`, and `t` is **absolute media
+time**. So the branch that had just decided the rate was noise went on to apply
+a drift correction derived from it. With a rate of 0.0009 — 0.09 %, an order of
+magnitude under the 0.1 % significance floor:
+
+| media position | measured offset | applied offset | error |
+|---|---|---|---|
+| 600 s | 2.054 s | 1.460 s | **0.594 s** |
+| 3600 s | 2.054 s | −1.240 s | **3.294 s** |
+
+against a pass-to-pass stability tolerance of 0.25 s. Because
+`AudioSyncProcessor.evaluate` hands the pair straight to `onSyncLocked`, and
+`PlaybackEngine.onSyncLocked` persists it via `onAutoSyncSave` → Room, the error
+was **written to the database and replayed on every later viewing of the file**.
+Subsitles that looked right at the 10-minute mark were seconds out an hour in,
+and stayed that way across restarts.
+
+### The fix
+
+Return `latest` — the offset the correlator actually measured at this position
+— which is the only correct value when there is no drift to correct, and is
+already what the too-little-span branch does. The significant-rate branch still
+returns the intercept, because there the pair *must* describe one consistent
+affine map.
+
+`DriftTrackerTest` (new, 7 cases) pins the applied offset, asserts it no longer
+depends on position within the file, and guards the three policy floors
+(0.1 % significance, 60 s minimum span, 2.5 % clamp) plus `reset()`.
+
+### Nothing else was touched
+
+`PASS_BINS`, `PEAK_MIN`, `PROM_MIN`, the 9.0→7.0 z-floor, the sign convention
+in `findOffset`, `ELIGIBLE_BINS` starting at 160, the pre-roll deadband and the
+refuse-don't-guess gating are all byte-identical. The fix is in the *application*
+of an already-decided result, not in the decision.
+
+Also corrected: `SyncFingerprint`'s KDoc claimed the toggle "defaults OFF"; it
+ships ON (`PlayerSettings.subtitleAutoSyncEnabled = true`), so sync is live out
+of the box.
+
+---
+
 ## 2. What v0.8.8 Contains (Full Sub-Sync Reliability & Player Screen V2 Clean-Sheet Redesign)
 v0.8.8 resolves two major systems:
 1. Complete Sub-Sync Reliability & Deadlock Fixes (root causes from live device logs on Infinix X669 · Android API 31).
@@ -258,4 +384,99 @@ perf) are all still in place. v0.8.7 adds:
 
 - `docs/draw_player_v1.py`, `docs/player_screen_v0_7.png` — local design sketches; keep uncommitted unless explicitly requested.
 - Everything in `tools/` — user's personal tools, hands off.
+
+---
+
+## 7. Sync Envelope Investigation (2026-09-26)
+
+### Headline
+
+**Live subtitle auto-sync could never lock on real content.** Not a tuning
+problem — the speech envelope the correlator consumes was mathematically
+incapable of carrying positional information.
+
+### Root cause
+
+`AudioSyncProcessor.finishWindow()` scored each 10 ms window as
+`energyScore*0.5 + varianceScore*0.3 + zcrScore*0.2`. Neither supporting term
+could vary usefully:
+
+| Term | Problem | Measured |
+|---|---|---|
+| `varianceScore = min(normVar/2, 1)` | Saturates. `normVar = var/max(meanAmp^2,1)` is the inverse crest factor and is >2 for essentially any real signal, so the term is a constant. | mean **0.992**, sd 0.052 |
+| `energyScore` | Denominator `up - uf` collapsed. `up = max(uf+0.0012, peak)` with `peak` floored at `floor+0.00035` while `floor` chased `rms`; in steady state `peak <= uf`, so the divisor became the 0.0012 epsilon and the score read a hard 0 below `floor*1.08`. | **0 for ~70%** of windows |
+| `zcrScore` | Band `0.02..0.15` is in raw crossings/sample, so it is sample-rate dependent, and it is only a coarse 3-level signal. | mean 0.725-0.863 |
+
+Combined effect on the 100 ms bins: the envelope had a **0.39 floor** and
+**100% of bins cleared the 0.3 "hard speech" gate** in `SpeechCorrelator`.
+Pearson r against the subtitle on/off mask therefore topped out at
+**0.18-0.21**, below `PEAK_MIN` (0.30). The engine judged, refused, and
+repeated until the give-up budget ran out — which is exactly the "Syncing..."
+chip that never resolved.
+
+Also found: `lastSpeech` (the 0.72/0.28 smoothing) was written every window
+and **never read** — `accumulateBin(sp)` used the raw score, so the smoothing
+was dead code.
+
+### Fix
+
+RMS placed between an asymmetric quiet floor and loud peak:
+
+```
+floor += (rms - floor) * (if (rms < floor) FLOOR_DOWN else FLOOR_UP)   // 0.06 / 0.0007
+peak  += (rms - peak)   * (if (rms > peak)  PEAK_UP   else PEAK_DOWN) // 0.08 / 0.002
+sp      = ((rms - floor) / max(peak - floor, peak*0.05 + eps)).coerceIn(0, 1)
+```
+
+`floor` drops fast (so silence registers) and rises very slowly (so speech
+cannot drag it up); `peak` attacks fast and releases slowly. Removing the
+zcr and variance terms also deletes three per-sample operations from the
+playback hot path.
+
+### Validation
+
+Ground truth was synthesised from an **independent, non-adaptive VAD** (global
+dB threshold on the same audio) shaped into realistic 0.6-3.0 s cues, then
+shifted by a known amount. This removes all ambiguity from subtitle files.
+`SpeechCorrelator.findOffset` was separately unit-checked against a direct
+correlation implementation (agrees to 4 decimal places, r=0.94-0.97).
+
+Live action, 44.1 kHz, 11 offsets each (-8s..+15s):
+
+| Episode | old | new |
+|---|---|---|
+| Better Call Saul S1E02 | 0/11 | **11/11** |
+| Better Call Saul S1E03 | 0/11 | **11/11** |
+| Better Call Saul S1E05 | 11/11 | **11/11** |
+
+Worst residual **0.1 s** — exactly one correlator bin, i.e. the resolution
+limit. 33/33 known offsets recovered.
+
+Regression test: `core/media/.../sync/SyncEnvelopeTest.kt` (drives the real
+processor on a plain JVM, in the style of `SyncScheduleRegressionTest`),
+plus a silence control so a "lock" cannot be noise.
+
+### Known limitation (not a bug)
+
+Anime (`86` S01) does **not** sync, before or after, and should not:
+
+```
+envelope (@420s)          subtitle on-screen
+| ||||||||||||||||||     ##############################
+. ..................     ##############################
+```
+
+The mix is continuous (envelope pinned near 0.94) and subtitles are on-screen
+~95% of the time. There is no on/off structure for *any* energy-based
+correlator to exploit. Declining to sync is the correct outcome; the whole-file
+fingerprint engine remains the path for such content. Best measured
+correlation on that material is 0.26.
+
+### Harness
+
+`C:\Users\user\AppData\Local\Cline\synctest\` (scratch, not committed):
+`live_sync.js` (1:1 port of the processor + correlator), `sync_v2.js`
+(candidate envelope), `synth.js` (ground-truth end-to-end), `envs.js`
+(envelope discrimination), `diag.js` (feature decomposition), `unit_corr.js`
+(correlator unit check), `ascii.js` (visual alignment check).
 

@@ -32,9 +32,9 @@ import java.util.concurrent.TimeUnit
  * (calls [scheduleSuspending] on a process-global IO scope) so existing
  * call sites keep working; new call sites should prefer the suspend
  * variant. The toggle is the SINGLE source of truth for "should sync
- * run at all" — default OFF matches the spec; the bottom-row sync chip
- * in the player chrome flips it on for every video until the user turns
- * it back off.
+ * run at all" — it ships ON (PlayerSettings.subtitleAutoSyncEnabled
+ * defaults to true, so sync works out of the box) and the bottom-row
+ * sync chip flips it per session; Settings turns it back off.
  */
 object SyncFingerprint {
 

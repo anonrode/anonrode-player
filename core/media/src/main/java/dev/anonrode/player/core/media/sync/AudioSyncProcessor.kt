@@ -10,7 +10,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sqrt
 
 interface SyncListener {
@@ -128,14 +127,11 @@ class AudioSyncProcessor(
     private var windowFillTarget = 0
     private var windowN = 0
     private var wSumSq = 0.0   // Σ x²
-    private var wSumAbs = 0.0  // Σ |x|
-    private var wSumSig = 0.0  // Σ x
-    private var wZcr = 0
-    private var wPrevSign = false
 
+    // Asymmetric AGC state for the energy score; see the companion object for
+    // the coefficients and the measurements that motivated them.
     private var floor = 0.0
     private var peak = 0.0
-    private var lastSpeech = 0.0
 
     private val driftTracker = DriftTracker()
     // Written by the eval worker, reset by the audio thread, read back by
@@ -395,8 +391,8 @@ class AudioSyncProcessor(
         // baseIdx=idx) stays for position-unknown starts.
         baseIdx = if (anchorPosMs >= 0L) (anchorPosMs / 100L).toInt() else 0
         binCount = 0; totalFrames = 0
-        windowN = 0; wSumSq = 0.0; wSumAbs = 0.0; wSumSig = 0.0; wZcr = 0
-        floor = 0.0; peak = 0.0; lastSpeech = 0.0
+        windowN = 0; wSumSq = 0.0
+        floor = 0.0; peak = 0.0
         stableHits = 0; lastOffset = Double.NaN
         passesUsed = 0; gaveUp = false
         // P1-4: a fresh window must also drop the drift history. Without
@@ -453,54 +449,47 @@ class AudioSyncProcessor(
 
     /** Folds one Q15 sample into the running window sums (no allocation). */
     private fun ingestSample(s: Int) {
-        val positive = s >= 0
-        if (windowN == 0) {
-            wSumSq = 0.0; wSumAbs = 0.0; wSumSig = 0.0; wZcr = 0
-            wPrevSign = positive
-        } else if (positive != wPrevSign) {
-            wZcr++
-            wPrevSign = positive
-        }
+        if (windowN == 0) wSumSq = 0.0
         wSumSq += s.toDouble() * s
-        wSumAbs += if (positive) s.toDouble() else -s.toDouble()
-        wSumSig += s
         windowN++
         if (windowN >= windowFillTarget) finishWindow()
     }
 
-    /** Computes the multi-feature speech score for one completed window. */
+    /**
+     * Computes the speech score for one completed window.
+     *
+     * The score is the window's RMS placed between an adaptive quiet floor
+     * and an adaptive loud peak, i.e. "how loud is this window relative to
+     * the range this track actually occupies". That is the feature the
+     * correlator needs: it has to reproduce the subtitle on/off pattern.
+     *
+     * The previous three-term score (energy*0.5 + variance*0.3 + zcr*0.2)
+     * could not. Measured against ground truth on three real episodes, its
+     * variance term saturated at 1.0 and contributed a constant +0.30 to
+     * every window, while the energy term read 0 for ~70% of windows
+     * because its normaliser had collapsed to an epsilon. The resulting
+     * 100 ms bins never dropped below ~0.39, so every bin looked like
+     * "hard speech" and Pearson r against the cue mask topped out near
+     * 0.21 — under PEAK_MIN, so auto-sync silently never engaged. The
+     * zero-crossing and variance accumulators are gone with it, which also
+     * removes three per-sample operations from the playback hot path.
+     */
     private fun finishWindow() {
         val n = windowN
         val rms = sqrt(wSumSq / n)
-        val meanAmp = (wSumAbs / n).toFloat()
-        // Var(x - meanAmp) = E[x²] - 2·meanAmp·E[x] + meanAmp² — identical
-        // to a second pass of (x - meanAmp)² but folded into the one pass
-        // above (values stay far inside double precision at Q15 scale).
-        val variance =
-            (wSumSq / n - 2.0 * meanAmp * (wSumSig / n) + meanAmp.toDouble() * meanAmp).toFloat()
-        val normVar = variance / max(meanAmp * meanAmp, 1f)
-        val zcrNorm = wZcr.toFloat() / n
 
-        val uf = floor * 1.08
-        val up = max(uf + 0.0012, peak)
-        val energyScore = ((rms - uf) / max(up - uf, 0.001)).coerceIn(0.0, 1.0).toFloat()
-        val varianceScore = min(normVar / 2f, 1f)
-        val zcrScore = when {
-            zcrNorm in 0.02f..0.15f -> 1f
-            zcrNorm < 0.02f -> 0.5f
-            else -> max(0f, 1f - (zcrNorm - 0.15f) / 0.2f)
-        }
-
-        val sp = (energyScore * 0.5f + varianceScore * 0.3f + zcrScore * 0.2f).coerceIn(0f, 1f)
-        lastSpeech = sp.toDouble() * 0.72 + lastSpeech * 0.28
-
-        // adapt floor/peak
-        if (floor == 0.0) {
-            floor = rms; peak = rms * 1.9 + 0.0001
+        // Asymmetric AGC. Updating before scoring (rather than after) keeps
+        // the very first window well defined: floor == rms, peak == 2*rms.
+        if (floor <= 0.0) {
+            floor = rms
+            peak = rms * 2.0 + 0.0001
         } else {
-            floor = floor * 0.986 + min(rms, floor * 1.45) * 0.014
-            peak = max(floor + 0.00035, max(peak * 0.992, rms))
+            floor += (rms - floor) * (if (rms < floor) FLOOR_DOWN else FLOOR_UP)
+            peak += (rms - peak) * (if (rms > peak) PEAK_UP else PEAK_DOWN)
         }
+        val headroom = peak - floor
+        val sp = ((rms - floor) / max(headroom, peak * 0.05 + 0.0001))
+            .coerceIn(0.0, 1.0).toFloat()
 
         windowN = 0
         accumulateBin(sp)
@@ -667,5 +656,29 @@ class AudioSyncProcessor(
          * media-position bound.
          */
         private const val BIN_WINDOW = 40 * 10 * 2 + 15 * 60 * 10
+
+        /**
+         * Asymmetric AGC coefficients, applied once per ~10 ms window.
+         *
+         * `floor` chases the QUIET level: it drops fast (FLOOR_DOWN, ~0.17 s)
+         * so genuine silence registers immediately, and rises very slowly
+         * (FLOOR_UP, ~14 s) so it cannot be dragged up by speech.
+         *
+         * `peak` chases the LOUD level: fast attack (PEAK_UP, ~0.13 s), slow
+         * release (PEAK_DOWN, ~5 s).
+         *
+         * Measured on real episodes (see docs/HANDOVER.md, "sync envelope"):
+         * the previous pair — `floor += min(rms, floor*1.45)*0.014` with
+         * `peak` floored at `floor + 0.00035` — let floor track rms, so
+         * `up - uf` collapsed to the 0.0012 epsilon and energyScore read 0 for
+         * ~70% of windows. Combined with a varianceScore that saturated at
+         * 1.0, the 100 ms bins had a 0.39 floor and 100% of them passed the
+         * 0.3 "hard speech" gate, capping Pearson r at ~0.21 — below
+         * PEAK_MIN, so the engine could never lock on real dialogue.
+         */
+        private const val FLOOR_DOWN = 0.06
+        private const val FLOOR_UP = 0.0007
+        private const val PEAK_UP = 0.08
+        private const val PEAK_DOWN = 0.002
     }
 }
