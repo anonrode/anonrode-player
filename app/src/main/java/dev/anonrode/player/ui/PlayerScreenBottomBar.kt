@@ -65,7 +65,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.util.UnstableApi
-import kotlin.math.abs
 
 /* ── Bottom chrome of the player overlay (v0.7.3 curated dock) ────────────
  *
@@ -561,51 +560,6 @@ private fun TransportRow(
                 accent = accent,
                 onClick = { actions.cycleRotateMode() },
             )
-        }
-    }
-}
-
-/** Inline speed selector row (0.5× to 2.0×) toggled smoothly without covering the screen. */
-@Composable
-internal fun SpeedSelectorRow(
-    speeds: List<Float>,
-    selectedSpeed: Float,
-    accent: Color,
-    onSelectSpeed: (Float) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapSm, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        speeds.forEach { sp ->
-            val isSelected = abs(sp - selectedSpeed) < 0.05f
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(
-                        if (isSelected) accent.copy(alpha = 0.25f)
-                        else Color.Black.copy(alpha = 0.6f)
-                    )
-                    .border(
-                        width = 1.dp,
-                        color = if (isSelected) accent else Color.White.copy(alpha = 0.20f),
-                        shape = RoundedCornerShape(999.dp),
-                    )
-                    .clickable { onSelectSpeed(sp) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = speedLabel(sp),
-                    color = if (isSelected) accent else Color.White,
-                    fontSize = 12.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                )
-            }
         }
     }
 }

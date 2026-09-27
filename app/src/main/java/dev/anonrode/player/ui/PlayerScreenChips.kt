@@ -23,8 +23,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
@@ -274,37 +272,6 @@ internal fun TimeSeekButton(
             }
         }
     }
-}
-
-internal enum class EpisodeJumpDirection { PREVIOUS, NEXT }
-
-/** Episode jump — 44dp visual in a 48dp cell; disabled state is visibly
- *  flat (ControlChip's disabled tint, no click response). */
-@Composable
-internal fun EpisodeJumpButton(
-    direction: EpisodeJumpDirection,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    ControlChip(
-        icon = if (direction == EpisodeJumpDirection.PREVIOUS) {
-            Icons.Filled.SkipPrevious
-        } else {
-            Icons.Filled.SkipNext
-        },
-        contentDescription = if (direction == EpisodeJumpDirection.PREVIOUS) {
-            "Previous episode"
-        } else {
-            "Next episode"
-        },
-        accent = Color.White,
-        onClick = onClick,
-        modifier = modifier,
-        size = 44.dp,
-        enabled = enabled,
-        haptic = HapticFeedbackConstants.VIRTUAL_KEY,
-    )
 }
 
 /** 64dp play/pause — the only oversized control in the dock, so the thumb

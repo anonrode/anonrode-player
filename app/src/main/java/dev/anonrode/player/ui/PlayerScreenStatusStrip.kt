@@ -97,16 +97,18 @@ internal fun StatusStrip(
     }
 }
 /**
- * The sync read-out. State machine mirrors [PlayerSubSyncToggle] so the two
- * can never disagree about what the engine is doing:
+ * The sync read-out — the one surface that states what the subtitle-sync
+ * engine is doing, so the answer is legible without opening anything.
+ * Four states derived from [enabled], [running] and [offsetMs] alone:
  *
  *   OFF      → grey dot,   "Sync off"
  *   working  → amber dot,  "Syncing…"
  *   armed    → accent dot, "Sync armed"
  *   locked   → green dot,  "Synced +0.06s"
  *
- * A lock is signalled by a non-zero offset — the same rule the hero chip
- * uses ([liveOffsetMs] moves off 0 when a lock lands, back to 0 on clear).
+ * A lock is signalled by a non-zero offset: [offsetMs] moves off 0 when a
+ * lock lands and back to 0 when it clears. This pill is the sole owner of
+ * that contract — there is no second sync surface to agree with.
  */
 @UnstableApi
 @Composable

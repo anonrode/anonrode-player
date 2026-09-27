@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
@@ -165,47 +164,3 @@ private fun TrayRow(
         }
     }
 }
-
-/**
- * Colour swatch row — used instead of a text row for Colour, because picking
- * a colour from its name is slower than picking it from the colour itself.
- * Selection ring uses the SKIN accent, not white, so it never fights the
- * swatch it is selecting.
- */
-@UnstableApi
-@Composable
-internal fun SubtitleColorSwatchRow(
-    selected: SubtitleColor,
-    accent: Color,
-    onSelect: (SubtitleColor) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        SubtitleColor.entries.forEach { swatch ->
-            val isActive = swatch == selected
-            Box(
-                modifier = Modifier
-                    .height(34.dp)
-                    .clip(CircleShape)
-                    .background(swatch.value)
-                    .border(
-                        width = if (isActive) 2.dp else 1.dp,
-                        color = if (isActive) accent else Color.White.copy(alpha = 0.30f),
-                        shape = CircleShape,
-                    )
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = true, color = accent),
-                    ) {
-                        AppLog.d("STYLE", "selected Colour = ${swatch.label}")
-                        onSelect(swatch)
-                    },
-                contentAlignment = Alignment.Center,
-            ) { }
-        }
-    }
-}
-

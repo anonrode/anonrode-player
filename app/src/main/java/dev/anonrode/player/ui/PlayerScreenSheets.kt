@@ -31,10 +31,10 @@ import dev.anonrode.player.audio.SubtitleStyle
  * (-0.1 / +0.1 / RE-SYNC / STYLE grid, plus the auto-sync OFF escape)
  * and the subtitle style dropdown opened by long-pressing the cue.
  *
- * v0.7.3: the top-left SYNCED chip is retired — the dock's sync HERO chip
- * ([PlayerSubSyncToggle]) carries locked/working/off as its label now,
- * eliminating that layer's `top = 70` collision with the calibration
- * banner (also retired, same reason).
+ * The top-left SYNCED chip is retired — as is the calibration banner that
+ * used to collide with it at `top = 70` / `start = 14`. Sync state is now
+ * read off the status strip above the seek row, which routes here on tap;
+ * this popover is the working surface it opens.
  * ------------------------------------------------------------------------- */
 
 /* ── Sync popover (the -0.1 / +0.1 / RE-SYNC / STYLE / OFF grid) ───────── */
