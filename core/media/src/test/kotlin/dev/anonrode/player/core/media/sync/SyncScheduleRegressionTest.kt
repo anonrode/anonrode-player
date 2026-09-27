@@ -282,4 +282,17 @@ class SyncScheduleRegressionTest {
         assertFalse(p.gaveUp)
         assertEquals(0, listener.noMatchCount)
     }
+
+    @Test
+    fun `rearm clears gaveUp and resets passesUsed on demand`() {
+        val listener = RecordingListener()
+        val p = newProcessor(listener)
+        p.setCues(cues())
+        feed(p, SHALLOW_SECONDS)
+        p.gaveUp = true
+
+        p.rearm(1000L)
+        assertFalse("rearm must clear gaveUp", p.gaveUp)
+        assertEquals("rearm must reset passesUsed", 0, p.passesUsed)
+    }
 }

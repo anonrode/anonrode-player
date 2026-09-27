@@ -9,6 +9,7 @@ import kotlin.math.PI
 import kotlin.math.log10
 import kotlin.math.sin
 import kotlin.math.sqrt
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -109,5 +110,28 @@ class VoiceClarityProcessorTest {
                 "A near-zero separation means the high-pass is not a high-pass.",
             sepDb >= REQUIRED_SEPARATION_DB,
         )
+    }
+
+    @Test
+    fun `multichannel surround audio does not throw and processes all channels`() {
+        val channels = 6 // 5.1 surround sound
+        val p = VoiceClarityProcessor().apply {
+            configure(AudioFormat(48000, channels, C.ENCODING_PCM_16BIT))
+            highPassHz = 80f
+            enabled = true
+        }
+        val frames = 1024
+        val input = ByteBuffer.allocateDirect(frames * channels * 2).order(ByteOrder.nativeOrder())
+        for (i in 0 until frames) {
+            for (c in 0 until channels) {
+                val v = (AMPLITUDE * sin(2.0 * PI * 1000.0 * i / 48000.0)).toInt()
+                    .coerceIn(-32768, 32767)
+                input.putShort(v.toShort())
+            }
+        }
+        input.flip()
+        p.queueInput(input)
+        val out = p.getOutput()
+        assertEquals("output must match input byte count", frames * channels * 2, out.remaining())
     }
 }

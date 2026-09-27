@@ -71,3 +71,8 @@
 -keep class androidx.compose.runtime.** { *; }
 -dontwarn androidx.compose.**
 
+# ONNX Runtime Android JNI entry points (Silero neural VAD)
+-keep class ai.onnxruntime.** { *; }
+-dontwarn ai.onnxruntime.**
+
+

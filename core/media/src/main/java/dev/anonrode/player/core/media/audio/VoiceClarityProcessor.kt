@@ -50,16 +50,14 @@ class VoiceClarityProcessor : AudioProcessor {
     private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
 
     // Direct-form I: two delay lines (x1,x2) and two output memories
-    // (y1,y2), per channel. 2 channels is the Media3 ceiling here.
-    private val x1 = FloatArray(2)
-    private val x2 = FloatArray(2)
-    private val y1 = FloatArray(2)
-    private val y2 = FloatArray(2)
-
-    // High-pass state, per channel. hpY1 is the filter's own output memory;
-    // without it there is no feedback term and the filter is not the
-    // one-pole high-pass it is documented to be. See recompute().
-    private val hpY1 = FloatArray(2)
+    // (y1,y2), per channel. Dynamically resized in configure() so mono,
+    // stereo, 5.1 (6 ch), and 7.1 (8 ch) surround sound never throw.
+    private var x1 = FloatArray(2)
+    private var x2 = FloatArray(2)
+    private var y1 = FloatArray(2)
+    private var y2 = FloatArray(2)
+    private var hpY1 = FloatArray(2)
+    private var frameBuffer = FloatArray(2)
 
     private var b0 = 1f
     private var b1 = 0f
@@ -92,6 +90,17 @@ class VoiceClarityProcessor : AudioProcessor {
             else AudioFormat.NOT_SET
         if (inputFormat != AudioFormat.NOT_SET) {
             sampleRate = inputAudioFormat.sampleRate
+            val ch = inputAudioFormat.channelCount.coerceAtLeast(1)
+            if (x1.size < ch) {
+                x1 = FloatArray(ch)
+                x2 = FloatArray(ch)
+                y1 = FloatArray(ch)
+                y2 = FloatArray(ch)
+                hpY1 = FloatArray(ch)
+            }
+            if (frameBuffer.size < ch) {
+                frameBuffer = FloatArray(ch)
+            }
             recompute()
             // A decoder swap or sample-rate change invalidates the filter
             // memory; starting from zero state avoids a click.
@@ -192,7 +201,7 @@ class VoiceClarityProcessor : AudioProcessor {
         } else {
             val channels = inputFormat.channelCount.coerceAtLeast(1)
             val src = inputBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-            val frame = FloatArray(channels)
+            val frame = if (frameBuffer.size >= channels) frameBuffer else FloatArray(channels)
             // Work in whole frames only; a partial trailing frame is copied
             // through verbatim below (never dropped — dropping bytes would
             // desync the audio clock and stall the video).

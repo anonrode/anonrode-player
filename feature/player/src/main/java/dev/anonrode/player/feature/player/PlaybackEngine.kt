@@ -216,6 +216,17 @@ class PlaybackEngine(
     }
 
     /**
+     * Re-arm the live sync processor on user demand ("Resync now").
+     */
+    fun rearmLiveSync() {
+        val pos = player?.currentPosition ?: 0L
+        syncProcessor.rearm(pos)
+        if (lastSyncCues.isNotEmpty()) {
+            syncProcessor.setCues(lastSyncCues)
+        }
+    }
+
+    /**
      * Listeners that follow the player across rebuilds. External callers
      * register through [addListener]; on every [rebuild] we detach them
      * from the old player and re-attach to the new one. Main-thread only

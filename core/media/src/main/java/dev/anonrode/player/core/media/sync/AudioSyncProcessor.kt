@@ -230,6 +230,26 @@ class AudioSyncProcessor(
     }
 
     /**
+     * Explicitly re-arm the attempt budget on user demand ("Resync now").
+     * Clears gaveUp and resets passesUsed, stableHits, driftTracker, and VAD,
+     * allowing the engine to start a fresh calibration pass immediately.
+     */
+    fun rearm(positionMs: Long = -1L) {
+        passesUsed = 0
+        gaveUp = false
+        locked = false
+        stableHits = 0
+        lastOffset = Double.NaN
+        generation++
+        driftTracker.reset()
+        liveVad?.reanchor()
+        if (positionMs >= 0L) {
+            pendingResetPosition = positionMs
+        }
+        AppLog.d("SYNC", "rearmed live sync on demand")
+    }
+
+    /**
      * Re-anchor the media-time clock WITHOUT discarding the window
      * (v0.8, A-B repeat fix). The old blanket re-anchor on every seek
      * reset the window each loop iteration — bins, pass schedule and all —

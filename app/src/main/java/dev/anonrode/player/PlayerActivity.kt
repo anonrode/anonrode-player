@@ -2392,9 +2392,10 @@ class PlayerActivity : ComponentActivity() {
     private fun onResyncNow() {
         val uri = currentUriStr ?: return
         val app = AnonrodeApp.get(this)
-        // Force-enable live re-lock too — "resync now" implies the user
-        // wants the sync engine active.
+        // Force-enable live re-lock and re-arm budget — "resync now" implies the user
+        // wants both the live audio processor and the fingerprint job active.
         app.engine.setSubSyncEnabled(true)
+        app.engine.rearmLiveSync()
         lifecycleScope.launch {
             try {
                 app.playerSettingsDataStore.updateData {
