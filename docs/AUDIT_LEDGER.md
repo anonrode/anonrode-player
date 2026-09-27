@@ -58,15 +58,15 @@ shipping. That is the point of the method.
 | 7 | Player chrome | `onVideoSizeChanged` destroyed explicit rotation locks | **DONE** `27d3ba7` |
 | 8 | Player chrome | Ribbon scroll state destroyed by chrome auto-hide | **DONE** `27d3ba7` |
 | 9 | Subtitles | `SubtitleParser` allocated ~6–8× file size: `stripTags` ran 8 regex/literal `replace`s per line, `splitLines` copied the whole file twice even with no CR present | **DONE** `01613a3` |
-| 10 | Subtitles | `parseSidecar` returns unsorted cues; callers must remember to sort | **OPEN** |
-| 11 | Subtitles | `Decoded.charset` / `decodeWithCharset` exist for a UI override, nothing calls them | **OPEN** |
-| 12 | Player chrome | `isRebuildingDecoder` captured in a `remember` without being a key | **OPEN** |
+| 10 | Subtitles | `parse` returned cues in file order; the render loop binary-searches and assumed start-sorted input, so out-of-order cues silently never appeared | **DONE** `e044e05` |
+| 11 | Subtitles | `Decoded.charset` / `decodeWithCharset` exist for a "loaded as Big5, tap to change" override — nothing calls them | **OPEN — feature gap, not a bug** |
+| 12 | Player chrome | `isRebuildingDecoder` captured in a `remember` without being a key | **DONE** `27d3ba7` (fixed in the decoder refactor) |
 | 13 | **Video pipeline** | Surface/decoder/aspect/seek path read end to end — sound. `PlayerView` uses a SurfaceView; default z-order puts it behind the window, so Compose overlays and the poster still composite correctly (the code comment's reasoning is wrong, the behaviour is right). | **REVIEWED, SOUND** |
 | 14 | **Audio pipeline** | `VoiceClarityProcessor` "rumble high-pass" was a **low-pass**: flat +6 dB from DC to 1 kHz, −10.8 dB at 20 kHz. Amplified the rumble it claimed to clear, into a hard clamp | **DONE** `a4226a9` |
 | 14b | **Audio pipeline** | `VolumeBoostProcessor` reviewed — buffer sizing, input consumption and clamping all correct | **REVIEWED, SOUND** |
 | 14c | **Audio pipeline** | No `LoadControl` configured; Media3 defaults apply (50 s min/max buffer, 0 s back buffer) | **OPEN — needs on-device data** |
-| 15 | Library / scanner | Not audited | **NOT STARTED** |
-| 16 | Settings | Not audited | **NOT STARTED** |
+| 15 | Library / scanner | All five `scan()` call sites audited — `EpisodeQueue.build`, `fromExplicitUris`, `openVideo`, Settings rescan, `LibraryViewModel` — every one on `Dispatchers.IO`. Observer flow carries `flowOn(Dispatchers.IO)` and its `ContentObserver` only does a non-blocking `trySend`. Cache/TTL/dirty-flag/double-checked locking and the query-failure fallback are correct | **REVIEWED, SOUND** |
+| 16 | Settings | No unclamped indices on restored prefs; the only IO call is the rescan, already on `Dispatchers.IO` | **REVIEWED, SOUND** |
 
 ---
 
