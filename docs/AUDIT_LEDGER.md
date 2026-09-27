@@ -57,7 +57,7 @@ shipping. That is the point of the method.
 | 6 | Player chrome | Decoder chip showed a 2-state boolean over a 3-state engine; taps could no-op | **DONE** `27d3ba7` |
 | 7 | Player chrome | `onVideoSizeChanged` destroyed explicit rotation locks | **DONE** `27d3ba7` |
 | 8 | Player chrome | Ribbon scroll state destroyed by chrome auto-hide | **DONE** `27d3ba7` |
-| 9 | Subtitles | `SubtitleParser` peaks at ~6–8× file size (5 MB ASS ≈ 30–40 MB) | **OPEN** |
+| 9 | Subtitles | `SubtitleParser` allocated ~6–8× file size: `stripTags` ran 8 regex/literal `replace`s per line, `splitLines` copied the whole file twice even with no CR present | **DONE** `01613a3` |
 | 10 | Subtitles | `parseSidecar` returns unsorted cues; callers must remember to sort | **OPEN** |
 | 11 | Subtitles | `Decoded.charset` / `decodeWithCharset` exist for a UI override, nothing calls them | **OPEN** |
 | 12 | Player chrome | `isRebuildingDecoder` captured in a `remember` without being a key | **OPEN** |
