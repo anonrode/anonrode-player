@@ -389,7 +389,22 @@ perf) are all still in place. v0.8.7 adds:
 
 ## 7. Sync Envelope Investigation (2026-09-26)
 
-### Headline
+> **RETRACTED.** The conclusion below was wrong. The energy envelope was
+> replaced with an energy-only detector; that is the option `docs/SUBSYNC.md`
+> section 5.3 already records as failing on C-drama content
+> ("Score 0.124, margin 0.003, lockable=false ... Energy-based VAD is
+> insufficient for C-drama content"). The change has been reverted in
+> `5160082`. `docs/SUBSYNC.md`, `tools/vad_sim.py` and the commit history are
+> the authoritative context for this engine; this section is kept only so the
+> wrong turn is not repeated.
+>
+> The measurements taken were real but sampled the wrong content class.
+> Better Call Saul has clean speech/gap structure, where an energy envelope
+> scores 33/33. The failure mode only appears on dialogue over continuous
+> music — which is the Growling Tiger, C-drama and anime material in this
+> library. **A pass on the easy class is not evidence about the hard one.**
+
+### What the original note claimed (do not rely on this)
 
 **Live subtitle auto-sync could never lock on real content.** Not a tuning
 problem — the speech envelope the correlator consumes was mathematically

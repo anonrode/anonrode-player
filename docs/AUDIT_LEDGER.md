@@ -26,6 +26,15 @@ consistency check, and CI is the real gate.
 have personally re-read in the source, it does not go in the report. Several
 early claims turned out to be wrong on inspection and were dropped.
 
+**Standing rule, added after a retraction:** before changing any engine that
+has a `docs/` note, a `tools/` harness, or a test corpus, read those first.
+`docs/SUBSYNC.md` and `tools/` already recorded that energy-only VAD fails on
+C-drama, and `tools/vad_sim.py` already existed to build a better detector.
+I changed that engine without reading any of it, on measurements from the
+wrong content class. The retraction is in HANDOVER section 7. The general
+lesson: a clean synthetic or easy-content pass is not evidence about the
+content the app is actually used on.
+
 ---
 
 ## Verification method that has actually worked
