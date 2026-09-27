@@ -56,11 +56,25 @@ class VoiceClarityProcessor : AudioProcessor {
     private val y1 = FloatArray(2)
     private val y2 = FloatArray(2)
 
+    // High-pass state, per channel. hpY1 is the filter's own output memory;
+    // without it there is no feedback term and the filter is not the
+    // one-pole high-pass it is documented to be. See recompute().
+    private val hpY1 = FloatArray(2)
+
     private var b0 = 1f
     private var b1 = 0f
     private var b2 = 0f
     private var a1 = 0f
     private var a2 = 0f
+
+    /**
+     * One-pole high-pass coefficients: y = hpAlpha*y1 + hpK*(x - x1).
+     *
+     * These used to live at FILE level, below the class's closing brace, so
+     * every instance shared them, and `hpB0` was assigned but never read.
+     */
+    private var hpAlpha = 0f
+    private var hpK = 0f
 
     /**
      * Reused output buffer, grown on demand. This runs on the render
@@ -133,8 +147,19 @@ class VoiceClarityProcessor : AudioProcessor {
         val rc = 1.0 / (2.0 * PI * hp)
         val dt = 1.0 / sr
         val alphaHp = rc / (rc + dt)
-        hpA1 = (-alphaHp).toFloat()
-        hpB0 = (1.0 - alphaHp).toFloat()
+        // Normalised one-pole high-pass:
+        //   y[n] = alpha*y[n-1] + ((1+alpha)/2) * (x[n] - x[n-1])
+        // H(z) = ((1+alpha)/2) * (1 - z^-1) / (1 - alpha*z^-1), which is
+        // unity in the passband and -6 dB/oct below the corner.
+        //
+        // The previous coefficients produced y = x + alpha*x_prev, i.e.
+        // H(z) = 1 + alpha*z^-1, whose zero sits at z = -alpha ~ Nyquist.
+        // That is a LOW-pass: measured +5.97 dB from DC through 1 kHz and
+        // -10.8 dB at 20 kHz, so it amplified the rumble it claimed to clear
+        // and fed that straight into the hard clamp. It also never applied
+        // any output gain, which is what the dead `hpB0` was for.
+        hpAlpha = alphaHp.toFloat()
+        hpK = ((1.0 + alphaHp) / 2.0).toFloat()
     }
 
 
@@ -143,6 +168,7 @@ class VoiceClarityProcessor : AudioProcessor {
         java.util.Arrays.fill(x2, 0f)
         java.util.Arrays.fill(y1, 0f)
         java.util.Arrays.fill(y2, 0f)
+        java.util.Arrays.fill(hpY1, 0f)
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
@@ -174,9 +200,10 @@ class VoiceClarityProcessor : AudioProcessor {
             for (f in 0 until wholeFrames) {
                 for (c in 0 until channels) frame[c] = src.short.toFloat()
                 for (c in 0 until channels) {
-                    // 1) rumble high-pass
-                    var v = frame[c] - hpA1 * x1[c]
+                    // 1) rumble high-pass (normalised one-pole)
+                    val v = hpK * (frame[c] - x1[c]) + hpAlpha * hpY1[c]
                     x1[c] = frame[c]
+                    hpY1[c] = v
                     // 2) dialogue high-shelf (transposed direct form II)
                     val outV = b0 * v + y2[c]
                     y2[c] = b1 * v - a1 * outV + y1[c]
@@ -219,6 +246,3 @@ class VoiceClarityProcessor : AudioProcessor {
         // reset() deliberately (same contract as VolumeBoostProcessor).
     }
 }
-
-    private var hpA1 = 0f
-    private var hpB0 = 1f
