@@ -45,7 +45,7 @@ class SubtitleDecoderTest {
     /** Japanese anime subtitles are the case GB18030 was swallowing. */
     @Test
     fun `shift-jis is detected as shift-jis not gb18030`() {
-        val text = "これは日本語の字幕です。セリフのテストです。よろしくお願いします。" * 3
+        val text = "これは日本語の字幕です。セリフのテストです。よろしくお願いします。".repeat(3)
         assertEquals("Shift_JIS", detect(text, "Shift_JIS"))
         // and the text must come back intact, not mojibake
         assertEquals(text, SubtitleDecoder.decode(encode(text, "Shift_JIS")))
@@ -53,14 +53,14 @@ class SubtitleDecoderTest {
 
     @Test
     fun `euc-kr is detected as euc-kr not gb18030`() {
-        val text = "이것은 한국어 자막 테스트입니다. 오늘 날씨가 좋습니다." * 3
+        val text = "이것은 한국어 자막 테스트입니다. 오늘 날씨가 좋습니다.".repeat(3)
         assertEquals("EUC-KR", detect(text, "EUC-KR"))
         assertEquals(text, SubtitleDecoder.decode(encode(text, "EUC-KR")))
     }
 
     @Test
     fun `big5 is detected as big5 not gb18030`() {
-        val text = "這是繁體中文字幕的測試內容。今天天氣很好。" * 3
+        val text = "這是繁體中文字幕的測試內容。今天天氣很好。".repeat(3)
         assertEquals("Big5", detect(text, "Big5"))
         assertEquals(text, SubtitleDecoder.decode(encode(text, "Big5")))
     }
@@ -72,7 +72,7 @@ class SubtitleDecoderTest {
      */
     @Test
     fun `simplified chinese decodes to the right characters`() {
-        val text = "这个是简体中文字幕的测试内容。我们一起去看电影吧。" * 3
+        val text = "这个是简体中文字幕的测试内容。我们一起去看电影吧。".repeat(3)
         assertEquals(text, SubtitleDecoder.decode(encode(text, "GBK")))
         assertEquals(text, SubtitleDecoder.decode(encode(text, "GB18030")))
     }
@@ -84,7 +84,7 @@ class SubtitleDecoderTest {
      */
     @Test
     fun `latin text with accents is not claimed by a cjk charset`() {
-        val text = "Le sous-titre doit rester lisible ici. Café à côté. " * 6
+        val text = "Le sous-titre doit rester lisible ici. Café à côté. ".repeat(6)
         val out = SubtitleDecoder.decodeWithCharset(encode(text, "ISO-8859-1"))
         assertTrue("got ${out.charset}", out.charset == "windows-1252" || out.charset == "ISO-8859-1")
         assertEquals(text, out.text)
