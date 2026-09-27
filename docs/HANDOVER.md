@@ -13,11 +13,11 @@ _Date: 2026-09-26 · Written after the v0.8.8 release + the v0.8.9 functional pa
 
 | Thing | State |
 |---|---|
-| Latest release | **v0.8.8** on GitHub Releases (tag `v0.8.8`) |
+| Latest release | **v0.8.9** on GitHub Releases (tag `v0.8.9`) |
 | APKs | 10 assets attached automatically by `publish_release.yaml` (arm64-v8a / armeabi-v7a / x86 / x86_64 / universal × release-with-debug-signing + debug) |
 | CI Status | Verified via GitHub Actions CI (`android_build` and `publish_release`) |
-| Target APK to install | `anonrode-player-v0.8.8-app-arm64-v8a-releaseWithDebugSigning.apk` (installs cleanly over v0.8.7 / v0.8.6 without data loss) |
-| Release URL | https://github.com/anonrode/anonrode-player/releases/tag/v0.8.8 |
+| Target APK to install | `anonrode-player-v0.8.9-app-arm64-v8a-releaseWithDebugSigning.apk` (installs cleanly over v0.8.8 / v0.8.7 without data loss) |
+| Release URL | https://github.com/anonrode/anonrode-player/releases/tag/v0.8.9 |
 
 ---
 

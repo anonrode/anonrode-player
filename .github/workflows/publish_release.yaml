@@ -54,6 +54,16 @@ jobs:
             **/build/test-results/testDebugUnitTest/**
             **/build/reports/tests/testDebugUnitTest/**
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run ONNX VAD sync engine verification
+        run: |
+          python -m pip install "numpy<2" onnxruntime
+          python .github/scripts/sync_vad_eval.py
+
       - name: Build release APKs (stable shared signing key)
         run: ./gradlew assembleReleaseWithDebugSigning assembleDebug --stacktrace
 

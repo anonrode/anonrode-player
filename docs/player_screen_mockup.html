@@ -3,419 +3,638 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Anonrode Player — Player Screen (exact)</title>
+<title>Anonrode Player — Player Screen Mockup (873×393dp)</title>
 <style>
-/* EXACT SPEC PORT — values lifted from the Kotlin source.
-   Scale: 1dp = 1.5px (S=1.5). Frame 873dp x 393dp = a real phone in
-   landscape (1080x2400 @ 2.75 density -> 393x873dp portrait, rotated). */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ANONRODE PLAYER — PLAYER SCREEN MOCKUP
+   Frame: 873 × 393 dp landscape (measured from the reference screenshots,
+   which are 1612 × 720 px ⇒ 873/1612 = 393/720 = 0.5415 dp/px).
+
+   Every offset below was measured off Screenshot_20260925-214414.jpg by
+   cropping native-resolution strips and scanning raw pixel rows/columns for
+   the first/last non-black sample. Sizes in *bold* comments are taken from
+   the Compose source (PlayerScreenControls.kt / PlayerScreenBottomBar.kt /
+   PlayerDimens.kt), which is the authority for component internals.
+
+   Measured geometry (dp, origin = top-left of the 873×393 frame):
+     status bar text centre ......... 13
+     title row icon centre .......... 51
+     ribbon chip top / centre ...... 90 / 107   (chip 34dp, icon 18dp)
+     ribbon label top .............. 127         (9sp, 3dp gap after chip)
+     video stage ................... top 88, height 214
+     seek track centre ............. 329
+     transport icon centre ......... 369
+   ═══════════════════════════════════════════════════════════════════════ */
+
 :root{
-  --S: 1.5px;
-  --gap-xs: calc(4 * var(--S));
-  --gap-sm: calc(8 * var(--S));
-  --gap-md: calc(12 * var(--S));
-  --gap-lg: calc(16 * var(--S));
-  --touch-min: calc(48 * var(--S));
-  --chip-visual: calc(40 * var(--S));
-  --chip-md: calc(48 * var(--S));
-  --play-big: calc(64 * var(--S));
-  --glyph-md: calc(22 * var(--S));
-  --glyph-play: calc(32 * var(--S));
-  --skip-w: calc(48 * var(--S));
-  --skip-h: calc(44 * var(--S));
-  --pill-h: calc(40 * var(--S));
-  --time-label-min-w: calc(52 * var(--S));
-  --accent: #2563EB;
-  --accent-rgb: 37,99,235;
-  --sync-locked: #49D6A0;
-  --sync-running: #FFC247;
-  --active-dot: #FF3B30;
-  --ab-amber: #FFB300;
+  /* ── measured layout ─────────────────────────────────────────────────── */
+  --frame-w: 873px;
+  --frame-h: 393px;
+  --status-h: 26px;
+  --title-centre: 51px;
+  --ribbon-top: 90px;      /* chip top edge                               */
+  --chip: 34px;            /* PlayerScreenControls.kt: Modifier.size(34.dp)*/
+  --chip-icon: 18px;       /* …Modifier.size(18.dp)                      */
+  --chip-bg: rgba(255,255,255,.12);
+  --chip-bg-on: rgba(0,169,224,.28);   /* accent.copy(alpha = 0.28f)      */
+  --chip-ring: #00A9E0;
+  --tool-w: 56px;          /* …widthIn(min = 56.dp)                      */
+  --tool-gap: 4px;         /* Arrangement.spacedBy(PlayerDimens.gapXs)   */
+  --label-size: 9px;       /* …fontSize = 9.sp                           */
+  --label-lh: 12px;
+  --badge-size: 11px;      /* …badgeText fontSize = 11.sp, Bold          */
+  --dot: 6px;              /* hasActiveDot Box(Modifier.size(6.dp))      */
+  --dot-colour: #FF3B30;
+  --track-h: 2.5px;        /* measured: 4px native / 1.846                */
+  --thumb: 15px;           /* measured: 24px native / 1.846               */
+  --accent: #00A9E0;
+  --bg: #000;
+  --fg: #fff;
+  --fg-dim: rgba(255,255,255,.85);  /* label Color.White.copy(alpha=0.85) */
+  --time-fg: rgba(255,255,255,.92);
+  --track-bg: #4a4a4a;
+  --ink: #e8e8e8;
+  --ink-dim: #8a8a8a;
+  --panel: #101010;
+  --panel-2: #171717;
+  --hair: #262626;
 }
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{background:#07080B;font-family:Roboto,"Helvetica Neue",Arial,sans-serif;
-  -webkit-font-smoothing:antialiased;padding:28px 20px 60px}
 
-.stage{display:flex;flex-direction:column;align-items:center;gap:22px;margin-bottom:44px}
-.stage-label{color:#8A93A6;font:600 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;
-  text-transform:uppercase}
-.phone{position:relative;width:calc(873 * var(--S));height:calc(393 * var(--S));
-  border-radius:calc(14 * var(--S));background:#000;overflow:hidden;
-  box-shadow:0 0 0 calc(2*var(--S)) #23262E, 0 24px 60px rgba(0,0,0,.65)}
+*{ box-sizing:border-box; }
+html,body{ margin:0; padding:0; background:#0b0b0b; color:var(--ink);
+  font-family:Roboto,"Helvetica Neue",Arial,system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased; }
 
-/* the "video frame" stand-in */
-.video{position:absolute;inset:0;
-  background:radial-gradient(120% 90% at 22% 18%, #2C3E5C 0%, rgba(44,62,92,0) 55%),
-             radial-gradient(90% 80% at 82% 78%, #6B4A2E 0%, rgba(107,74,46,0) 60%),
-             linear-gradient(168deg,#141A24 0%,#0C1016 52%,#1A1410 100%)}
-.video::after{content:"";position:absolute;inset:0;
-  background:radial-gradient(38% 46% at 36% 62%, rgba(255,196,140,.16), rgba(255,196,140,0) 70%),
-             radial-gradient(30% 34% at 68% 40%, rgba(140,190,255,.13), rgba(140,190,255,0) 70%)}
+/* ── page furniture ──────────────────────────────────────────────────── */
+.page{ max-width:1180px; margin:0 auto; padding:28px 20px 72px; }
+.page > header{ margin-bottom:26px; }
+.page h1{ font-size:22px; font-weight:600; margin:0 0 6px; letter-spacing:.2px; }
+.page h2{ font-size:15px; font-weight:600; margin:38px 0 6px; letter-spacing:.3px;
+  text-transform:uppercase; color:#cfcfcf; }
+.page p{ margin:0 0 10px; font-size:13.5px; line-height:1.62; color:#b9b9b9; max-width:78ch; }
+.page code{ background:#1c1c1c; border:1px solid #2b2b2b; border-radius:4px;
+  padding:1px 5px; font-size:12.5px; color:#d7d7d7;
+  font-family:ui-monospace,"SF Mono",Consolas,monospace; }
+.legend{ margin:16px 0 0; padding:0; list-style:none; font-size:12.5px; color:#9a9a9a; }
+.legend li{ margin:0 0 4px; }
+.legend b{ color:#cfcfcf; font-weight:600; }
 
-/* TOP BAR — scrim BEFORE insets; padding(h gapSm 8, v gapXs 4) */
-.topbar{position:absolute;top:0;left:0;right:0;z-index:20;
-  background:linear-gradient(180deg, rgba(0,0,0,.85) 0%, rgba(0,0,0,0) 100%);
-  padding:var(--gap-sm) var(--gap-sm) var(--gap-xs);
-  display:flex;flex-direction:column;gap:var(--gap-xs)}
-.statusbar{position:absolute;top:0;left:0;right:0;height:calc(24*var(--S));z-index:40;
-  display:flex;align-items:center;justify-content:space-between;
-  padding:0 calc(16*var(--S));color:rgba(255,255,255,.92);
-  font:600 calc(13*var(--S))/1 Roboto,sans-serif;pointer-events:none}
-/* nav-bar inset (drawn for reference; the bars pad around it) */
-.navbar{position:absolute;bottom:0;left:0;right:0;height:calc(20*var(--S));z-index:40;
-  display:flex;align-items:center;justify-content:center;pointer-events:none}
-.navbar::after{content:"";width:calc(120*var(--S));height:calc(4*var(--S));
-  border-radius:999px;background:rgba(255,255,255,.35)}
-.row1{display:flex;align-items:center;width:100%}
-.ibtn{width:var(--touch-min);height:var(--touch-min);flex:0 0 auto;display:grid;
-  place-items:center;color:#fff;cursor:pointer}
-.ibtn svg{width:calc(24*var(--S));height:calc(24*var(--S))}
-.title{flex:1 1 auto;min-width:0;padding:0 var(--gap-xs);color:#fff;
-  font-size:calc(14*var(--S));font-weight:500;white-space:nowrap;overflow:hidden;
-  text-overflow:ellipsis}
-/* ControlChip: 48dp cell, 40dp painted circle, 22dp glyph */
-.chip{width:var(--touch-min);height:var(--touch-min);flex:0 0 auto;display:grid;
-  place-items:center;cursor:pointer}
-.chip i{display:grid;place-items:center;width:var(--chip-visual);height:var(--chip-visual);
-  border-radius:50%;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.20)}
-.chip svg{width:var(--glyph-md);height:var(--glyph-md);color:#fff}
-.chip.sel i{background:rgba(var(--accent-rgb),.20);border-color:rgba(var(--accent-rgb),.65)}
-.chip.sel svg{color:var(--accent)}
+.scene{ margin:0 0 30px; }
+.scene > .cap{ display:flex; flex-wrap:wrap; align-items:baseline; gap:10px;
+  margin:0 0 9px; }
+.scene .cap b{ font-size:13.5px; font-weight:600; color:#e2e2e2; }
+.scene .cap span{ font-size:12px; color:#8d8d8d; }
+.scene .cap .tag{ font-size:10.5px; font-weight:700; letter-spacing:.7px;
+  text-transform:uppercase; color:#0b0b0b; background:var(--accent);
+  border-radius:3px; padding:2px 6px; }
+.scene .cap .tag.warn{ background:#E0A030; }
+.scene .cap .tag.ref{ background:#7A7A7A; }
 
-/* TextPill: 48dp cell, pillH 40dp inner, 13sp SemiBold */
-.tpill{height:var(--touch-min);padding:0 var(--gap-xs);display:flex;align-items:center;
-  cursor:pointer;flex:0 0 auto}
-.tpill span{height:var(--pill-h);display:flex;align-items:center;
-  padding:0 calc(10*var(--S));border-radius:999px;background:rgba(0,0,0,.35);
-  border:1px solid rgba(255,255,255,.20);color:#fff;font-size:calc(13*var(--S));
-  font-weight:600;letter-spacing:.2px}
-.tpill.sel span{background:rgba(var(--accent-rgb),.20);
-  border-color:rgba(var(--accent-rgb),.65);color:var(--accent)}
+.hint{ margin-top:8px; font-size:12px; color:#7d7d7d; display:flex;
+  flex-wrap:wrap; gap:14px; align-items:center; }
+.hint label{ display:inline-flex; align-items:center; gap:7px; }
+.hint input[type=range]{ width:190px; accent-color:var(--accent); }
+.hint .val{ font-family:ui-monospace,Consolas,monospace; color:#9fb8c4;
+  min-width:118px; display:inline-block; }
+/* ═══════════════════════════════════════════════════════════════════════
+   THE DEVICE FRAME
+   873 × 393 dp. The video stage is a layer UNDER the chrome (the ribbon
+   labels and chips are drawn on top of the picture, exactly as in the
+   reference capture), so the stage is declared before the chrome.
+   ═══════════════════════════════════════════════════════════════════════ */
+.frame{
+  position:relative;
+  width:var(--frame-w); height:var(--frame-h);
+  background:var(--bg); overflow:hidden;
+  border-radius:2px;
+  font-size:12px; line-height:1.2;
+  box-shadow:0 0 0 1px #2a2a2a;
+  isolation:isolate;
+}
+/* portrait variant — same chrome, 411 × 893 dp */
+.frame.portrait{ width:411px; height:893px; }
 
-/* RIBBON — Row(horizontalScroll, spacedBy gapXs 4) */
-.ribbon{display:flex;align-items:center;gap:var(--gap-xs);width:100%;overflow:hidden;
-  padding:calc(2*var(--S)) 0}
-/* RibbonToolItem: widthIn(min 56dp) · 34dp circle · 18dp glyph · 9sp label + 3dp */
-.tool{flex:0 0 auto;width:calc(56*var(--S));display:flex;flex-direction:column;
-  align-items:center;padding:var(--gap-xs) calc(2*var(--S));cursor:pointer}
-.tool .orb{position:relative;width:calc(34*var(--S));height:calc(34*var(--S));
-  border-radius:50%;display:grid;place-items:center;
-  background:rgba(255,255,255,.12);border:0 solid transparent}
-.tool.sel .orb{background:rgba(var(--accent-rgb),.28);border:1px solid var(--accent)}
-.tool svg{width:calc(18*var(--S));height:calc(18*var(--S));color:#fff}
-.tool.sel svg{color:var(--accent)}
-.tool.badge .orb{font-size:calc(11*var(--S));font-weight:700;color:#fff}
-.tool.sel.badge .orb{color:var(--accent)}
-.tool .orb .dot{position:absolute;top:calc(1*var(--S));right:calc(1*var(--S));
-  width:calc(6*var(--S));height:calc(6*var(--S));border-radius:50%;
-  background:var(--active-dot)}
-.tool .lab{margin-top:calc(3*var(--S));font-size:calc(9*var(--S));font-weight:500;
-  color:rgba(255,255,255,.85);white-space:nowrap;max-width:100%;overflow:hidden;
-  text-overflow:ellipsis}
-.tool.sel .lab{color:var(--accent)}
+/* ── video layer ─────────────────────────────────────────────────────── */
+.stage{ position:absolute; left:0; right:0; top:88px; height:214px;
+  display:flex; align-items:center; justify-content:center; }
+.picture{ position:relative; overflow:hidden; background:#050505;
+  box-shadow:0 0 0 1px rgba(255,255,255,.045); }
+.picture .fill{ position:absolute; inset:0; }
+/* a stand-in "frame" so the mockup reads without shipping the film */
+.picture .fill::after{ content:""; position:absolute; inset:0;
+  background:
+    radial-gradient(120% 90% at 28% 34%, #4b4238 0%, #241f1b 46%, #0d0b0a 100%),
+    linear-gradient(180deg,#000 0%,#000 100%); }
+.picture .fill::before{ content:""; position:absolute; inset:0;
+  background:linear-gradient(115deg,rgba(255,255,255,.07) 0 18%,
+    transparent 18% 62%, rgba(255,255,255,.045) 62% 78%, transparent 78%); }
+.picture .ar{ position:absolute; right:6px; bottom:5px; font-size:9px;
+  letter-spacing:.4px; color:rgba(255,255,255,.5);
+  font-family:ui-monospace,Consolas,monospace; }
+/* the forced-aspect surface carries a hairline so the letterbox is visible */
+.picture.forced{ box-shadow:0 0 0 1px rgba(255,255,255,.10); }
 
-.night{position:absolute;inset:0;z-index:15;background:rgba(255,152,0,.25);display:none}
+/* ── status bar (system, 26dp) ───────────────────────────────────────── */
+.status{ position:absolute; left:0; right:0; top:0; height:26px;
+  display:flex; align-items:center; padding:0 34px 0 14px; color:#fff; }
+.status .clock{ font-size:10px; font-weight:500; letter-spacing:.1px; }
+.status .right{ margin-left:auto; display:flex; align-items:center; gap:5px; }
+.status .right svg{ height:11px; width:auto; fill:#fff; opacity:.95; }
+.status .bat{ display:flex; align-items:center; gap:2px; font-size:8.5px;
+  font-weight:600; }
+.status .bat .shell{ width:17px; height:9px; border:1.2px solid #fff;
+  border-radius:2px; padding:1px; position:relative; }
+.status .bat .shell::after{ content:""; position:absolute; right:-2.6px;
+  top:2.4px; width:1.6px; height:4px; background:#fff; border-radius:0 1px 1px 0; }
+/* ── title row (38dp, icon centre 51dp) ──────────────────────────────── */
+.title{ position:absolute; left:0; right:0; top:32px; height:38px;
+  display:flex; align-items:center; padding:0 22px 0 12px; }
+.title .back{ width:22px; height:22px; fill:var(--fg); flex:0 0 22px; }
+.title .name{ margin-left:18px; font-size:13px; font-weight:500; color:#fff;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.title .spacer{ flex:1 1 auto; }
+.title .chip{ width:40px; height:40px; display:flex; align-items:center;
+  justify-content:center; }
+.title .chip svg{ width:22px; height:22px; fill:var(--fg); }  /* glyphMd 22dp */
+.title .pill{ min-width:30px; height:22px; padding:0 7px; display:flex;
+  align-items:center; justify-content:center; font-size:10px; font-weight:700;
+  letter-spacing:.4px; color:#fff; border-radius:4px;
+  background:rgba(255,255,255,.13); }
 
-/* SUBTITLE — centred at .5 / .66, bold + black outline */
-.subs{position:absolute;left:50%;top:66%;transform:translate(-50%,-50%);z-index:16;
-  text-align:center;max-width:76%;pointer-events:none}
-.subs span{display:inline-block;color:#fff;font-size:calc(16*var(--S));font-weight:700;
-  line-height:1.28;paint-order:stroke fill;
-  -webkit-text-stroke:calc(3*var(--S)) rgba(0,0,0,.92)}
-/* BOTTOM BAR — scrim first, then insets, then padding
-   (start/end gapLg 16, top gapSm 8, bottom gapXs 4) + navBars */
-.bottom{position:absolute;left:0;right:0;bottom:0;z-index:20;
-  background:linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.85) 100%);
-  padding:var(--gap-sm) var(--gap-lg) var(--gap-lg);
-  display:flex;flex-direction:column;gap:var(--gap-xs)}
+/* ═══════════════════════════════════════════════════════════════════════
+   THE RIBBON  —  PlayerScreenControls.kt:246-262
+     Row(Modifier.fillMaxWidth()
+            .padding(top = 4.dp, bottom = 2.dp)
+            .horizontalScroll(rememberScrollState()),
+         horizontalArrangement = Arrangement.spacedBy(gapXs = 4.dp),
+         verticalAlignment = Alignment.CenterVertically)
+   It is a real horizontal scroller. The mockup mirrors that with a
+   translated track: the offset is clamped to max(0, track − viewport),
+   and the track is draggable with the pointer, the wheel, or the slider.
+   ═══════════════════════════════════════════════════════════════════════ */
+/* 72dp: 4 padding + 34 chip + 3 gap + two 12dp label lines + 4 padding.
+   A two-line label must not be clipped, and the video stage sits under it. */
+.ribbon{ position:absolute; left:0; right:0; top:86px; height:72px;
+  overflow:hidden; touch-action:pan-y; }
+.ribbon .track{ position:absolute; left:0; top:0; display:flex;
+  align-items:flex-start; gap:var(--tool-gap); will-change:transform; }
+.ribbon.settle .track{ transition:transform .18s ease-out; }
 
-/* StatusStrip — 26dp pills, black@46%, 1dp border, 7dp dot, 11.5sp SemiBold */
-.strip{display:flex;align-items:center;gap:var(--gap-xs);margin-bottom:var(--gap-xs)}
-.pill{display:flex;align-items:center;gap:calc(6*var(--S));height:calc(26*var(--S));
-  padding:0 calc(10*var(--S));border-radius:999px;background:rgba(0,0,0,.46);
-  border:1px solid rgba(255,255,255,.10);color:var(--accent);
-  font-size:calc(11.5*var(--S));font-weight:600;white-space:nowrap}
-.pill .sdot{width:calc(7*var(--S));height:calc(7*var(--S));border-radius:50%;
-  background:var(--accent);flex:0 0 auto}
-.pill.locked{color:var(--sync-locked);border-color:rgba(73,214,160,.38)}
-.pill.locked .sdot{background:var(--sync-locked)}
-.pill.running{color:var(--sync-running);border-color:rgba(255,194,71,.38)}
-.pill.running .sdot{background:var(--sync-running)}
-.pill.txt{font-family:"SF Mono",Menlo,Consolas,monospace;min-width:calc(44*var(--S));
-  justify-content:center}
-.pill.txt.emph{color:var(--accent)}
-.spacer{flex:1 1 auto}
+.tool{ flex:0 0 var(--tool-w); width:var(--tool-w);
+  display:flex; flex-direction:column; align-items:center;
+  padding:4px 2px; user-select:none; }
+.tool .chip{ position:relative; width:var(--chip); height:var(--chip);
+  border-radius:50%; background:var(--chip-bg);
+  display:flex; align-items:center; justify-content:center; flex:0 0 auto; }
+.tool .chip svg{ width:var(--chip-icon); height:var(--chip-icon); fill:var(--fg); }
+.tool .chip .badge{ font-size:var(--badge-size); font-weight:700;
+  color:var(--fg); letter-spacing:-.2px; line-height:1; }
+.tool .dot{ position:absolute; top:3px; right:3px; width:var(--dot);
+  height:var(--dot); border-radius:50%; background:var(--dot-colour); }
+/* Labels are TOP-aligned, not bottom-aligned: in the capture "Night Mode"
+   (one line) and "Customise" (line one of two) share a baseline, and
+   "Items" simply hangs below. `white-space:nowrap` would push long labels
+   out of their 56dp cell and make "Background Play" collide with the next
+   tool, so the label wraps and the taller cell grows downward. */
+.tool .lbl{ margin-top:3px; font-size:var(--label-size); font-weight:500;
+  color:var(--fg-dim); text-align:center; line-height:var(--label-lh);
+  letter-spacing:.05px; max-width:100%; overflow-wrap:anywhere; }
+.tool.on .chip{ background:var(--chip-bg-on);
+  box-shadow:inset 0 0 0 1px var(--chip-ring); }
+.tool.on .chip svg, .tool.on .chip .badge{ fill:var(--accent); color:var(--accent); }
+.tool.on .lbl{ color:var(--accent); }
 
-/* SeekBarRow — labels 14sp Medium white@75%, min-w 52dp.
-   Track 4dp: base white@22% / buffered white@45% / played accent.
-   A-B pins 3x12dp #FFB300. Thumb 14dp white + 2dp shadow. */
-.seek{display:flex;align-items:center;width:100%}
-.tlabel{color:rgba(255,255,255,.75);font-size:calc(14*var(--S));font-weight:500;
-  min-width:var(--time-label-min-w);white-space:nowrap;cursor:pointer;user-select:none}
-.tlabel.r{text-align:right}
-.trackwrap{flex:1 1 auto;position:relative;height:calc(32*var(--S));
-  margin:0 var(--gap-sm);cursor:pointer}
-.track{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);
-  height:calc(4*var(--S));border-radius:999px;background:rgba(255,255,255,.22)}
-.buf{position:absolute;left:0;top:0;bottom:0;border-radius:999px;
-  background:rgba(255,255,255,.45)}
-.play{position:absolute;left:0;top:0;bottom:0;border-radius:999px;
-  background:var(--accent)}
-.ab{position:absolute;top:50%;transform:translateY(-50%);width:calc(3*var(--S));
-  height:calc(12*var(--S));border-radius:calc(1*var(--S));background:var(--ab-amber);
-  box-shadow:0 0 calc(2*var(--S)) rgba(0,0,0,.6)}
-.thumb{position:absolute;top:50%;width:calc(14*var(--S));height:calc(14*var(--S));
-  border-radius:50%;background:#fff;transform:translate(-50%,-50%);
-  box-shadow:0 calc(2*var(--S)) calc(4*var(--S)) rgba(0,0,0,.5)}
+/* the "more tools" affordance seen at the tail of the ribbon in the capture */
+.tool.more{ flex-basis:26px; width:26px; }
+.tool.more .chip{ background:transparent; }
+.tool.more .chip svg{ width:16px; height:16px; opacity:.6; }
+.tool.more .lbl{ display:none; }
 
-/* TransportRow — SpaceBetween */
-.transport{display:flex;align-items:center;justify-content:space-between;
-  width:100%;margin-top:var(--gap-xs)}
-.center{display:flex;align-items:center;gap:var(--gap-lg)}
-.right{display:flex;align-items:center;gap:var(--gap-sm)}
-/* TimeSeekButton — 48x44 pill, radius 10, accent@22% bg, accent@55% border, 14sp Black */
-.seekbtn{width:var(--chip-md);height:var(--chip-md);display:grid;place-items:center;
-  cursor:pointer}
-.seekbtn i{display:flex;align-items:center;justify-content:center;gap:calc(1*var(--S));
-  width:var(--skip-w);height:var(--skip-h);border-radius:calc(10*var(--S));
-  background:rgba(var(--accent-rgb),.22);border:1px solid rgba(var(--accent-rgb),.55);
-  color:var(--accent);font-size:calc(14*var(--S));font-weight:900;line-height:1;
-  font-style:normal}
-/* BigPlayPauseButton — 64dp, 2dp white border, 32dp glyph */
-.playbtn{width:var(--play-big);height:var(--play-big);border-radius:50%;
-  border:calc(2*var(--S)) solid #fff;display:grid;place-items:center;cursor:pointer}
-.playbtn svg{width:var(--glyph-play);height:var(--glyph-play);color:#fff}
+/* ═══════════════════════════════════════════════════════════════════════
+   SEEK ROW — track centre 329dp.
+   The buffered and played fills are absolutely positioned INSIDE the
+   2.5dp track, never inside the 24dp-tall slot: the slot is touch
+   height, the track is the thin painted line. That was the bug in the
+   previous mockup revision, where both fills stretched to the wrapper.
 
-/* GestureHudPill — black@75%, radius 22, 16/8 padding, 18dp icon */
-.hud{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:30;
-  display:flex;align-items:center;gap:var(--gap-sm);
-  padding:calc(8*var(--S)) calc(16*var(--S));border-radius:calc(22*var(--S));
-  background:rgba(0,0,0,.75);color:#fff;font-size:calc(14*var(--S));font-weight:500;
-  white-space:nowrap}
-.hud svg{width:calc(18*var(--S));height:calc(18*var(--S))}
-/* DoubleTapFlash — 120dp wide column, white@12% */
-.flash{position:absolute;top:0;bottom:0;width:calc(120*var(--S));z-index:18;
-  background:rgba(255,255,255,.12);display:flex;flex-direction:column;
-  align-items:center;justify-content:center;gap:var(--gap-sm);color:#fff}
-.flash svg{width:calc(34*var(--S));height:calc(34*var(--S))}
-.flash b{font-size:calc(14*var(--S));font-weight:500}
-/* AbRepeatChip — 12sp, under the top bar */
-.abchip{position:absolute;left:50%;transform:translateX(-50%);z-index:22;
-  padding:calc(6*var(--S)) calc(12*var(--S));border-radius:999px;
-  background:rgba(0,0,0,.72);border:1px solid rgba(255,176,0,.45);color:#fff;
-  font-size:calc(12*var(--S));white-space:nowrap}
-/* PlayerOverlayToast — #0D0F16@92%, accent@45% border, radius 999 */
-.toast{position:absolute;left:50%;transform:translateX(-50%);z-index:32;
-  padding:calc(10*var(--S)) calc(18*var(--S));border-radius:999px;
-  background:rgba(13,15,22,.92);border:1px solid rgba(var(--accent-rgb),.45);
-  color:#DFFFF4;font-size:calc(14*var(--S));font-weight:600;white-space:nowrap}
-/* LockBadge */
-.lockbadge{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:30;
-  width:calc(72*var(--S));height:calc(72*var(--S));border-radius:50%;
-  background:rgba(0,0,0,.55);display:grid;place-items:center}
-.lockbadge svg{width:calc(30*var(--S));height:calc(30*var(--S));color:#fff}
+   Inset measured off the capture: track x 74 → 722, "14:15" at x 17,
+   "53:08" at x 742, so the trailing margin is 97dp, not the 22dp the
+   leading margin uses — there is a system inset on the trailing edge.
+   ═══════════════════════════════════════════════════════════════════════ */
+.seek{ position:absolute; left:0; right:0; top:317px; height:24px;
+  display:flex; align-items:center; padding:0 97px 0 14px; }
+/* PlayerDimens.timeLabelMinW = 52 */
+.seek .time{ flex:0 0 60px; font-size:10.5px; font-weight:500;
+  color:var(--time-fg); font-variant-numeric:tabular-nums; }
+.seek .time.dur{ padding-left:18px; }
+.seek .slot{ position:relative; flex:1 1 auto; height:24px; }
+.seek .track{ position:absolute; left:0; right:0; top:50%;
+  height:var(--track-h); margin-top:calc(var(--track-h) / -2);
+  background:var(--track-bg); border-radius:99px; overflow:hidden; }
+.seek .track i{ position:absolute; left:0; top:0; bottom:0; display:block; }
+.seek .track .buf{ background:#6f6f6f; }
+.seek .track .play{ background:var(--accent); }
+.seek .thumb{ position:absolute; top:50%; width:var(--thumb); height:var(--thumb);
+  margin:calc(var(--thumb) / -2) 0 0 calc(var(--thumb) / -2);
+  border-radius:50%; background:var(--accent);
+  box-shadow:0 0 0 1px rgba(0,0,0,.35); }
 
-.legend{max-width:1310px;color:#8A93A6;font:13px/1.7 ui-monospace,Menlo,monospace;
-  border-left:2px solid #1F2430;padding-left:16px}
-.legend b{color:#C7CEDB;font-weight:600}
+/* ═══════════════════════════════════════════════════════════════════════
+   TRANSPORT — icon centre 369dp. Lock hard left, aspect + fullscreen
+   hard right, prev/play/next in a 3-slot group on the centre line.
+   ═══════════════════════════════════════════════════════════════════════ */
+.transport{ position:absolute; left:0; right:0; top:358px; height:22px;
+  display:flex; align-items:center; padding:0 22px; }
+.transport .side{ width:22px; height:22px; display:flex; align-items:center;
+  justify-content:center; flex:0 0 22px; }
+.transport .side svg{ width:20px; height:20px; fill:var(--fg); }
+.transport .lock{ width:17px; height:17px; }
+.transport .grow{ flex:1 1 auto; }
+.transport .mid{ flex:0 0 276px; display:flex; align-items:center;
+  justify-content:space-between; }
+.transport .mid .btn{ display:flex; align-items:center; justify-content:center; }
+.transport .mid .prev svg{ width:20px; height:20px; fill:var(--fg); }
+.transport .mid .next svg{ width:20px; height:20px; fill:var(--fg); }
+.transport .mid .play svg{ width:26px; height:26px; fill:var(--fg); }
+.transport .right{ display:flex; align-items:center; gap:8px; }
+
+/* ── transient HUD toast (aspect / speed / hw-swap feedback) ─────────── */
+.hud{ position:absolute; left:50%; top:150px; transform:translateX(-50%);
+  display:flex; align-items:center; gap:9px; padding:9px 16px;
+  background:rgba(0,0,0,.82); border-radius:6px; font-size:12px;
+  color:#fff; font-weight:600; letter-spacing:.3px; white-space:nowrap; }
+.hud svg{ width:17px; height:17px; fill:var(--accent); }
+
+/* ── lock banner ─────────────────────────────────────────────────────── */
+.locknote{ position:absolute; left:50%; bottom:16px; transform:translateX(-50%);
+  font-size:10.5px; letter-spacing:.4px; color:rgba(255,255,255,.55); }
+
+/* Scene 2 reproduces the capture's picture box exactly: measured at
+   390×219dp with its top edge at y=75, i.e. 13dp higher than the default
+   stage — the aspect-locked surface is centred in a stage that starts
+   above the ribbon, not on the default 88dp line. */
+.frame.ref .stage{ top:75px; height:219px; }
+
+/* ── portrait: same chrome, taller stage ─────────────────────────────── */
+.frame.portrait .stage{ top:132px; height:420px; }
+.frame.portrait .ribbon{ top:130px; }
+.frame.portrait .seek{ top:604px; }
+.frame.portrait .transport{ top:648px; }
 </style>
 </head>
 <body>
 
-<svg style="display:none">
-  <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="i-audio" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z" fill="currentColor"/></symbol>
-  <symbol id="i-cc" viewBox="0 0 24 24"><path d="M19 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zM11 11H9.5v-.5h-2v.5H6v1h1.5V13H6v1h1.5v.5h2V14H11v-1h1.5v-1H11zm3.5 3H14v-1h.5v-.5h-2v.5H12v1h.5V13h-.5v1.5h2V14h.5v-1h-.5V13z" fill="currentColor"/></symbol>
-  <symbol id="i-more" viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="currentColor"/></symbol>
-  <symbol id="i-lock-open" viewBox="0 0 24 24"><path d="M4 11h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zm4 0V7a4 4 0 0 1 7.5-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-  <symbol id="i-lock" viewBox="0 0 24 24"><path d="M4 11h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zm4 0V7a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-  <symbol id="i-aspect" viewBox="0 0 24 24"><path d="M19 12h-2v3h-3v2h5v-5zm-1-6H6v5h2V8h8v10h-6v2h6a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2z" fill="currentColor"/></symbol>
-  <symbol id="i-full" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></symbol>
-  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"/></symbol>
-  <symbol id="i-ff" viewBox="0 0 24 24"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" fill="currentColor"/></symbol>
-  <symbol id="i-night" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 14a5 5 0 1 1 0-10 5 5 0 0 1 0 10z" fill="currentColor"/></symbol>
-  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" fill="currentColor"/></symbol>
-  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M10.59 9.17 5.41 4 4 5.41l5.17 5.18 1.42-1.42zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41-1.41 1.42 5.66 5.65L20.5 19.1l-5.67-5.69z" fill="currentColor"/></symbol>
-  <symbol id="i-loop" viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" fill="currentColor"/></symbol>
-  <symbol id="i-vol" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12z" fill="currentColor"/></symbol>
-  <symbol id="i-mute" viewBox="0 0 24 24"><path d="M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.42.05-.63zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25A6.9 6.9 0 0 1 14 18.7v2.06a9 9 0 0 0 3.69-1.53L19.73 21 21 19.73 12 10.73 4.27 3zM12 4 9.91 6.09 12 8.18V4z" fill="currentColor"/></symbol>
-  <symbol id="i-timer" viewBox="0 0 24 24"><path d="M15 1H9v2h6v16H9v2h6a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2zm-4 8H8.5L5 5.5v13L8.5 15H11v-6z" fill="currentColor"/></symbol>
-  <symbol id="i-fx" viewBox="0 0 24 24"><path d="M7 18h2V6H7v12zm-4 0h2V6H3v12zm14-6a4 4 0 0 0-4-4v8a4 4 0 0 0 4-4zm-2-6.3v12.6a5.3 5.3 0 0 0 0-12.6z" fill="currentColor"/></symbol>
-  <symbol id="i-eq" viewBox="0 0 24 24"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z" fill="currentColor"/></symbol>
-  <symbol id="i-cam" viewBox="0 0 24 24"><path d="M9 2 7.17 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3.17L15 2H9zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" fill="currentColor"/></symbol>
-  <symbol id="i-bgp" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9v6a3 3 0 0 0 3 3h1a1 1 0 0 0 1-1v-7a1 1 0 0 0-1-1H5a5 5 0 0 1 10 0h-2a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1a3 3 0 0 0 3-3v-6a9 9 0 0 0-9-9z" fill="currentColor"/></symbol>
-  <symbol id="i-rot" viewBox="0 0 24 24"><path d="M7 2h10v2H7zM5 6h14v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6zm2 2v10h10V8H7z" fill="currentColor"/></symbol>
+<!-- ═══════════════════════════════════════════════════════════════════════
+     ICON SPRITE — Material Symbols, 24×24 viewBox, one <symbol> each.
+     ═══════════════════════════════════════════════════════════════════════ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-bedtime" viewBox="0 0 24 24"><path d="M9.37 5.51A7.4 7.4 0 0 0 9 4c0-1.1.9-2 2-2 1.11 0 1.99.89 1.99 2 0 .3-.06.59-.15.86A6.5 6.5 0 0 1 18.5 11c0-3.53-2.61-6.43-6-6.92V2h1V1H10v1h1v1.09c-.22-.03-.44-.06-.66-.06-.4 0-.79.05-1.17.13.06.18.1.37.13.56.1.24.18.5.25.76.05.17.08.34.11.51.05.3.09.6.13.9.03.18.05.36.06.54zM12 22c5.52 0 10-4.48 10-10 0-.61-.06-1.21-.17-1.79A7.49 7.49 0 0 1 14 12.3c-2.76 0-5-2.24-5-5 0-.34.04-.67.1-.99A7.47 7.47 0 0 0 4 12c0 5.52 4.48 10 8 10z"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></symbol>
+    <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></symbol>
+    <symbol id="i-volume-off" viewBox="0 0 24 24"><path d="M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.796 8.796 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z"/></symbol>
+    <symbol id="i-timer" viewBox="0 0 24 24"><path d="M15 1H9v2h6V1zm-1 13h-2V7h2v7zm4.03-4.97.42-.42A8.962 8.962 0 0 0 12 4a9 9 0 1 0 9 9 8.962 8.962 0 0 0-2.97-3.97zM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></symbol>
+    <symbol id="i-graphic-eq" viewBox="0 0 24 24"><path d="M7 18h2V6H7v12zm4 0h2V6h-2v12zm-8 0h2V6H3v12zm16 0h2V6h-2v12zm-4 0h2V6h-2v12z"/></symbol>
+    <symbol id="i-equalizer" viewBox="0 0 24 24"><path d="M10 20h4V4h-4v16zm-6 0h4v-8H4v8zM16 9v11h4V9h-4z"/></symbol>
+    <symbol id="i-photo-camera" viewBox="0 0 24 24"><path d="M12 12m-3.2 0a3.2 3.2 0 1 0 6.4 0 3.2 3.2 0 1 0-6.4 0"/><path d="M9 2 7.17 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3.17L15 2H9zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10z"/></symbol>
+    <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M12 1a9 9 0 0 0-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7a9 9 0 0 0-9-9z"/></symbol>
+    <symbol id="i-screen-rotation" viewBox="0 0 24 24"><path d="M16.48 2.52c3.27 1.55 5.61 4.72 5.97 8.48h1.5C23.44 4.84 18.29 0 12 0l-.66.03L15.15 3.37l1.33-1.33zM10.23 1.75c-.59-.59-1.54-.59-2.12 0L1.75 8.11c-.59.59-.59 1.54 0 2.12l12.02 12.02c.59.59 1.54.59 2.12 0l6.36-6.36c.59-.59.59-1.54 0-2.12L10.23 1.75zM14.83 21.19 2.81 9.17l6.36-6.36 12.02 12.02-6.36 6.36zM7.52 21.48C4.25 19.94 1.91 16.77 1.55 13L.05 13C.56 18.16 4.71 22 9.88 22l.66-.03L6.17 18.63l1.35 2.85z"/></symbol>
+    <symbol id="i-music-note" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></symbol>
+    <symbol id="i-closed-caption" viewBox="0 0 24 24"><path d="M19 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-2.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/></symbol>
+    <symbol id="i-more-vert" viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></symbol>
+    <symbol id="i-arrow-back" viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1s3.1 1.39 3.1 3.1v2z"/></symbol>
+    <symbol id="i-skip-previous" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6L18 6v12z"/></symbol>
+    <symbol id="i-play-arrow" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></symbol>
+    <symbol id="i-skip-next" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></symbol>
+    <symbol id="i-aspect-ratio" viewBox="0 0 24 24"><path d="M19 12h-2v3h-3v2h5v-5zM7 9h3V7H5v5h2V9zM19 3H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16.01H3V4.99h18v16.01z"/></symbol>
+    <symbol id="i-crop-free" viewBox="0 0 24 24"><path d="M3 9V5c0-1.1.9-2 2-2h4v2H5v4zm16-4h-4v2h4v4h2V5c0-1.1-.9-2-2-2zM5 15H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm16-2h-2v4h-4v2h4c1.1 0 2-.9 2-2v-4z"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></symbol>
+    <symbol id="i-signal" viewBox="0 0 24 24"><path d="M2 22h3.2v-6H2v6zm5.6 0h3.2v-10H7.6v10zM13.2 22h3.2v-14h-3.2v14zM18.8 22H22V2h-3.2v20z"/></symbol>
+  </defs>
 </svg>
-<!-- ════════ STATE 1 · DEFAULT ════════ -->
-<div class="stage">
-  <div class="stage-label">State 1 · default — chrome visible, playing, sync locked</div>
-  <div class="phone">
-    <div class="video"></div>
-    <div class="statusbar"><span>8:41</span><span>▮▮▮ 100%</span></div>
-    <div class="navbar"></div>
 
-    <div class="topbar">
-      <div class="row1">
-        <div class="ibtn"><svg><use href="#i-back"/></svg></div>
-        <div class="title">Growling Tiger And Roaring Dragon 2017 EP07 HD1080P</div>
-        <div class="chip"><i><svg><use href="#i-audio"/></svg></i></div>
-        <div class="chip sel"><i><svg><use href="#i-cc"/></svg></i></div>
-        <div class="tpill sel"><span>HW</span></div>
-        <div class="chip"><i><svg><use href="#i-more"/></svg></i></div>
-      </div>
-      <div class="ribbon">
-        <div class="tool"><div class="orb"><svg><use href="#i-night"/></svg></div><div class="lab">Night Mode</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-edit"/></svg></div><div class="lab">Customise</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-shuffle"/></svg></div><div class="lab">Shuffle</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-loop"/></svg></div><div class="lab">Loop</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-vol"/></svg></div><div class="lab">Mute</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-timer"/></svg></div><div class="lab">Sleep Timer</div></div>
-        <div class="tool badge"><div class="orb">A⮂B</div><div class="lab">A - B Repeat</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-fx"/></svg></div><div class="lab">Audio Effect</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-eq"/></svg></div><div class="lab">Equalizer</div></div>
-        <div class="tool sel badge"><div class="orb">1.5X</div><div class="lab">Speed</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-cam"/></svg></div><div class="lab">Screenshot</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-bgp"/></svg></div><div class="lab">Background</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-rot"/></svg></div><div class="lab">Auto</div></div>
-      </div>
-    </div>
+<div class="page">
 
-    <div class="subs"><span>You really think this is going to work out for you?</span></div>
+<header>
+  <h1>Anonrode Player — Player Screen</h1>
+  <p>Exact-match mockup of the landscape player overlay, rebuilt from the reference
+  captures in <code>C:\Users\user\Downloads\</code>
+  (<code>Screenshot_20260925-214414.jpg</code>, <code>…-214409.jpg</code>,
+  <code>…-214350.jpg</code>, <code>…-140005.jpg</code>) and the screen recording
+  <code>screen-20260925-214743.mp4</code>.</p>
+  <p>The captures are 1612&times;720&nbsp;px, i.e. <b>873&times;393&nbsp;dp</b> at 1.846&nbsp;px/dp.
+  Every offset in the CSS was measured off the native-resolution image by cropping
+  strips and scanning raw pixel rows and columns for the first and last non-black
+  sample. Sizes marked in the comments come from the Compose source, which is the
+  authority for anything inside a component.</p>
+  <ul class="legend">
+    <li><b>FIT</b> (<code>RESIZE_MODE_FIT</code>) &mdash; whole frame visible, never cropped.
+      On a 16:9 source inside the 873&times;214&nbsp;dp stage this is height-constrained:
+      <b>380&times;214&nbsp;dp</b>, pillarboxed with black either side.</li>
+    <li><b>CROP</b> (<code>RESIZE_MODE_ZOOM</code>) &mdash; fills the stage, centre-cropped.</li>
+    <li><b>STR</b> (<code>RESIZE_MODE_FILL</code>) &mdash; stretches to the stage, distorted.</li>
+    <li><b>16:9 / 4:3</b> &mdash; <code>forcedAspect != null</code>, so the surface Box is
+      locked with <code>Modifier.aspectRatio()</code> and the frame is stretched to fill it.</li>
+  </ul>
+</header>
 
-    <div class="bottom">
-      <div class="strip">
-        <div class="pill locked"><i class="sdot"></i>Synced +1.2s</div>
-        <div class="pill txt emph">1.5X</div>
-        <div class="spacer"></div>
-        <div class="pill txt">38:53</div>
-      </div>
-      <div class="seek">
-        <div class="tlabel">14:15</div>
-        <div class="trackwrap">
-          <div class="track"></div>
-          <div class="buf" style="width:38%"></div>
-          <div class="play" style="width:26.7%"></div>
-          <div class="thumb" style="left:26.7%"></div>
-        </div>
-        <div class="tlabel r">53:08</div>
-      </div>
-      <div class="transport">
-        <div class="chip"><i><svg><use href="#i-lock-open"/></svg></i></div>
-        <div class="center">
-          <div class="seekbtn"><i>‹10</i></div>
-          <div class="playbtn"><svg><use href="#i-pause"/></svg></div>
-          <div class="seekbtn"><i>10›</i></div>
-        </div>
-        <div class="right">
-          <div class="chip"><i><svg><use href="#i-aspect"/></svg></i></div>
-          <div class="chip"><i><svg><use href="#i-full"/></svg></i></div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-<!-- ════════ STATE 2 · BOOST + A-B ARMED + AUDIO EFFECT ON ════════ -->
-<div class="stage">
-  <div class="stage-label">State 2 · long-press boost · A-B armed · audio effect on · paused</div>
-  <div class="phone">
-    <div class="video"></div>
-    <div class="statusbar"><span>8:41</span><span>▮▮▮ 100%</span></div>
-    <div class="navbar"></div>
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>1 &mdash; Default: <code>FIT</code>, ribbon at rest</h2>
+<p>Opening state. The whole frame is visible and pillarboxed; the ribbon sits at
+scroll offset 0 with all thirteen tools visible, which is what the recording shows
+at 00:07 and 00:13. The Audio Effect chip carries the red <code>hasActiveDot</code>
+marker because the effect is engaged.</p>
+<div class="scene" data-scene="fit"></div>
 
-    <div class="topbar">
-      <div class="row1">
-        <div class="ibtn"><svg><use href="#i-back"/></svg></div>
-        <div class="title">Growling Tiger And Roaring Dragon 2017 EP07 HD1080P</div>
-        <div class="chip"><i><svg><use href="#i-audio"/></svg></i></div>
-        <div class="chip sel"><i><svg><use href="#i-cc"/></svg></i></div>
-        <div class="tpill sel"><span>HW</span></div>
-        <div class="chip"><i><svg><use href="#i-more"/></svg></i></div>
-      </div>
-      <div class="ribbon">
-        <div class="tool sel"><div class="orb"><svg><use href="#i-night"/></svg></div><div class="lab">Night Mode</div></div>
-        <div class="tool sel"><div class="orb"><svg><use href="#i-edit"/></svg></div><div class="lab">Customise</div></div>
-        <div class="tool sel"><div class="orb"><svg><use href="#i-shuffle"/></svg></div><div class="lab">Shuffle</div></div>
-        <div class="tool sel"><div class="orb"><svg><use href="#i-loop"/></svg></div><div class="lab">Loop All</div></div>
-        <div class="tool sel"><div class="orb"><svg><use href="#i-mute"/></svg></div><div class="lab">Muted</div></div>
-        <div class="tool sel"><div class="orb"><svg><use href="#i-timer"/></svg></div><div class="lab">Sleep Timer</div></div>
-        <div class="tool sel badge"><div class="orb">A⮂B</div><div class="lab">Loop A-B</div></div>
-        <div class="tool sel"><div class="orb"><span class="dot"></span><svg><use href="#i-fx"/></svg></div><div class="lab">Audio Effect</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-eq"/></svg></div><div class="lab">Equalizer</div></div>
-        <div class="tool badge"><div class="orb">1X</div><div class="lab">Speed</div></div>
-        <div class="tool"><div class="orb"><svg><use href="#i-cam"/></svg></div><div class="lab">Screenshot</div></div>
-        <div class="tool sel"><div class="orb"><svg><use href="#i-bgp"/></svg></div><div class="lab">Background</div></div>
-        <div class="tool sel"><div class="orb"><svg><use href="#i-rot"/></svg></div><div class="lab">Landscape</div></div>
-      </div>
-    </div>
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>2 &mdash; Reference capture: forced 16:9, ribbon already scrolled</h2>
+<p>This is the frame in <code>Screenshot_20260925-214414.jpg</code>. Two things are
+worth calling out, because both contradict the naive reading of the screen:</p>
+<ul class="legend">
+  <li><b>The video is small.</b> The measured picture box is
+    <b>390&times;219&nbsp;dp at x&nbsp;242, y&nbsp;75</b> &mdash; exactly 16:9, but nowhere
+    near the 873&nbsp;dp width. The surface is aspect-locked inside the stage rather than
+    filling the frame, so the picture is letterboxed on <i>all four</i> sides. This is
+    the &ldquo;not fullscreen because the aspect was changed&rdquo; case, not a bug.</li>
+  <li><b>The ribbon is clipped on the left and empty on the right.</b> The moon is cut
+    in half at x&nbsp;0 while the last tool ends at x&nbsp;736 with 137&nbsp;dp of clear
+    space behind it. That is a <i>retained scroll offset</i> &mdash; the ribbon was
+    dragged and the position stuck.</li>
+</ul>
+<div class="scene" data-scene="ref" data-ribbon-offset="30"></div>
 
-    <div class="abchip" style="top:calc(143*var(--S))">A = 14:15 — now set B</div>
-    <div class="subs"><span>You really think this is going to work out for you?</span></div>
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>3 &mdash; The ribbon is a real horizontal scroller</h2>
+<p>Drag the ribbon, use the wheel over it, or move the slider. The offset is clamped
+to <code>max(0, track&nbsp;&minus;&nbsp;viewport)</code>, exactly as Compose clamps
+<code>ScrollState</code>.</p>
+<p>Across this 873&nbsp;dp window the track is <b>806&nbsp;dp</b> &mdash; thirteen
+tools at <code>widthIn(min&nbsp;=&nbsp;56.dp)</code> plus 4&nbsp;dp spacing, then the
+trailing &ldquo;more&rdquo; chevron &mdash; which <i>fits</i>. So in landscape the scroll range
+clamps to 0 and the ribbon genuinely cannot move. It overflows the moment the window
+is narrower, which is why the portrait scene below is the one with a real scroll
+range, and why the capture in scene&nbsp;2 can only have come from a build with a
+wider pitch, a larger minimum cell, or more tools enabled. The recorded swipe at
+00:04 and 00:17 is that same overflow in action.</p>
+<div class="scene" data-scene="scroll" data-ribbon-offset="0" data-interactive="1"></div>
 
-    <div class="hud"><svg><use href="#i-ff"/></svg>2.75× speed · ↔ Slide</div>
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>4 &mdash; Transient HUD and lock</h2>
+<p>Tapping the aspect button cycles the zoom and raises the HUD toast for a moment.
+With the lock engaged the transport stays lit but taps stop reaching the surface,
+and the note appears along the bottom.</p>
+<div class="scene" data-scene="lock" data-hud="16:9" data-lock="1"></div>
 
-    <div class="bottom">
-      <div class="strip">
-        <div class="pill running"><i class="sdot"></i>Syncing…</div>
-        <div class="spacer"></div>
-        <div class="pill txt">38:53</div>
-      </div>
-      <div class="seek">
-        <div class="tlabel">14:15</div>
-        <div class="trackwrap">
-          <div class="track"></div>
-          <div class="buf" style="width:38%"></div>
-          <div class="play" style="width:26.7%"></div>
-          <div class="ab" style="left:26.7%"></div>
-          <div class="ab" style="left:34.2%"></div>
-          <div class="thumb" style="left:29.4%"></div>
-        </div>
-        <div class="tlabel r">53:08</div>
-      </div>
-      <div class="transport">
-        <div class="chip sel"><i><svg><use href="#i-lock"/></svg></i></div>
-        <div class="center">
-          <div class="seekbtn"><i>‹10</i></div>
-          <div class="playbtn"><svg><use href="#i-play"/></svg></div>
-          <div class="seekbtn"><i>10›</i></div>
-        </div>
-        <div class="right">
-          <div class="chip sel"><i><svg><use href="#i-aspect"/></svg></i></div>
-          <div class="chip"><i><svg><use href="#i-full"/></svg></i></div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>5 &mdash; Portrait, where the ribbon overflows</h2>
+<p>411&times;893&nbsp;dp. The stage is 411&times;420, so a 16:9 frame is width-constrained
+at 411&times;231&nbsp;dp, and the 806&nbsp;dp ribbon overflows a 411&nbsp;dp window by
+<b>395&nbsp;dp</b> &mdash; a real scroll range, with the tail of the list reachable by
+swiping.</p>
+<div class="scene" data-scene="portrait" data-ribbon-offset="0" data-interactive="1"></div>
 
-<!-- ════════ STATE 3 · LOCKED + NIGHT MODE + DOUBLE-TAP ════════ -->
-<div class="stage">
-  <div class="stage-label">State 3 · controls locked · night mode on · double-tap +10s</div>
-  <div class="phone">
-    <div class="video"></div>
-    <div class="night" style="display:block"></div>
-    <div class="statusbar"><span>8:41</span><span>▮▮▮ 100%</span></div>
-    <div class="navbar"></div>
-    <div class="flash" style="right:0">
-      <svg><use href="#i-ff"/></svg><b>+10s</b>
-    </div>
-    <div class="lockbadge"><svg><use href="#i-lock"/></svg></div>
-    <div class="subs"><span>You really think this is going to work out for you?</span></div>
-    <div class="toast" style="top:calc(32*var(--S))">Audio effect off</div>
-  </div>
-</div>
+</div><!-- /.page -->
 
-<div class="legend">
-  <b>Scale</b> 1dp = 1.5px · frame 873×393dp landscape (1080×2400 @ 2.75 density) ·
-  status bar 24dp · nav bar 20dp · accent <code>#2563EB</code> (default skin)<br>
-  <b>Tokens</b> gapXs 4 · gapSm 8 · gapMd 12 · gapLg 16 · touchMin 48 · chipVisual 40 · playBig 64 ·
-  glyphMd 22 · glyphPlay 32 · skipW/H 48×44 · pillH 40 · timeLabelMinW 52<br>
-  <b>Sync colours</b> locked <code>#49D6A0</code> · running <code>#FFC247</code> · off white@28% ·
-  A-B pin <code>#FFB300</code> · active dot <code>#FF3B30</code> · night scrim <code>#40FF9800</code><br>
-  <b>Sources</b> PlayerDimens.kt · PlayerScreenControls.kt · PlayerScreenBottomBar.kt ·
-  PlayerScreenStatusStrip.kt · PlayerScreenChips.kt · PlayerScreenHud.kt · Theme.kt
-</div>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   MOCKUP BUILDER
+   The ribbon is generated from one ordered list rather than written out
+   five times — that mirrors RibbonToolItem(…) being driven by
+   `ribbonOrder.forEach` in PlayerScreenControls.kt, and it keeps the
+   scroll maths in exactly one place.
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
 
+  /* RibbonTool catalogue. `badge` replaces the icon where the source uses
+     badgeText instead of an ImageVector (A-B Repeat, Speed). */
+  var TOOLS = [
+    { id: 'NIGHT_MODE',      icon: 'i-bedtime',     label: 'Night Mode' },
+    { id: 'CUSTOMISE',       icon: 'i-edit',        label: 'Customise Items' },
+    { id: 'SHUFFLE',         icon: 'i-shuffle',     label: 'Shuffle' },
+    { id: 'LOOP',            icon: 'i-repeat',      label: 'Loop' },
+    { id: 'MUTE',            icon: 'i-volume-off',  label: 'Mute' },
+    { id: 'SLEEP_TIMER',     icon: 'i-timer',       label: 'Sleep Timer' },
+    { id: 'AB_REPEAT',       badge: 'A→B',          label: 'A - B Repeat' },
+    { id: 'AUDIO_EFFECT',    icon: 'i-graphic-eq',  label: 'Audio Effect', dot: true },
+    { id: 'EQUALIZER',       icon: 'i-equalizer',   label: 'Equalizer' },
+    { id: 'SPEED',           badge: '1X',           label: 'Speed' },
+    { id: 'SCREENSHOT',      icon: 'i-photo-camera',label: 'Screenshot' },
+    { id: 'BACKGROUND_PLAY', icon: 'i-headphones',  label: 'Background Play' },
+    { id: 'ROTATION',        icon: 'i-screen-rotation', label: 'Screen Rotation' }
+  ];
+
+  /* Per-scene stage geometry. w/h are the painted picture box in dp. */
+  var SCENES = {
+    fit:      { w: 380, h: 214, mode: 'FIT' },
+    ref:      { w: 390, h: 219, mode: '16:9', ref: true },
+    scroll:   { w: 390, h: 219, mode: '16:9' },
+    lock:     { w: 390, h: 219, mode: '16:9' },
+    portrait: { w: 411, h: 231, mode: 'FIT', portrait: true }
+  };
+
+  function ic(id, cls) {
+    return '<svg class="' + (cls || '') + '" aria-hidden="true"><use href="#' + id + '"/></svg>';
+  }
+
+  function statusBar() {
+    return '<div class="status">' +
+      '<span class="clock">9:44 PM</span><span class="right">' +
+      ic('i-signal') +
+      '<span class="bat"><span>5.54</span>' +
+      '<span class="shell"><span class="fill"></span></span></span>' +
+      '</span></div>';
+  }
+
+  function titleRow(name) {
+    return '<div class="title">' + ic('i-arrow-back', 'back') +
+      '<span class="name">' + name + '</span><span class="spacer"></span>' +
+      '<span class="chip">' + ic('i-music-note') + '</span>' +
+      '<span class="chip">' + ic('i-closed-caption') + '</span>' +
+      '<span class="pill">HW</span>' +
+      '<span class="chip">' + ic('i-more-vert') + '</span></div>';
+  }
+
+  function ribbon() {
+    var html = '<div class="ribbon"><div class="track">';
+    TOOLS.forEach(function (t) {
+      html += '<div class="tool" data-tool="' + t.id + '"><span class="chip">' +
+        (t.badge ? '<span class="badge">' + t.badge + '</span>' : ic(t.icon)) +
+        (t.dot ? '<span class="dot"></span>' : '') + '</span>' +
+        '<span class="lbl">' + t.label + '</span></div>';
+    });
+    html += '<div class="tool more"><span class="chip">' + ic('i-chevron-right') +
+      '</span><span class="lbl">More</span></div>';
+    return html + '</div></div>';
+  }
+  /* Fills sit INSIDE the thin track, never inside the 24dp slot: the slot
+     is touch height, the 2.5dp track is the painted line. */
+  function seek(pos, dur, frac, bufFrac) {
+    return '<div class="seek">' +
+      '<span class="time pos">' + pos + '</span>' +
+      '<span class="slot"><span class="track">' +
+        '<i class="buf" style="width:' + (bufFrac * 100).toFixed(2) + '%"></i>' +
+        '<i class="play" style="width:' + (frac * 100).toFixed(2) + '%"></i>' +
+      '</span><span class="thumb" style="left:' + (frac * 100).toFixed(2) + '%"></span>' +
+      '</span><span class="time dur">' + dur + '</span></div>';
+  }
+
+  function transport(locked) {
+    return '<div class="transport">' +
+      '<span class="side">' + ic('i-lock', 'lock') + '</span><span class="grow"></span>' +
+      '<span class="mid">' +
+        '<span class="btn prev">' + ic('i-skip-previous') + '</span>' +
+        '<span class="btn play">' + ic('i-play-arrow') + '</span>' +
+        '<span class="btn next">' + ic('i-skip-next') + '</span>' +
+      '</span><span class="grow"></span>' +
+      '<span class="right"><span class="side">' + ic('i-aspect-ratio') + '</span>' +
+      '<span class="side">' + ic('i-crop-free') + '</span></span></div>' +
+      (locked ? '<div class="locknote">Locked — tap the padlock to resume</div>' : '');
+  }
+
+  function build(host) {
+    var cfg = SCENES[host.dataset.scene];
+    var frame = document.createElement('div');
+    frame.className = 'frame' + (cfg.portrait ? ' portrait' : '') + (cfg.ref ? ' ref' : '');
+
+    frame.innerHTML =
+      '<div class="stage"><div class="picture' + (cfg.ref ? ' forced' : '') +
+        '" style="width:' + cfg.w + 'px;height:' + cfg.h + 'px">' +
+        '<span class="fill"></span><span class="ar">' + cfg.mode + '</span></div></div>' +
+      statusBar() +
+      titleRow('Bloody_Flower_360P_S01_EP03') +
+      ribbon() +
+      seek('14:15', '53:08', 0.268, 0.34) +
+      transport(host.dataset.lock === '1');
+
+    if (host.dataset.hud) {
+      var hud = document.createElement('div');
+      hud.className = 'hud';
+      hud.innerHTML = ic('i-aspect-ratio') + '<span>' + host.dataset.hud + '</span>';
+      frame.appendChild(hud);
+    }
+    host.appendChild(frame);
+    return frame;
+  }
+  /* ═════════════════════════════════════════════════════════════════════
+     THE SCROLLER
+     Mirrors ScrollState: an offset clamped to [0, track − viewport], a
+     drag, a wheel, a keyboard and a slider all writing the same value.
+     `allowOverscroll` is what scene 2 needs — the capture shows a retained
+     offset that a strictly-clamped scroller could not hold at 873dp,
+     because the 806dp track fits inside the 873dp window.
+     ════════════════════════════════════════════════════════════════════ */
+  function makeScrollable(frame, startOffset, allowOverscroll) {
+    var ribbon = frame.querySelector('.ribbon');
+    var track = ribbon.querySelector('.track');
+    var offset = 0, max = 0, down = false, startX = 0, startOff = 0, moved = false;
+
+    function measure() {
+      var vp = ribbon.clientWidth;
+      var tw = track.scrollWidth;
+      max = Math.max(0, tw - vp);
+      if (allowOverscroll) max = Math.max(max, startOffset);
+      offset = Math.min(Math.max(offset, 0), max);
+      paint();
+    }
+    function paint() {
+      track.style.transform = 'translateX(' + (-offset) + 'px)';
+      if (slider) {
+        slider.max = String(max);
+        slider.value = String(offset);
+        readout.textContent = 'offset ' + offset.toFixed(0) + ' / ' + max.toFixed(0) +
+          ' dp  ·  track ' + track.scrollWidth + 'dp';
+      }
+    }
+
+    var slider = null, readout = null;
+    if (frame.__hint) {
+      slider = document.createElement('input');
+      slider.type = 'range'; slider.min = '0'; slider.step = '1';
+      slider.value = String(startOffset);
+      readout = document.createElement('span');
+      readout.className = 'val';
+      var lab = document.createElement('label');
+      lab.appendChild(document.createTextNode('scroll'));
+      lab.appendChild(slider); lab.appendChild(readout);
+      frame.__hint.appendChild(lab);
+      slider.addEventListener('input', function () {
+        offset = Math.min(parseFloat(slider.value), max);
+        ribbon.classList.add('settle');
+        paint();
+      });
+    }
+
+    ribbon.addEventListener('wheel', function (e) {
+      var d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (!d) return;
+      e.preventDefault();
+      offset = Math.min(Math.max(offset + d, 0), max);
+      paint();
+    }, { passive: false });
+
+    ribbon.addEventListener('pointerdown', function (e) {
+      down = true; moved = false;
+      startX = e.clientX; startOff = offset;
+      ribbon.setPointerCapture(e.pointerId);
+      ribbon.classList.remove('settle');
+    });
+    ribbon.addEventListener('pointermove', function (e) {
+      if (!down) return;
+      var dx = e.clientX - startX;
+      if (Math.abs(dx) > 3) moved = true;
+      offset = Math.min(Math.max(startOff - dx, 0), max);
+      paint();
+    });
+    function release(e) {
+      if (!down) return;
+      down = false;
+      try { ribbon.releasePointerCapture(e.pointerId); } catch (err) { /* already gone */ }
+    }
+    ribbon.addEventListener('pointerup', release);
+    ribbon.addEventListener('pointercancel', release);
+
+    /* a click on a chip must not also count as a drag */
+    ribbon.addEventListener('click', function (e) { e.preventDefault(); }, true);
+
+    offset = startOffset;
+    requestAnimationFrame(measure);
+    window.addEventListener('resize', measure);
+  }
+  /* ═════════════════════════════════════════════════════════════════════
+     BOOT — build every [data-scene], caption it, and wire the scroller.
+     ════════════════════════════════════════════════════════════════════ */
+  var CAPTIONS = {
+    fit:      ['Default state', 'FIT · 380×214dp picture box · ribbon at offset 0'],
+    ref:      ['Reference capture', 'forced 16:9 · 390×219dp box at x242 y75 · ribbon held at 30dp', 'ref'],
+    scroll:   ['Scroll demo', 'drag, wheel or use the slider below', 'warn'],
+    lock:     ['Transient HUD + lock', 'aspect cycled to 16:9 · controls locked'],
+    portrait: ['Portrait 411×893dp', 'ribbon 806dp in a 411dp window — 395dp of real scroll']
+  };
+
+  document.querySelectorAll('[data-scene]').forEach(function (host) {
+    var frame = build(host);
+    var c = CAPTIONS[host.dataset.scene] || [];
+    var cap = document.createElement('div');
+    cap.className = 'cap';
+    cap.innerHTML = '<b>' + (c[0] || '') + '</b>' +
+      (c[2] ? '<span class="tag ' + c[2] + '">' + (c[2] === 'ref' ? 'measured' : 'interactive') + '</span>' : '') +
+      '<span>' + (c[1] || '') + '</span>';
+    host.insertBefore(cap, frame);
+
+    if (host.dataset.interactive === '1') {
+      var hint = document.createElement('div');
+      hint.className = 'hint';
+      host.appendChild(hint);
+      frame.__hint = hint;
+    }
+
+    var start = parseFloat(host.dataset.ribbonOffset || '0');
+    makeScrollable(frame, start, host.dataset.scene === 'ref');
+  });
+})();
+</script>
 </body>
 </html>
-
-.legend code{color:#7FB2FF}
