@@ -566,9 +566,8 @@ class AudioSyncProcessor(
     private fun scheduleEvaluate(posMs: Long) {
         val vad = liveVad
         val vadSnapshot = if (vad != null && !vad.isWarming) vad.snapshot() else null
-        if (vadSnapshot != null && vadSnapshot.size >= SpeechCorrelator.ELIGIBLE_BINS && vadSnapshot.size >= binCount) {
-            val count = binCount
-            val vadOffset = vadSnapshot.size - count
+        if (vadSnapshot != null && vadSnapshot.size >= SpeechCorrelator.ELIGIBLE_BINS) {
+            val count = minOf(binCount, vadSnapshot.size)
             worker.submit(
                 binCount = count,
                 baseSeconds = baseIdx * SpeechCorrelator.ALIGN_BIN,
@@ -576,18 +575,17 @@ class AudioSyncProcessor(
                 posMs = posMs,
                 generation = generation,
             ) { snapshot ->
-                System.arraycopy(vadSnapshot, vadOffset, snapshot, 0, count)
+                System.arraycopy(vadSnapshot, 0, snapshot, 0, count)
             }
         } else {
-            val count = minOf(binCount, audioBins.size)
             worker.submit(
-                binCount = count,
+                binCount = binCount,
                 baseSeconds = baseIdx * SpeechCorrelator.ALIGN_BIN,
                 cues = cues,
                 posMs = posMs,
                 generation = generation,
             ) { snapshot ->
-                System.arraycopy(audioBins, 0, snapshot, 0, count)
+                System.arraycopy(audioBins, 0, snapshot, 0, audioBins.size)
             }
         }
     }

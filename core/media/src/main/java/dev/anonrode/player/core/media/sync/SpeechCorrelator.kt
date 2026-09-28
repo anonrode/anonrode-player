@@ -485,9 +485,9 @@ object SpeechCorrelator {
         }
 
         // If nominal framerate has a high-confidence lock, return immediately
-        if (nominalBest.r >= 0.25) {
+        if (nominalBest.r >= 0.65) {
             val candidate = verifyAndCreateLock(1.0, nominalBest.shift, bNominal, bNomTotal, bNomWords, nominalPeaks)
-            if (candidate != null && candidate.score >= 0.25 && candidate.halfOk) {
+            if (candidate != null && candidate.score >= 0.65 && candidate.halfOk) {
                 return candidate
             }
         }
@@ -498,12 +498,12 @@ object SpeechCorrelator {
         val bCache = HashMap<Double, Pair<LongArray, Int>>()
         bCache[1.0] = Pair(bNominal, bNomTotal)
 
-        // Coarse shift stride = 2 (0.2s) across candidate slopes
+        // Coarse shift stride = 4 (0.4s) across candidate slopes
         for (alpha in alphaCandidates) {
             if (alpha == 1.0) continue
             val (B, bTotal) = bCache.getOrPut(alpha) { buildSubtitleBitmask(alpha) }
             val bWords = (bTotal + 63) / 64
-            for (shift in lo..hi step 2) {
+            for (shift in lo..hi step 4) {
                 val r = evalShift(B, bWords, shift)
                 if (r > 0.05) allPeaks.add(Peak(alpha, shift, r))
                 if (r > globalBest.r) globalBest = Peak(alpha, shift, r)
