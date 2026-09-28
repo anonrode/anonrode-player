@@ -45,7 +45,15 @@ jobs:
       # JUnit XML is uploaded even on failure so the report is readable from
       # the Actions run without re-running anything locally.
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest --stacktrace
+        run: |
+          ./gradlew testDebugUnitTest --stacktrace || {
+            echo "=== FAILED UNIT TESTS DUMP ==="
+            find . -name "*.xml" -path "*/test-results/*" -exec grep -l "<failure" {} + | while read -r f; do
+              echo "--- File: $f ---"
+              cat "$f"
+            done
+            exit 1
+          }
 
       - name: Upload unit test results
         if: always()

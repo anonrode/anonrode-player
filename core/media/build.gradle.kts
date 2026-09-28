@@ -26,6 +26,15 @@ android {
     // any android.* reference must degrade to a default instead.
     testOptions {
         unitTests.isReturnDefaultValues = true
+        unitTests.all {
+            it.testLogging {
+                events("passed", "skipped", "failed", "standardError")
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                showExceptions = true
+                showCauses = true
+                showStackTraces = true
+            }
+        }
     }
 }
 
