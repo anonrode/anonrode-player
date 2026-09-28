@@ -168,7 +168,7 @@ internal class LiveVad private constructor(
                     failed = true
                     AppLog.e(TAG, "inference failed repeatedly — falling back to energy envelope", t)
                 } else if (!failed) {
-                    AppLog.w(TAG, "transient inference glitch (count=$consecutiveFailures): ${t.message}")
+                    AppLog.d(TAG, "transient inference glitch (count=$consecutiveFailures): ${t.message}")
                 }
             }
         }
