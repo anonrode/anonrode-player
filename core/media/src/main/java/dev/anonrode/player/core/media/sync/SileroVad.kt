@@ -334,7 +334,7 @@ class SileroVad(context: Context) : AutoCloseable {
                 p += step
             }
             fracPos = p - n
-            prevLast = pending[n - 1]
+            prevLast = if (n > 0) pending[n - 1] else 0f
             n = 0
         }
 

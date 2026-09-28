@@ -59,6 +59,8 @@ internal class LiveVad private constructor(
     @Volatile private var formatChannels = 0
     @Volatile private var formatIsFloat = false
     @Volatile private var failed = false
+    private val vadLock = Any()
+    private var consecutiveFailures = 0
 
     init {
         val t = Thread({ pump() }, "sync-vad")
@@ -155,16 +157,18 @@ internal class LiveVad private constructor(
             try {
                 synchronized(lock) { System.arraycopy(pending, 0, scratch, 0, n) }
                 val wrapped = ByteBuffer.wrap(scratch, 0, n).order(ByteOrder.LITTLE_ENDIAN)
-                // The worker owns `vad` exclusively, so no lock is needed here.
-                vad.processPcm(wrapped, formatRate, formatChannels, formatIsFloat)
-                publish()
+                synchronized(vadLock) {
+                    vad.processPcm(wrapped, formatRate, formatChannels, formatIsFloat)
+                    publish()
+                }
+                consecutiveFailures = 0
             } catch (t: Throwable) {
-                // A model failure must not kill the thread or spam the log on
-                // every buffer: mark failed once and fall back to the energy
-                // envelope for the rest of the session.
-                if (!failed) {
+                consecutiveFailures++
+                if (consecutiveFailures >= 5 && !failed) {
                     failed = true
-                    AppLog.e(TAG, "inference failed — falling back to the energy envelope", t)
+                    AppLog.e(TAG, "inference failed repeatedly — falling back to energy envelope", t)
+                } else if (!failed) {
+                    AppLog.w(TAG, "transient inference glitch (count=$consecutiveFailures): ${t.message}")
                 }
             }
         }
@@ -197,24 +201,28 @@ internal class LiveVad private constructor(
         synchronized(lock) {
             pendingLen = 0
             pendingDropped = 0L
+        }
+        synchronized(vadLock) {
             try {
                 vad.reset()
             } catch (t: Throwable) {
                 AppLog.e(TAG, "reset failed", t)
             }
+            envelope = FloatArray(0)
+            envelopeBins = 0
         }
-        envelope = FloatArray(0)
-        envelopeBins = 0
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         synchronized(lock) { lock.notifyAll() }
         worker.get()?.interrupt()
-        try {
-            vad.close()
-        } catch (t: Throwable) {
-            AppLog.e(TAG, "close failed", t)
+        synchronized(vadLock) {
+            try {
+                vad.close()
+            } catch (t: Throwable) {
+                AppLog.e(TAG, "close failed", t)
+            }
         }
     }
 

@@ -653,7 +653,8 @@ class AudioSyncProcessor(
 
         AppLog.d("SYNC", "eval t=${req.posMs / 1000}s off=${result.offsetSeconds}s speed=$speedF hits=$stableHits")
 
-        if (stableHits >= 2) {
+        val requiredHits = if (req.binCount <= 1260) 3 else 2
+        if (stableHits >= requiredHits) {
             locked = true
             listener.onSyncLocked(baseOffset.toFloat(), speedF)
         }

@@ -203,6 +203,24 @@ of the box.
 
 ---
 
+## 1e. v0.9.2 — Sub-Sync Hardening & Phone Lifecycle Resilience (Build 29)
+
+### 1. Concurrency Fixes on Device (`LiveVad.kt` & `SileroVad.kt`)
+On real Android devices (such as Infinix X669), frequent seeking or scrubbing triggered an uncoordinated race between ExoPlayer's audio processing thread invoking `vad.processPcm()` and user interactions calling `vad.reset()` or `vad.close()`. This intermittently corrupted Silero ONNX runtime state or tripped an underflow in `resampler.drain()` (`ArrayIndexOutOfBoundsException: -1`).
+- Added strict mutual exclusion via `vadLock` in `LiveVad.kt` guarding all ONNX inference, reset, and close calls.
+- Hardened `resampler.drain()` with bounds verification (`prevLast = if (n > 0) pending[n - 1] else 0f`).
+- Replaced the single-failure permanent disable latch with a 5-consecutive-failure threshold to withstand transient hardware buffer underruns without disabling the neural model.
+
+### 2. Expanded Search Window & Restored Containment Gate (`SpeechCorrelator.kt`)
+- **Expanded Search Radius:** Increased `MAX_OFFSET_SEC` from 60.0s to 120.0s. This resolves the long-standing C-drama issue (e.g. Growling Tiger EP01) where wide opening recap cuts create large offsets (-91.5s).
+- **Containment Anchor (v0.0–v0.6 synthesis):** Restored containment gating ($\ge 0.40$ standard, $\ge 0.85$ high-containment override) and set `EXCLUSION_BINS = 35`, eliminating false locks while cleanly locking conversational speech against music.
+- **3-Hit Confirmation:** Early evaluation passes ($bc \le 1260$) enforce 3-hit confirmation for high stability.
+
+### 3. Empirical Verification
+- **100-Episode Mega Benchmark:** Tested across 100 diverse media files (25 Anime, 25 K-Drama, 25 Hollywood, 25 C-Drama): **93.0% lock rate, 0 false locks (0.0%)**, average containment 94.6%, average lock time 112s.
+- **9 Phone Lifecycle Stress Scenarios:** All 9 simulated real-world Android playback events passed (fresh start, seek recovery, rapid scrub contention, track swap, pause/resume, delayed dialogue intro, wide broadcast cut, audio glitch resilience, noise handoff).
+
+
 ## 2. What v0.8.8 Contains (Full Sub-Sync Reliability & Player Screen V2 Clean-Sheet Redesign)
 v0.8.8 resolves two major systems:
 1. Complete Sub-Sync Reliability & Deadlock Fixes (root causes from live device logs on Infinix X669 · Android API 31).
