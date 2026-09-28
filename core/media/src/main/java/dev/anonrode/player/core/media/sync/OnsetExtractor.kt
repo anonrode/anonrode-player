@@ -267,7 +267,7 @@ class OnsetExtractor(private val context: Context) {
                             true
                         } ?: false
                     } catch (t: Throwable) {
-                        AppLog.d("ONSET", "openFileDescriptor failed for $videoUri, falling back to path", t)
+                        AppLog.d("ONSET", "openFileDescriptor failed for $videoUri, falling back to path: ${t.message}")
                         false
                     }
                     if (!opened) {
