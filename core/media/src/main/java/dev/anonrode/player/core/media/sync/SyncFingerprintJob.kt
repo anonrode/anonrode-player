@@ -289,6 +289,10 @@ class SyncFingerprintJob(
                         complete = extractionComplete,
                     ),
                 )
+                if (isJobCancelled) {
+                    AppLog.d("SYNC_JOB", "extraction cancelled/stopped by WorkManager — cache saved, retrying")
+                    return@withContext Result.retry()
+                }
             }
 
             var lock: LockCandidate? = null
@@ -388,20 +392,24 @@ class SyncFingerprintJob(
             // persisted — the 09-19 log's "Tier 1 envelope lock" line with no
             // matching "LOCKED" line after it. A lock the engine has already
             // computed must always land.
+            val audioSpanSec = sources.envelope.size * 0.1
+            val isVerifiedLock = extractionComplete || (audioSpanSec >= 300.0 && lock.recall >= 0.35)
+
+            if (!isVerifiedLock) {
+                AppLog.d(
+                    "SYNC_JOB",
+                    "lock deferred: extraction incomplete (span=${audioSpanSec}s, recall=${lock.recall}) — resuming to complete extraction",
+                )
+                return@withContext Result.retry()
+            }
+
             withContext(kotlinx.coroutines.NonCancellable) {
                 store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, lock.piecewise)
             }
-            // v0.8.3: a lock fitted on a TRUNCATED extraction is persisted
-            // (better than nothing, the player applies it immediately) but
-            // is NOT the final word — the checked mark stays off, so the
-            // next attempt resumes extraction and refits (or the player
-            // re-schedules this same owed verdict on the next open if the
-            // retry chain dies). Only a fit on complete audio, or the last
-            // allowed attempt, is a verdict.
             if (!extractionComplete && runAttemptCount < 3) {
                 AppLog.d(
                     "SYNC_JOB",
-                    "LOCKED (provisional, ${lock.tag}) uri=$videoUri — extraction truncated, resuming to refit",
+                    "LOCKED (provisional, ${lock.tag}) uri=$videoUri — extraction partial, resuming to refit",
                 )
                 return@withContext Result.retry()
             }

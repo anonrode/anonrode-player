@@ -150,7 +150,7 @@ class OnsetExtractor(private val context: Context) {
                 vad.close()
             }
         } else Pair(emptyList(), FloatArray(0))
-        lastCoveredSec = silence.coveredSec()
+        lastCoveredSec = if (vad != null) vad.coveredSec() else silence.coveredSec()
         if (isCancelled()) {
             lastDecodeTruncated = true
         }
@@ -420,20 +420,18 @@ class OnsetExtractor(private val context: Context) {
          *  they line up with the cached prefix. */
         var onsetOffset = 0.0
 
-        // 1-pole bandpass state per channel
+        // 1-pole bandpass state (mono downmix)
         private var hpBeta = 0.0
         private var lpAlpha = 0.0
-        private var hpX = DoubleArray(0)
-        private var hpY = DoubleArray(0)
-        private var lpY = DoubleArray(0)
+        private var hpX = 0.0
+        private var hpY = 0.0
+        private var lpY = 0.0
 
         // window + silence machine
         private var windowTarget = 0
         private var windowSumSq = 0.0
         private var windowN = 0
         private var monoSamples = 0L
-        private var frameSum = 0.0
-        private var sampleIdx = 0L
         private var silenceStart = -1.0
 
         val limitReached: Boolean
@@ -445,9 +443,9 @@ class OnsetExtractor(private val context: Context) {
             channels = ch
             hpBeta = exp(-2.0 * PI * 300.0 / sampleRate)
             lpAlpha = 1.0 - exp(-2.0 * PI * 3400.0 / sampleRate)
-            hpX = DoubleArray(channels)
-            hpY = DoubleArray(channels)
-            lpY = DoubleArray(channels)
+            hpX = 0.0
+            hpY = 0.0
+            lpY = 0.0
             windowTarget = sampleRate / 100 // 10ms windows
         }
 
@@ -458,33 +456,30 @@ class OnsetExtractor(private val context: Context) {
             if (isFloat) {
                 val fb = buf.asFloatBuffer()
                 for (i in 0 until frames) {
-                    for (c in 0 until channels) onSample(fb.get(i * channels + c).toDouble())
+                    var sum = 0.0
+                    for (c in 0 until channels) sum += fb.get(i * channels + c).toDouble()
+                    onMonoSample(sum / channels)
                 }
             } else {
                 val sb = buf.asShortBuffer()
                 for (i in 0 until frames) {
-                    for (c in 0 until channels) onSample(sb.get(i * channels + c) / 32768.0)
+                    var sum = 0
+                    for (c in 0 until channels) sum += sb.get(i * channels + c)
+                    onMonoSample(sum / channels.toDouble() / 32768.0)
                 }
             }
         }
 
-        private fun onSample(x: Double) {
-            val ch = (sampleIdx % channels).toInt()
+        private fun onMonoSample(mono: Double) {
             // 1-pole highpass then lowpass (ffmpeg bandpass approximation)
-            val hpOut = hpBeta * (hpY[ch] + x - hpX[ch])
-            hpX[ch] = x
-            hpY[ch] = hpOut
-            lpY[ch] += lpAlpha * (hpOut - lpY[ch])
+            val hpOut = hpBeta * (hpY + mono - hpX)
+            hpX = mono
+            hpY = hpOut
+            lpY += lpAlpha * (hpOut - lpY)
 
-            frameSum += lpY[ch]
-            sampleIdx++
-            if (sampleIdx % channels == 0L) {
-                val mono = frameSum / channels
-                frameSum = 0.0
-                windowSumSq += mono * mono
-                windowN++
-                if (windowN >= windowTarget) flushWindow()
-            }
+            windowSumSq += lpY * lpY
+            windowN++
+            if (windowN >= windowTarget) flushWindow()
         }
 
         private fun flushWindow() {

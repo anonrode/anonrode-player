@@ -92,12 +92,12 @@ object SpeechCorrelator {
 
     // PEAK_MIN is 0.20 (v0.8.7 reference standard). On conversational dialogue over
     // music (such as C-drama and anime), dialogue correlation peaks land at 0.20-0.30.
-    // Gating at 0.20 combined with PROM_MIN=0.12 and Z_SMALL=9.0 / Z_LARGE=7.0 provides
-    // rigorous false-positive rejection while allowing real dialogue to lock cleanly.
+    // Gating at 0.20 combined with PROM_MIN=0.10 and Z_SMALL=5.5 / Z_LARGE=4.5 provides
+    // robust noise rejection while allowing real dialogue to lock cleanly during live playback.
     const val PEAK_MIN = 0.20
-    const val PROM_MIN = 0.12
-    const val Z_SMALL = 9.0
-    const val Z_LARGE = 7.0
+    const val PROM_MIN = 0.10
+    const val Z_SMALL = 5.5
+    const val Z_LARGE = 4.5
     const val ELIGIBLE_BINS = 160
     const val EXCLUSION_BINS = 20
 
@@ -284,8 +284,10 @@ object SpeechCorrelator {
         cues: List<SubtitleCue>,
         maxOffsetSec: Double = MAX_OFFSET_SEC,
     ): JointResult? {
-        if (audio.size < (MIN_AUDIO_SECONDS / ALIGN_BIN).toInt()) return null
-        if (cues.size < 5) return null
+        // Framerate drift (alpha) search requires at least 120s of audio (1200 bins)
+        // to reliably distinguish broadcast drift from speech/music noise and cue jitter.
+        if (audio.size < 1200) return null
+        if (cues.size < 10) return null
 
         val n = audio.size
         // 1. Quantize audio soft [0, 1] into 8 bit-planes over LongArray
@@ -460,7 +462,12 @@ object SpeechCorrelator {
             val recall = cueHits.toDouble() / cues.size
 
             val betaSeconds = -subShift * ALIGN_BIN
-            val lockable = fineBestR >= 0.10 && margin >= 0.03 && (halfOk || recall >= 0.35)
+            // Rigorous anti-hallucination gates:
+            // 1. fineBestR >= 0.18: strong correlation required
+            // 2. margin >= 0.05: clear separation from secondary peaks
+            // 3. halfOk: both halves of the timeline must agree on the trajectory
+            // 4. recall >= 0.30: at least 30% of cues must match active speech
+            val lockable = fineBestR >= 0.18 && margin >= 0.05 && halfOk && recall >= 0.30
             return if (lockable) {
                 JointResult(
                     alpha = bestAlpha,
@@ -487,7 +494,7 @@ object SpeechCorrelator {
         // If nominal framerate has a high-confidence lock, return immediately
         if (nominalBest.r >= 0.65) {
             val candidate = verifyAndCreateLock(1.0, nominalBest.shift, bNominal, bNomTotal, bNomWords, nominalPeaks)
-            if (candidate != null && candidate.score >= 0.65 && candidate.halfOk) {
+            if (candidate != null && candidate.score >= 0.65 && candidate.halfOk && candidate.recall >= 0.35) {
                 return candidate
             }
         }

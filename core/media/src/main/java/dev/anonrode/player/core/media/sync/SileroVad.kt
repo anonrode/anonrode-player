@@ -53,6 +53,8 @@ class SileroVad(context: Context) : AutoCloseable {
 
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val session: OrtSession?
+    private var srTensor: OnnxTensor? = null
+    private val inputsMap = HashMap<String, OnnxTensor>(3)
     private val state = FloatArray(STATE_LEN)
     private val contextSamples = FloatArray(CONTEXT)
     private var hasContext = false
@@ -81,6 +83,9 @@ class SileroVad(context: Context) : AutoCloseable {
                 setInterOpNumThreads(1)
             }
             s = env.createSession(bytes, opts)
+            val srT = OnnxTensor.createTensor(env, SR)
+            srTensor = srT
+            inputsMap["sr"] = srT
         } catch (t: Throwable) {
             AppLog.e("VAD", "failed to load silero model", t)
         }
@@ -109,7 +114,7 @@ class SileroVad(context: Context) : AutoCloseable {
                 resampler.push(sum / channels.toFloat() / 32768f)
             }
         }
-        resampler.drain(sampleRate, this::onSample16k)
+        resampler.drain(sampleRate)
     }
 
     private fun onSample16k(x: Float) {
@@ -121,6 +126,7 @@ class SileroVad(context: Context) : AutoCloseable {
 
     private fun runInference() {
         val sess = session ?: return
+        val srT = srTensor ?: return
         // input = [context(64)? , chunk(512)] — first call has no context
         val width = if (hasContext) WINDOW + CONTEXT else WINDOW
         // (clear() returns the Buffer base type in the Android stubs, so
@@ -138,23 +144,20 @@ class SileroVad(context: Context) : AutoCloseable {
 
         OnnxTensor.createTensor(env, fb, longArrayOf(1L, width.toLong())).use { inputT ->
             OnnxTensor.createTensor(env, stBuf, longArrayOf(2L, 1L, 128L)).use { stateT ->
-                OnnxTensor.createTensor(env, SR).use { srT ->
-                    val inputs = mapOf(
-                        "input" to inputT,
-                        "state" to stateT,
-                        "sr" to srT,
-                    )
-                    sess.run(inputs).use { result ->
-                        // model output order (validated): [output, stateN]
-                        val outVal = result.get(0) as OnnxTensor
-                        val prob = (outVal.value as Array<FloatArray>)[0][0]
-                        probBins.add(prob)
-                        bins.add(if (prob > THRESHOLD) 1.toByte() else 0.toByte())
-                        val stVal = result.get(1) as OnnxTensor
-                        val stArr = stVal.value as Array<Array<FloatArray>>
-                        var k = 0
-                        for (a in stArr) for (b in a) for (v in b) state[k++] = v
-                    }
+                inputsMap["input"] = inputT
+                inputsMap["state"] = stateT
+                inputsMap["sr"] = srT
+                sess.run(inputsMap).use { result ->
+                    // model output order (validated): [output, stateN]
+                    // Direct buffer reading eliminates GC pauses and multi-dimensional array reflection
+                    val outVal = result.get(0) as OnnxTensor
+                    val prob = outVal.floatBuffer.get(0)
+                    probBins.add(prob)
+                    bins.add(if (prob > THRESHOLD) 1.toByte() else 0.toByte())
+                    val stVal = result.get(1) as OnnxTensor
+                    val stFb = stVal.floatBuffer
+                    stFb.position(0)
+                    stFb.get(state, 0, STATE_LEN)
                 }
             }
         }
@@ -234,6 +237,7 @@ class SileroVad(context: Context) : AutoCloseable {
     }
 
     override fun close() {
+        try { srTensor?.close() } catch (_: Throwable) {}
         try { session?.close() } catch (_: Throwable) {}
         // env is the shared singleton; never close it
     }
@@ -310,7 +314,7 @@ class SileroVad(context: Context) : AutoCloseable {
             pending[n++] = x
         }
 
-        fun drain(sampleRate: Int, emit: (Float) -> Unit) {
+        fun drain(sampleRate: Int) {
             if (srcRate != sampleRate) {
                 srcRate = sampleRate
                 fracPos = 0.0
@@ -326,7 +330,7 @@ class SileroVad(context: Context) : AutoCloseable {
                 val f = (p - idx).toFloat()
                 val a = if (idx < 0) prevLast else pending[idx]
                 val bVal = pending[idx + 1]
-                emit(a + f * (bVal - a))
+                onSample16k(a + f * (bVal - a))
                 p += step
             }
             fracPos = p - n
