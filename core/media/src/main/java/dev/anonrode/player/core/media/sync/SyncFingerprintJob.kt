@@ -267,7 +267,6 @@ class SyncFingerprintJob(
                     resumeFrom,
                     isCancelled = { !coroutineContext.isActive || isStopped },
                 )
-                extractionComplete = !extractor.lastDecodeTruncated
                 sources = if (resumeFrom > 0.0 && cached != null) {
                     OnsetExtractor.OnsetSources(
                         silencedetect = OnsetCache.mergeOnsets(cached.silencedetect, fresh.silencedetect),
@@ -277,6 +276,9 @@ class SyncFingerprintJob(
                 } else {
                     fresh
                 }
+                val isJobCancelled = !coroutineContext.isActive || isStopped
+                extractionComplete = !extractor.lastDecodeTruncated && !isJobCancelled &&
+                    (sources.hybrid.size >= MIN_ONSETS || sources.envelope.size >= 1000)
                 OnsetCache.store(
                     applicationContext, videoUri, videoFile,
                     OnsetCache.Entry(

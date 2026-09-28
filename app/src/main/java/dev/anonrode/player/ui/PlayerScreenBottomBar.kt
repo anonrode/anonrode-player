@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -205,6 +207,10 @@ internal fun PlayerScreenBottomBar(
                     accent = accent,
                     isPlaying = isPlaying,
                     seekIncrementSec = seekIncrementSec,
+                    hasPreviousEpisode = hasPreviousEpisode,
+                    hasNextEpisode = hasNextEpisode,
+                    onPlayPrevious = onPlayPrevious,
+                    onPlayNext = onPlayNext,
                     actions = actions,
                     onPlayPause = { actions.togglePlayPause() },
                     onSeekBack = { actions.seekBy(-seekIncrementSec) },
@@ -461,12 +467,16 @@ private fun ScrubBubble(
     }
 }
 
-/* ── Transport row — faithful reference: [🔒]  [⏮ 10s] [▶/⏸] [⏭ 10s]  [◫] [⤢] ── */
+/* ── Transport row — faithful reference: [🔒]  [⏮] [⟲ 10s] [▶/⏸] [10s ⟳] [⏭]  [◫] [⤢] ── */
 @Composable
 private fun TransportRow(
     accent: Color,
     isPlaying: Boolean,
     seekIncrementSec: Int,
+    hasPreviousEpisode: Boolean,
+    hasNextEpisode: Boolean,
+    onPlayPrevious: () -> Unit,
+    onPlayNext: () -> Unit,
     actions: PlayerScreenActions,
     onPlayPause: () -> Unit,
     onSeekBack: () -> Unit,
@@ -486,11 +496,18 @@ private fun TransportRow(
             onClick = { actions.lockControls() },
         )
 
-        // Center: Transport cluster (⏮ 10s, ▶/⏸, ⏭ 10s)
+        // Center: Transport cluster (⏮, ⟲ 10s, ▶/⏸, 10s ⟳, ⏭)
         Row(
-            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapLg, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapSm, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            ControlChip(
+                icon = Icons.Filled.SkipPrevious,
+                contentDescription = "Previous episode",
+                accent = accent,
+                enabled = hasPreviousEpisode,
+                onClick = onPlayPrevious,
+            )
             TimeSeekButton(
                 direction = TimeSeekDirection.BACK,
                 seconds = seekIncrementSec,
@@ -503,6 +520,13 @@ private fun TransportRow(
                 seconds = seekIncrementSec,
                 accent = accent,
                 onClick = onSeekForward,
+            )
+            ControlChip(
+                icon = Icons.Filled.SkipNext,
+                contentDescription = "Next episode",
+                accent = accent,
+                enabled = hasNextEpisode,
+                onClick = onPlayNext,
             )
         }
 

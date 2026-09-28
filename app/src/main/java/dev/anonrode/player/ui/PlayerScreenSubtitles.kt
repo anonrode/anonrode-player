@@ -46,6 +46,7 @@ internal fun PlayerSubtitleOverlay(
     showCC: Boolean,
     gestures: GestureUiState,
     mediaId: String,
+    bottomBarHeightPx: Float = 0f,
     onStyleChanged: (SubtitleStyle) -> Unit,
 ) {
     val view = LocalView.current
@@ -53,9 +54,16 @@ internal fun PlayerSubtitleOverlay(
     Box(
         modifier = modifier
             .offset {
+                val baseTargetY = gestures.subY.floatValue * gestures.scrH.floatValue
+                val lift = if (!gestures.subDragging.value && bottomBarHeightPx > 0f) {
+                    val subBottom = baseTargetY + 40f
+                    val controlsTop = gestures.scrH.floatValue - bottomBarHeightPx
+                    if (subBottom > controlsTop) (subBottom - controlsTop + 16f) else 0f
+                } else 0f
+                val effectiveY = baseTargetY - lift
                 IntOffset(
                     ((gestures.subX.floatValue * gestures.scrW.floatValue) - gestures.scrW.floatValue / 2f).roundToInt(),
-                    ((gestures.subY.floatValue * gestures.scrH.floatValue) - gestures.scrH.floatValue / 2f).roundToInt(),
+                    (effectiveY - gestures.scrH.floatValue / 2f).roundToInt(),
                 )
             }
             .graphicsLayer {

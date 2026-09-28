@@ -90,13 +90,11 @@ object SpeechCorrelator {
         1100, 1260, 1450, 1680, 1950, 2250, 2600, 2950, 3300,
     )
 
-    // PEAK_MIN is 0.30. When fed by the neural speech detector (LiveVad),
-    // true speech correlation peaks land in 0.60–0.80 on real dialogue
-    // (Undercover Miss Hong: 0.78, 86: 0.65), clearing Z_SMALL (9.0) and
-    // Z_LARGE (7.0) by wide margins (z = 22–27). 0.30 prevents false-positive
-    // locks on music beats and noise while allowing true dialogue to lock
-    // decisively within seconds.
-    const val PEAK_MIN = 0.30
+    // PEAK_MIN is 0.20 (v0.8.7 reference standard). On conversational dialogue over
+    // music (such as C-drama and anime), dialogue correlation peaks land at 0.20-0.30.
+    // Gating at 0.20 combined with PROM_MIN=0.12 and Z_SMALL=9.0 / Z_LARGE=7.0 provides
+    // rigorous false-positive rejection while allowing real dialogue to lock cleanly.
+    const val PEAK_MIN = 0.20
     const val PROM_MIN = 0.12
     const val Z_SMALL = 9.0
     const val Z_LARGE = 7.0
@@ -487,9 +485,9 @@ object SpeechCorrelator {
         }
 
         // If nominal framerate has a high-confidence lock, return immediately
-        if (nominalBest.r >= 0.65) {
+        if (nominalBest.r >= 0.25) {
             val candidate = verifyAndCreateLock(1.0, nominalBest.shift, bNominal, bNomTotal, bNomWords, nominalPeaks)
-            if (candidate != null && candidate.score >= 0.65 && candidate.halfOk) {
+            if (candidate != null && candidate.score >= 0.25 && candidate.halfOk) {
                 return candidate
             }
         }
@@ -500,12 +498,12 @@ object SpeechCorrelator {
         val bCache = HashMap<Double, Pair<LongArray, Int>>()
         bCache[1.0] = Pair(bNominal, bNomTotal)
 
-        // Coarse shift stride = 4 (0.4s) across candidate slopes
+        // Coarse shift stride = 2 (0.2s) across candidate slopes
         for (alpha in alphaCandidates) {
             if (alpha == 1.0) continue
             val (B, bTotal) = bCache.getOrPut(alpha) { buildSubtitleBitmask(alpha) }
             val bWords = (bTotal + 63) / 64
-            for (shift in lo..hi step 4) {
+            for (shift in lo..hi step 2) {
                 val r = evalShift(B, bWords, shift)
                 if (r > 0.05) allPeaks.add(Peak(alpha, shift, r))
                 if (r > globalBest.r) globalBest = Peak(alpha, shift, r)

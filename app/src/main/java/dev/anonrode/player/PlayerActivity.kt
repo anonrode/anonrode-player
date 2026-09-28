@@ -442,6 +442,16 @@ class PlayerActivity : ComponentActivity() {
                     (error.cause?.message ?: error.message ?: "unknown"),
                 error,
             )
+            // If the error was seeking beyond the EOF / out of range (e.g. from a stale position),
+            // auto-recover by seeking to 0 and re-preparing rather than killing playback.
+            if (error.errorCode == PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE) {
+                AppLog.d("PLAYER", "auto-recovering from out-of-range seek: seeking to 0")
+                val engine = AnonrodeApp.get(this@PlayerActivity).engine
+                engine.player.seekTo(0)
+                engine.player.prepare()
+                engine.player.play()
+                return
+            }
             switching = false
             // A countdown tick firing under the error dialog would start
             // the NEXT episode underneath it — cancel the auto-advance.
@@ -1359,11 +1369,10 @@ class PlayerActivity : ComponentActivity() {
             // engine.play, which then runs the whole setMediaItem → seekTo →
             // prepare pipeline without suspending (no frame-0 flash, and no
             // window where a newer open could interleave).
-            val savedPosMs = if (resume) {
-                app.stateStore.get(pending.uriStr)?.playbackPositionMs ?: 0L
-            } else {
-                0L
-            }
+            val stored = if (resume) app.stateStore.get(pending.uriStr) else null
+            val rawSavedPosMs = stored?.playbackPositionMs ?: 0L
+            val durMs = stored?.durationMs ?: 0L
+            val savedPosMs = if (durMs > 0 && rawSavedPosMs >= durMs - 2000L) 0L else rawSavedPosMs
             if (pending.gen != openGeneration) return@launch
             engine.play(
                 MediaItem.fromUri(pending.uriStr), pending.uriStr, pending.cues,

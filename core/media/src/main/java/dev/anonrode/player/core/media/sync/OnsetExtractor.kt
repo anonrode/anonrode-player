@@ -151,6 +151,9 @@ class OnsetExtractor(private val context: Context) {
             }
         } else Pair(emptyList(), FloatArray(0))
         lastCoveredSec = silence.coveredSec()
+        if (isCancelled()) {
+            lastDecodeTruncated = true
+        }
         return OnsetSources(silOnsets, vadOnsets, vadEnvelope)
     }
 
@@ -257,10 +260,26 @@ class OnsetExtractor(private val context: Context) {
             // process can't open() directly — still get decoded through
             // the resolver, instead of failing the whole fingerprint.
             when {
+                videoUri != null -> {
+                    val opened = try {
+                        context.contentResolver.openFileDescriptor(videoUri, "r")?.use { pfd ->
+                            extractor.setDataSource(pfd.fileDescriptor)
+                            true
+                        } ?: false
+                    } catch (t: Throwable) {
+                        AppLog.d("ONSET", "openFileDescriptor failed for $videoUri, falling back to path", t)
+                        false
+                    }
+                    if (!opened) {
+                        if (videoPath != null && File(videoPath).canRead()) {
+                            extractor.setDataSource(videoPath)
+                        } else {
+                            extractor.setDataSource(context, videoUri, null)
+                        }
+                    }
+                }
                 videoPath != null && File(videoPath).canRead() ->
                     extractor.setDataSource(videoPath)
-                videoUri != null ->
-                    extractor.setDataSource(context, videoUri, null)
                 else ->
                     // No readable path AND no URI: a programming error, but
                     // let the extractor throw with the real reason inside
@@ -355,6 +374,7 @@ class OnsetExtractor(private val context: Context) {
                             buf.limit(info.offset + info.size)
                             if (!onPcm(buf, sampleRate, channels, isFloat, info.presentationTimeUs)) {
                                 outputDone = true
+                                lastDecodeTruncated = true
                             }
                         }
                     }
@@ -369,6 +389,9 @@ class OnsetExtractor(private val context: Context) {
                     lastDecodeTruncated = true
                     break
                 }
+            }
+            if (isCancelled() || !outputDone) {
+                lastDecodeTruncated = true
             }
         } catch (t: Throwable) {
             AppLog.e("ONSET", "MediaCodec decode failed", t)

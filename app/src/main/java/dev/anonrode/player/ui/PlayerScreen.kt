@@ -642,6 +642,7 @@ fun PlayerScreen(
                     showCC = ui.showCC.value,
                     gestures = gestures,
                     mediaId = mediaId,
+                    bottomBarHeightPx = if (ui.controlsVisible.value) ui.bottomBarHeightPx.intValue.toFloat() else 0f,
                     onStyleChanged = onSubtitleStyleChanged,
                 )
             }

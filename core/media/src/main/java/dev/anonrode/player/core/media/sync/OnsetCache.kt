@@ -32,7 +32,7 @@ object OnsetCache {
 
     private const val MAGIC = 0x4F430001L
     /** Bump when the detectors' onset/envelope semantics change (invalidates all). */
-    private const val VERSION = 2L
+    private const val VERSION = 3L
 
     data class Entry(
         val silencedetect: List<Double>,
