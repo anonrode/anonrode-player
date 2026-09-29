@@ -116,6 +116,8 @@ class PlaybackEngine(
      *  whose confidence gates were validated on real content. */
     @Volatile var onLiveSyncNoMatch: (() -> Unit)? = null
 
+    val isLiveLocked: Boolean get() = syncProcessor.isLocked
+
     /**
      * v0.7.1: apply a persisted (fingerprint) lock to the LIVE session —
      * called by the host when Room reports a lock for the video the user
@@ -124,11 +126,24 @@ class PlaybackEngine(
      * syncEnabled branch. A later live re-lock overwrites cleanly.
      */
     fun applyPersistedLock(autoOffsetMs: Long, speedFactor: Float) {
+        if (autoOffsetMs == persistedAutoMs && speedFactor == persistedSpeed) return
+        if (isLiveLocked) return
         persistedAutoMs = autoOffsetMs
         persistedSpeed = speedFactor
         subtitleOffsetMs = autoOffsetMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
         AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor")
+    }
+
+    /**
+     * Resets the persisted auto-sync lock in memory so manual or live re-sync
+     * starts from a clean slate and is not repeatedly clobbered by older values.
+     */
+    fun clearPersistedLock() {
+        persistedAutoMs = 0L
+        persistedSpeed = 1f
+        subtitleOffsetMs = manualDelayMs
+        subtitleSpeedFactor = 1f
     }
 
     private val syncProcessor = AudioSyncProcessor(this, appContext)

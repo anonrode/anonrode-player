@@ -720,7 +720,7 @@ class PlayerActivity : ComponentActivity() {
                                         isCalibrating = false
                                         AppLog.d("PLAYER", "calibration done (timeout)")
                                     }
-                                }, 4300L)
+                                }, 45000L)
                             },
                             onNudgeSubtitle = { deltaMs ->
                                 manualNudgeMs += deltaMs
@@ -1037,10 +1037,12 @@ class PlayerActivity : ComponentActivity() {
                 syncAwaitingBackgroundVerdict = false
                 withContext(Dispatchers.Main) {
                     if (uri != currentUriStr) return@withContext
-                    AnonrodeApp.get(this@PlayerActivity).engine
-                        .applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor)
-                    piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
-                    subSyncRunning = false
+                    val engine = AnonrodeApp.get(this@PlayerActivity).engine
+                    if (!engine.isLiveLocked) {
+                        engine.applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor)
+                        piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
+                        subSyncRunning = false
+                    }
                 }
             }
         }
@@ -2374,23 +2376,23 @@ class PlayerActivity : ComponentActivity() {
     private fun onResyncNow() {
         val uri = currentUriStr ?: return
         val app = AnonrodeApp.get(this)
-        // Force-enable live re-lock and re-arm budget — "resync now" implies the user
-        // wants both the live audio processor and the fingerprint job active.
+        // Reset in-memory and persisted locks immediately so old bogus locks stop applying
+        app.engine.clearPersistedLock()
+        piecewiseSegments = emptyList()
+        // Force-enable live re-lock and re-arm budget — "resync now" prioritizes
+        // the lightweight live audio processor over heavy background decoding thrash.
         app.engine.setSubSyncEnabled(true)
         app.engine.rearmLiveSync()
-        lifecycleScope.launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             try {
+                app.stateStore.updateAutoSync(uri, 0L, 1f, "")
+                app.stateStore.clearAutoSyncChecked(uri)
                 app.playerSettingsDataStore.updateData {
                     it.copy(subtitleAutoSyncEnabled = true)
                 }
             } catch (e: Exception) {
                 AppLog.e("SUB", "resync persist failed", e)
             }
-            // Schedule without the score / persisted-lock gate that
-            // openVideo applies — the user explicitly asked for it. force=
-            // true also bypasses the JOB's own skip-if-locked guard (and
-            // replaces any pending non-force job), so this really re-fits.
-            SyncFingerprint.scheduleSuspending(applicationContext, uri, force = true)
         }
     }
 

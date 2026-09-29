@@ -80,6 +80,7 @@ class AudioSyncProcessor(
     internal var binCount = 0
 
     @Volatile internal var locked = false
+    val isLocked: Boolean get() = locked
 
     // v0.8 pass budget: the scheduler fires SpeechCorrelator.PASS_BINS.size
     // passes as the window grows (see accumulateBin), and feature
@@ -653,7 +654,7 @@ class AudioSyncProcessor(
 
         AppLog.d("SYNC", "eval t=${req.posMs / 1000}s off=${result.offsetSeconds}s speed=$speedF hits=$stableHits")
 
-        val requiredHits = if (req.binCount <= 1260) 3 else 2
+        val requiredHits = if (req.binCount <= 1260 && result.containment < 0.85) 3 else 2
         if (stableHits >= requiredHits) {
             locked = true
             listener.onSyncLocked(baseOffset.toFloat(), speedF)
