@@ -170,7 +170,7 @@ object IntervalAligner {
         val lastCue = cueStarts.last()
         while (wStart < lastCue) {
             val wEnd = min(wStart + windowSec, lastCue + 1.0)
-            val cuesW = cueStarts.filter { it in wStart until wEnd }
+            val cuesW = cueStarts.filter { it >= wStart && it < wEnd }
             if (cuesW.size >= 8) {
                 val onsetsW = onsets.filter { it >= wStart - maxOffsetSec && it <= wEnd + maxOffsetSec }
                 if (onsetsW.size >= 10) {

@@ -242,6 +242,7 @@ class SyncFingerprintJob(
             extractor.decodeTimeoutMs = decodeBudgetMs(videoUri, videoPath)
             val sources: OnsetExtractor.OnsetSources
             val extractionComplete: Boolean
+            var lock: LockCandidate? = null
             if (cached != null && cached.complete) {
                 AppLog.d(
                     "SYNC_JOB",
@@ -399,13 +400,14 @@ class SyncFingerprintJob(
             }
 
             // Commit initial lock immediately so the player syncs subtitles within seconds
-            if (lock != null && !extractionComplete) {
+            val initialLock = lock
+            if (initialLock != null && !extractionComplete) {
                 withContext(kotlinx.coroutines.NonCancellable) {
-                    store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, lock.piecewise)
+                    store.updateAutoSync(videoUri, initialLock.offsetMs, initialLock.speed, initialLock.piecewise)
                 }
                 AppLog.d(
                     "SYNC_JOB",
-                    "Tier 1 LOCKED: uri=$videoUri offset=${lock.offsetMs}ms speed=${lock.speed} recall=${lock.recall}"
+                    "Tier 1 LOCKED: uri=$videoUri offset=${initialLock.offsetMs}ms speed=${initialLock.speed} recall=${initialLock.recall}"
                 )
             }
 
@@ -513,8 +515,14 @@ class SyncFingerprintJob(
                                 }
                                 activePiecewise = newPiecewise
                                 activeBeta = cand.beta
+                                val currentLock = lock
                                 withContext(kotlinx.coroutines.NonCancellable) {
-                                    store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, newPiecewise)
+                                    store.updateAutoSync(
+                                        videoUri,
+                                        currentLock?.offsetMs ?: 0L,
+                                        currentLock?.speed ?: 1f,
+                                        newPiecewise,
+                                    )
                                 }
                             }
                         }
