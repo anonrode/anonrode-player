@@ -51,6 +51,7 @@ object IntervalAligner {
     /**
      * Top-level alignment: runs FFT cross-correlation across onsets and subtitle cues.
      */
+    @JvmName("alignCues")
     fun align(
         onsets: List<Double>,
         cues: List<SubtitleCue>,
@@ -110,6 +111,7 @@ object IntervalAligner {
      * Top-level piecewise alignment: detects commercial cuts and multi-segment offsets
      * using Dynamic Programming over temporal windows.
      */
+    @JvmName("alignPiecewiseCues")
     fun alignPiecewise(
         onsets: List<Double>,
         cues: List<SubtitleCue>,
