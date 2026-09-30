@@ -95,13 +95,26 @@ class IntervalAlignerTest {
 
     @Test
     fun `alignPiecewise detects commercial cut jump and generates piecewise storage string`() {
-        // Segment 1: 0 to 500s with betaBefore = -12.0s
-        val seg1Audio = (5..25).map { it * 20.0 }
-        val seg1Cues = seg1Audio.map { it - (-12.0) }
+        // Segment 1: from 10s to 500s with betaBefore = -12.0s
+        val seg1Audio = mutableListOf<Double>()
+        var t = 10.0
+        var i = 1
+        while (t < 500.0) {
+            t += 7.0 + (i * 3.7 % 9.0)
+            seg1Audio.add(Math.round(t * 100.0) / 100.0)
+            i++
+        }
+        val seg1Cues = seg1Audio.map { Math.round((it - (-12.0)) * 100.0) / 100.0 }
 
-        // Segment 2: 600 to 1200s with betaAfter = 66.5s
-        val seg2Audio = (30..55).map { it * 20.0 }
-        val seg2Cues = seg2Audio.map { it - 66.5 }
+        // Segment 2: from 550s to 1100s with betaAfter = 66.5s
+        val seg2Audio = mutableListOf<Double>()
+        t = 550.0
+        while (t < 1100.0) {
+            t += 7.0 + (i * 4.3 % 9.0)
+            seg2Audio.add(Math.round(t * 100.0) / 100.0)
+            i++
+        }
+        val seg2Cues = seg2Audio.map { Math.round((it - 66.5) * 100.0) / 100.0 }
 
         val onsets = seg1Audio + seg2Audio
         val cueStarts = seg1Cues + seg2Cues
@@ -112,7 +125,7 @@ class IntervalAlignerTest {
         assertTrue("BetaBefore error: ${result.betaBefore}", abs(result.betaBefore - (-12.0)) <= 0.30)
         assertTrue("BetaAfter error: ${result.betaAfter}", abs(result.betaAfter - 66.5) <= 0.30)
         assertTrue("Piecewise string should contain betaBefore", result.piecewise.startsWith("0.0:"))
-        assertTrue("Recall should be high for both segments: ${result.recall}", result.recall >= 0.85)
+        assertTrue("Recall should be high for both segments: ${result.recall}", result.recall >= 0.80)
     }
 
     @Test

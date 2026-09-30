@@ -69,7 +69,7 @@ object IntervalAligner {
 
         // 1. Try nominal 1.0 ratio first
         val nom = correlate(onsets, cueStarts, alpha = 1.0, maxOffsetSec = maxOffsetSec)
-        if (nom != null && nom.margin >= MIN_MARGIN && nom.recall >= MIN_RECALL) {
+        if (nom != null && nom.margin >= 0.15 && nom.recall >= 0.85) {
             val elapsed = System.currentTimeMillis() - t0
             AppLog.d(TAG, "nominal lock: alpha=1.0 beta=${nom.beta}s margin=${nom.margin} recall=${nom.recall} in ${elapsed}ms")
             return nom.copy(elapsedMs = elapsed)
@@ -128,8 +128,10 @@ object IntervalAligner {
         if (onsets.size < 20 || cueStarts.size < 10) return null
         val t0 = System.currentTimeMillis()
 
-        // 1. Global alignment first
-        val global = align(onsets, cueStarts, maxOffsetSec) ?: return null
+        // 1. Global alignment first (fallback to nominal if split peaks reduced margin)
+        val nom = correlate(onsets, cueStarts, alpha = 1.0, maxOffsetSec = maxOffsetSec)
+        val global = align(onsets, cueStarts, maxOffsetSec) ?: nom ?: return null
+        if (global.recall < 0.20) return null
 
         val span = cueStarts.last() - cueStarts.first()
         if (span < 600.0) return global // Content too short for commercial cuts
@@ -138,7 +140,7 @@ object IntervalAligner {
         data class WinRes(val wStart: Double, val wEnd: Double, val bestOffset: Double, val score: Float, val count: Int)
         val winResults = mutableListOf<WinRes>()
         val candidateOffsets = mutableSetOf<Double>()
-        candidateOffsets.add(global.beta)
+        candidateOffsets.add((global.beta * 10).roundToInt() / 10.0)
 
         var wStart = cueStarts.first()
         val lastCue = cueStarts.last()
@@ -289,7 +291,7 @@ object IntervalAligner {
         val maxTime = max(maxOnset, maxSub) + maxOffsetSec + 10.0
         val nBins = ceil(maxTime * sampleRate).toInt() + 1
 
-        // 1. Discretize onsets with 400ms boxcar smoothing
+        // 1. Discretize onsets with triangular tent window smoothing
         val oArr = FloatArray(nBins)
         val winBins = (WINDOW_SEC * sampleRate).roundToInt().coerceAtLeast(1)
         val halfWin = winBins / 2
@@ -298,16 +300,25 @@ object IntervalAligner {
             val startIdx = max(0, center - halfWin)
             val endIdx = min(nBins - 1, center + halfWin)
             for (idx in startIdx..endIdx) {
-                oArr[idx] = 1f
+                val w = max(0f, 1f - abs(idx - center).toFloat() / halfWin.toFloat())
+                if (w > oArr[idx]) {
+                    oArr[idx] = w
+                }
             }
         }
 
-        // 2. Discretize scaled subtitle cue starts
+        // 2. Discretize scaled subtitle cue starts with narrow tent window
         val sArr = FloatArray(nBins)
+        val subHalf = max(1, halfWin / 2)
         for (s in cueStarts) {
-            val idx = (s * alpha * sampleRate).roundToInt()
-            if (idx in 0 until nBins) {
-                sArr[idx] = 1f
+            val center = (s * alpha * sampleRate).roundToInt()
+            val startIdx = max(0, center - subHalf)
+            val endIdx = min(nBins - 1, center + subHalf)
+            for (idx in startIdx..endIdx) {
+                val w = max(0f, 1f - abs(idx - center).toFloat() / subHalf.toFloat())
+                if (w > sArr[idx]) {
+                    sArr[idx] = w
+                }
             }
         }
 
@@ -368,7 +379,13 @@ object IntervalAligner {
         }
 
         val bestLag = lags[bestIdx]
-        val hits = bestVal.roundToInt()
+
+        // Normalize hits by single-cue tent convolution peak
+        var singleCueNorm = 1.0
+        for (k in 1..subHalf) {
+            singleCueNorm += 2.0 * (1.0 - k.toDouble() / halfWin) * (1.0 - k.toDouble() / subHalf)
+        }
+        val hits = (bestVal / singleCueNorm).roundToInt()
 
         // Parabolic sub-bin interpolation
         var refinedLag = bestLag
@@ -393,7 +410,7 @@ object IntervalAligner {
         }
 
         val margin = (bestVal - secondPeakVal) / max(1f, bestVal)
-        val recall = hits.toDouble() / nCues
+        val recall = min(1.0, hits.toDouble() / nCues)
 
         // Median and MAD for Z-score
         val sortedVals = slicedCorr.clone().apply { sort() }
