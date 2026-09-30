@@ -127,11 +127,11 @@ class PlaybackEngine(
      */
     fun applyPersistedLock(autoOffsetMs: Long, speedFactor: Float) {
         if (autoOffsetMs == persistedAutoMs && speedFactor == persistedSpeed) return
-        if (isLiveLocked) return
         persistedAutoMs = autoOffsetMs
         persistedSpeed = speedFactor
         subtitleOffsetMs = autoOffsetMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
+        syncProcessor.setEnabled(false)
         AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor")
     }
 
@@ -546,6 +546,10 @@ class PlaybackEngine(
     }
 
     override fun onSyncLocked(offsetSeconds: Float, speedFactor: Float) {
+        if (persistedAutoMs != 0L || persistedSpeed != 1f) {
+            AppLog.d("SYNC", "ignoring live lock: verified persisted lock already active (${persistedAutoMs}ms x$persistedSpeed)")
+            return
+        }
         AppLog.d("SYNC", "LOCKED offset=" + offsetSeconds + "s speed=" + speedFactor)
         val autoMs = (offsetSeconds * 1000f).toLong()
         subtitleOffsetMs = autoMs + manualDelayMs

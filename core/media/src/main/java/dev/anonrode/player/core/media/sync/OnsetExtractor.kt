@@ -110,6 +110,7 @@ class OnsetExtractor(private val context: Context) {
         videoUri: Uri? = null,
         resumeFromSec: Double = -1.0,
         maxMediaDurationSec: Double = -1.0,
+        includeVad: Boolean = true,
         isCancelled: () -> Boolean = { false },
     ): OnsetSources {
         lastDecodeTruncated = false
@@ -118,13 +119,13 @@ class OnsetExtractor(private val context: Context) {
         val sil = if (resumeFromSec < 0) resolveFfmpegPath()?.let {
             extractWithFfmpeg(it, videoPath, if (maxMediaDurationSec > 0.0) maxMediaDurationSec else 0.0)
         } else null
-        val vadAvailable = SileroVad.modelAvailable(context)
+        val vadAvailable = includeVad && SileroVad.modelAvailable(context)
         if (sil != null && !vadAvailable) {
             lastCoveredSec = if (maxMediaDurationSec > 0.0) maxMediaDurationSec else 0.0
             return OnsetSources(sil, emptyList())
         }
 
-        // Single MediaCodec decode pass feeding both detectors.
+        // Single MediaCodec decode pass feeding detectors.
         val silence = SilenceState()
         val vad = if (vadAvailable) SileroVad(context) else null
         // The resumed segment's onset clock must start where the decoder

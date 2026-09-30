@@ -89,7 +89,7 @@ object SyncFingerprint {
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             "$WORK_TAG-$videoUri",
-            if (force) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
+            if (runNow) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
             request,
         )
     }

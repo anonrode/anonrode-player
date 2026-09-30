@@ -598,9 +598,11 @@ class AudioSyncProcessor(
         // mid-evaluation — drop the result instead of publishing a lock the
         // user no longer wants.
         if (!enabled) return
+        val maxOffset = if (req.binCount < 450) 15.0 else SpeechCorrelator.MAX_OFFSET_SEC
         val result: SpeechCorrelator.Result = when (
             val outcome = SpeechCorrelator.findOffset(
                 req.bins, req.binCount, req.cues,
+                maxOffsetSec = maxOffset,
                 baseSeconds = req.baseSeconds,
             )
         ) {
@@ -654,7 +656,7 @@ class AudioSyncProcessor(
 
         AppLog.d("SYNC", "eval t=${req.posMs / 1000}s off=${result.offsetSeconds}s speed=$speedF hits=$stableHits")
 
-        val requiredHits = if (req.binCount <= 1260 && result.containment < 0.85) 3 else 2
+        val requiredHits = if (req.binCount < 600 || result.containment < 0.85) 3 else 2
         if (stableHits >= requiredHits) {
             locked = true
             listener.onSyncLocked(baseOffset.toFloat(), speedF)

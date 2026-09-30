@@ -444,16 +444,19 @@ object SpeechCorrelator {
             // Subtitle cue speech recall: fraction of cue intervals covering speech
             // audio_bin = cue_bin - fineBestShift
             var cueHits = 0
+            var eligibleCues = 0
             for (cue in cues) {
                 val aStart = maxOf(0, (((cue.start * bestAlpha) / ALIGN_BIN) - fineBestShift).toInt())
                 val aEnd = minOf(n - 1, (((cue.end * bestAlpha) / ALIGN_BIN) - fineBestShift).toInt())
+                if (aStart >= n || aEnd < 0 || aStart > aEnd) continue
+                eligibleCues++
                 var hit = false
                 for (i in aStart..aEnd) {
                     if (audio[i] > 0.3f) { hit = true; break }
                 }
                 if (hit) cueHits++
             }
-            val recall = cueHits.toDouble() / cues.size
+            val recall = if (eligibleCues >= 10) cueHits.toDouble() / eligibleCues else 0.0
 
             val betaSeconds = -subShift * ALIGN_BIN
             // Rigorous anti-hallucination gates:
@@ -461,7 +464,8 @@ object SpeechCorrelator {
             // 2. margin >= 0.05: clear separation from secondary peaks
             // 3. halfOk: both halves of the timeline must agree on the trajectory
             // 4. recall >= 0.30: at least 30% of cues must match active speech
-            val lockable = fineBestR >= 0.18 && margin >= 0.05 && halfOk && recall >= 0.30
+            // 5. eligibleCues >= 10: sufficient cue coverage in analyzed window
+            val lockable = fineBestR >= 0.18 && margin >= 0.05 && halfOk && recall >= 0.30 && eligibleCues >= 10
             return if (lockable) {
                 JointResult(
                     alpha = bestAlpha,

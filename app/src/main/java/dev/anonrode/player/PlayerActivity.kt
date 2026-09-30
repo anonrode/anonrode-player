@@ -1038,11 +1038,9 @@ class PlayerActivity : ComponentActivity() {
                 withContext(Dispatchers.Main) {
                     if (uri != currentUriStr) return@withContext
                     val engine = AnonrodeApp.get(this@PlayerActivity).engine
-                    if (!engine.isLiveLocked) {
-                        engine.applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor)
-                        piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
-                        subSyncRunning = false
-                    }
+                    engine.applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor)
+                    piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
+                    subSyncRunning = false
                 }
             }
         }
@@ -1220,7 +1218,7 @@ class PlayerActivity : ComponentActivity() {
                     // 09-13 Anon incident taught us a missing comma eats the
                     // NEXT call separator, so brace-check after this.)
                     syncAwaitingBackgroundVerdict = true
-                    SyncFingerprint.schedule(applicationContext, uriStr)
+                    SyncFingerprint.schedule(applicationContext, uriStr, immediate = true)
                 }
 
                 withContext(Dispatchers.Main) {
