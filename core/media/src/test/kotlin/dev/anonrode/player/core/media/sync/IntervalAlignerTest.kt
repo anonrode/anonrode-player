@@ -135,8 +135,15 @@ class IntervalAlignerTest {
         val seg1Cues = seg1Audio.map { it - (-12.0) }
 
         // Seg 2: 40 cues between t=120s and t=500s, offset = +66.5s
-        val seg2Audio = (0 until 40).map { 120.0 + it * 9.5 }
-        val seg2Cues = seg2Audio.map { it - 66.5 }
+        val seg2Audio = mutableListOf<Double>()
+        var t = 120.0
+        var i = 1
+        repeat(40) {
+            t += 7.0 + (i * 3.7 % 9.0)
+            seg2Audio.add(Math.round(t * 100.0) / 100.0)
+            i++
+        }
+        val seg2Cues = seg2Audio.map { Math.round((it - 66.5) * 100.0) / 100.0 }
 
         val onsets = (seg1Audio + seg2Audio).sorted()
         val cueStarts = (seg1Cues + seg2Cues).sorted()
