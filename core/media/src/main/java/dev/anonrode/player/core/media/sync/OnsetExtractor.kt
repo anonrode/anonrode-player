@@ -61,6 +61,10 @@ class OnsetExtractor(private val context: Context) {
     @Volatile var lastDecodeTruncated = false
         private set
 
+    /** True when the last MediaCodec pass reached the actual end of the audio track. */
+    @Volatile var isEndOfStream = false
+        private set
+
     /** v0.8.3: absolute media time (s) the last [extractSources] pass
      *  covered, resumable or not. The fingerprint job stores it in the
      *  onset cache so the NEXT attempt seeks straight to it instead of
@@ -95,23 +99,24 @@ class OnsetExtractor(private val context: Context) {
      * [videoUri] (v0.8 P1-5) is the content:// fallback used for the
      * MediaCodec decode when the path is missing/unreadable.
      *
-     * [resumeFromSec] (v0.8.3) seeks the MediaCodec pass straight to that
-     * absolute media time and shifts both detectors' onset clocks to match,
-     * so returned onsets are absolute despite the mid-file start. ffmpeg
-     * (no seek support here) is only used for cold passes; a resumed pass
-     * always takes the MediaCodec route. Callers merge with their cached
-     * prefix and dedupe the seam.
+     * [resumeFromSec] seeks the MediaCodec pass straight to that
+     * absolute media time and shifts both detectors' onset clocks to match.
+     * [maxMediaDurationSec] caps the decoding pass to a specific span of media
+     * presentation time (e.g. 600s for Tier 1 fast lock, 300s for Tier 2 chunks),
+     * preventing 45-minute battery thrashing on low-end SoCs. -1 decodes to EOF.
      */
     fun extractSources(
         videoPath: String,
         videoUri: Uri? = null,
         resumeFromSec: Double = -1.0,
+        maxMediaDurationSec: Double = -1.0,
         isCancelled: () -> Boolean = { false },
     ): OnsetSources {
         lastDecodeTruncated = false
+        isEndOfStream = false
         lastCoveredSec = 0.0
         val sil = if (resumeFromSec < 0) resolveFfmpegPath()?.let {
-            extractWithFfmpeg(it, videoPath, 0.0)
+            extractWithFfmpeg(it, videoPath, if (maxMediaDurationSec > 0.0) maxMediaDurationSec else 0.0)
         } else null
         val vadAvailable = SileroVad.modelAvailable(context)
         if (sil != null && !vadAvailable) {
@@ -128,7 +133,7 @@ class OnsetExtractor(private val context: Context) {
         // first callback below.
         var offsetSec = 0.0
         var offsetSet = false
-        decodeAudio(videoPath, videoUri, resumeFromSec, isCancelled) { buf, sr, ch, isFloat, ptsUs ->
+        decodeAudio(videoPath, videoUri, resumeFromSec, maxMediaDurationSec, isCancelled) { buf, sr, ch, isFloat, ptsUs ->
             if (isCancelled()) return@decodeAudio false
             if (!offsetSet) {
                 if (resumeFromSec >= 0.0) {
@@ -247,12 +252,14 @@ class OnsetExtractor(private val context: Context) {
         videoPath: String?,
         videoUri: Uri?,
         resumeFromSec: Double = -1.0,
+        maxMediaDurationSec: Double = -1.0,
         isCancelled: () -> Boolean = { false },
         onPcm: (buf: ByteBuffer, sampleRate: Int, channels: Int, isFloat: Boolean, ptsUs: Long) -> Boolean,
     ) {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         lastDecodeTruncated = false
+        isEndOfStream = false
         try {
             // v0.8 P1-5: prefer the resolved path (what the reference
             // pipeline was validated on), fall back to the content URI so
@@ -326,7 +333,9 @@ class OnsetExtractor(private val context: Context) {
             var sampleRate = 0
             var channels = 0
             var isFloat = false
-            val t0 = System.currentTimeMillis()
+            val targetEndPtsUs = if (maxMediaDurationSec > 0.0) {
+                ((if (resumeFromSec > 0.0) resumeFromSec else 0.0) + maxMediaDurationSec) * 1_000_000.0
+            } else -1.0
 
             while (!outputDone) {
                 if (isCancelled()) {
@@ -367,6 +376,10 @@ class OnsetExtractor(private val context: Context) {
                         of.getInteger(MediaFormat.KEY_PCM_ENCODING) ==
                         AudioFormat.ENCODING_PCM_FLOAT
                 } else if (outIdx >= 0) {
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                        outputDone = true
+                        isEndOfStream = true
+                    }
                     if (info.size > 0 && sampleRate > 0 && channels > 0) {
                         val buf = codec.getOutputBuffer(outIdx)
                         if (buf != null) {
@@ -374,12 +387,11 @@ class OnsetExtractor(private val context: Context) {
                             buf.limit(info.offset + info.size)
                             if (!onPcm(buf, sampleRate, channels, isFloat, info.presentationTimeUs)) {
                                 outputDone = true
-                                lastDecodeTruncated = true
                             }
                         }
                     }
                     codec.releaseOutputBuffer(outIdx, false)
-                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                    if (targetEndPtsUs > 0.0 && info.presentationTimeUs >= targetEndPtsUs) {
                         outputDone = true
                     }
                 }
@@ -390,7 +402,7 @@ class OnsetExtractor(private val context: Context) {
                     break
                 }
             }
-            if (isCancelled() || !outputDone) {
+            if (isCancelled() || (!outputDone && !isEndOfStream)) {
                 lastDecodeTruncated = true
             }
         } catch (t: Throwable) {

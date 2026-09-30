@@ -139,8 +139,8 @@ object SyncFinder {
 
     // ── scoring ──────────────────────────────────────────────────────
     /** Fraction of cue starts that have an audio onset within `window`. */
-    private fun evaluate(onsets: List<Double>, cueStarts: List<Double>,
-                         alpha: Double, beta: Double, window: Double): Double {
+    fun evaluate(onsets: List<Double>, cueStarts: List<Double>,
+                 alpha: Double, beta: Double, window: Double = WINDOW_FINE): Double {
         if (onsets.isEmpty() || cueStarts.isEmpty()) return 0.0
         var hits = 0
         for (s in cueStarts) {
@@ -152,6 +152,38 @@ object SyncFinder {
             }
         }
         return hits.toDouble() / cueStarts.size
+    }
+
+    /**
+     * Fast 1D candidate scan over beta with fixed alpha for the Tier 2 progressive crawler.
+     * Evaluates recall in 0.1s increments across [centerBeta - radius, centerBeta + radius].
+     */
+    fun findBestShift(
+        onsets: List<Double>,
+        cueStarts: List<Double>,
+        alpha: Double,
+        centerBeta: Double = 0.0,
+        radius: Double = 150.0,
+        step: Double = 0.1,
+        window: Double = WINDOW_FINE,
+    ): Pair<Double, Double> {
+        if (onsets.isEmpty() || cueStarts.isEmpty()) return Pair(centerBeta, 0.0)
+        val sortedOnsets = onsets.sorted()
+        val sortedStarts = cueStarts.sorted()
+        var bestBeta = centerBeta
+        var bestRecall = 0.0
+        val startB = centerBeta - radius
+        val endB = centerBeta + radius
+        var b = startB
+        while (b <= endB + 1e-9) {
+            val r = evaluate(sortedOnsets, sortedStarts, alpha, b, window)
+            if (r > bestRecall) {
+                bestRecall = r
+                bestBeta = b
+            }
+            b += step
+        }
+        return Pair(bestBeta, bestRecall)
     }
 
     /** Fraction of onsets that fall within `window` of a transformed cue. */

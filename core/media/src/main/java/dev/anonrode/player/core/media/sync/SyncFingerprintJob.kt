@@ -261,10 +261,12 @@ class SyncFingerprintJob(
                         ),
                     )
                 }
+                val initialSpanSec = if (resumeFrom <= 0.0) 600.0 else 300.0
                 val fresh = extractor.extractSources(
                     videoPath,
                     Uri.parse(videoUri),
                     resumeFrom,
+                    maxMediaDurationSec = initialSpanSec,
                     isCancelled = { !coroutineContext.isActive || isStopped },
                 )
                 sources = if (resumeFrom > 0.0 && cached != null) {
@@ -277,8 +279,7 @@ class SyncFingerprintJob(
                     fresh
                 }
                 val isJobCancelled = !coroutineContext.isActive || isStopped
-                extractionComplete = !extractor.lastDecodeTruncated && !isJobCancelled &&
-                    (sources.hybrid.size >= MIN_ONSETS || sources.envelope.size >= 1000)
+                extractionComplete = extractor.isEndOfStream
                 OnsetCache.store(
                     applicationContext, videoUri, videoFile,
                     OnsetCache.Entry(
@@ -330,100 +331,100 @@ class SyncFingerprintJob(
                 }
             }
 
-            if (lock == null) {
-                // v0.8 P2-2 (v0.8.3: cache-resumed): a decode that stopped
-                // at the budget is NOT a verdict about the video — the
-                // onset set was cut short, so the gates refusing it proves
-                // nothing. Keep retrying while extraction can still grow
-                // (each retry RESUMES from the cached prefix, so a slow
-                // SoC finishes the file in a few passes instead of never),
-                // and only on the last attempt fall through to the
-                // checked-mark like any other no-lock outcome.
-                if (!extractionComplete && runAttemptCount < 3) {
-                    AppLog.d(
-                        "SYNC_JOB",
-                        "no lock AND decode was truncated at budget — resuming extraction, no verdict",
-                    )
-                    return@withContext Result.retry()
+            // Commit initial lock immediately so the player syncs subtitles within seconds
+            if (lock != null) {
+                withContext(kotlinx.coroutines.NonCancellable) {
+                    store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, lock.piecewise)
                 }
                 AppLog.d(
                     "SYNC_JOB",
-                    "no lock (fits attempted: $fitsAttempted/${candidates.size} sources" +
-                        (if (extractionComplete) "" else ", STILL truncated after ${runAttemptCount + 1} passes") +
-                        ")",
+                    "Tier 1 LOCKED: uri=$videoUri offset=${lock.offsetMs}ms speed=${lock.speed} recall=${lock.recall}"
                 )
-                // v0.8.7 P0: NEVER record a verdict from a decode that did not
-                // finish the file. [runAttemptCount] counts EVERY delivery, and
-                // the gate-busy Result.retry() above increments it — so three
-                // retries spent waiting on a concurrent decode consumed this
-                // video's whole resume budget, and the next TRUNCATED decode
-                // fell through to here and called markAutoSyncChecked. That is a
-                // permanent "no lock" verdict for audio the engine never
-                // finished hearing: doWork() then short-circuits on every later
-                // open with "fingerprint verdict already recorded, skipping"
-                // and the episode never syncs again without an explicit
-                // "Resync now". The 09-19 device log shows the setup exactly —
-                // four gate-busy retries on one episode, then no lock and no
-                // sync. A truncated decode is not evidence about the video, so
-                // drop the checked mark and let a later open resume extraction
-                // from the cached onset prefix (the whole point of OnsetCache).
-                if (!extractionComplete) {
-                    AppLog.d(
-                        "SYNC_JOB",
-                        "no verdict: decode still truncated — will resume on a later attempt",
-                    )
-                    return@withContext Result.success()
-                }
+            }
 
-                // This is a verdict about the video's own data (the gates
-                // refused every usable source, or there was too little
-                // detectable speech), not a transient failure: record it so
-                // the player stops re-scheduling a whole-file decode on
-                // every open. A forced "Resync now" re-fits regardless.
+            // Tier 2: Progressive background crawler (runs in lazy 300s chunks ahead of playback)
+            var activeSources = sources
+            var activePiecewise = lock?.piecewise.orEmpty()
+            var activeBeta = (lock?.offsetMs ?: 0L) / 1000.0
+            val activeAlpha = lock?.speed?.toDouble() ?: 1.0
+
+            while (!extractor.isEndOfStream && coroutineContext.isActive && !isStopped) {
+                kotlinx.coroutines.delay(4000L)
+                if (!coroutineContext.isActive || isStopped) break
+
+                val chunkResumeFrom = extractor.lastCoveredSec
+                val chunk = extractor.extractSources(
+                    videoPath,
+                    Uri.parse(videoUri),
+                    resumeFromSec = chunkResumeFrom,
+                    maxMediaDurationSec = 300.0,
+                    isCancelled = { !coroutineContext.isActive || isStopped },
+                )
+                if (chunk.hybrid.isEmpty() && chunk.envelope.isEmpty()) break
+
+                activeSources = OnsetExtractor.OnsetSources(
+                    silencedetect = OnsetCache.mergeOnsets(activeSources.silencedetect, chunk.silencedetect),
+                    vad = OnsetCache.mergeOnsets(activeSources.vad, chunk.vad),
+                    envelope = OnsetCache.mergeEnvelope(activeSources.envelope, chunk.envelope, chunkResumeFrom),
+                )
+                OnsetCache.store(
+                    applicationContext, videoUri, videoFile,
+                    OnsetCache.Entry(
+                        silencedetect = activeSources.silencedetect,
+                        vad = activeSources.vad,
+                        envelope = activeSources.envelope,
+                        coveredSec = extractor.lastCoveredSec,
+                        complete = extractor.isEndOfStream,
+                    ),
+                )
+
+                // Check chunk recall to detect cuts or shifts
+                val chunkEndSec = extractor.lastCoveredSec
+                val chunkCues = starts.filter { it in chunkResumeFrom..chunkEndSec }
+                if (chunkCues.size >= 8 && chunk.hybrid.isNotEmpty()) {
+                    val recActive = SyncFinder.evaluate(chunk.hybrid, chunkCues, activeAlpha, activeBeta)
+                    if (recActive < 0.25) {
+                        val (candBeta, candRec) = SyncFinder.findBestShift(
+                            chunk.hybrid, chunkCues, activeAlpha, centerBeta = activeBeta, radius = 150.0,
+                        )
+                        val shift = candBeta - activeBeta
+                        if (candRec >= 0.45 && kotlin.math.abs(shift) >= 1.0) {
+                            AppLog.d(
+                                "SYNC_JOB",
+                                "Tier 2 Progressive Cut at %.0fs: shift=%+.2fs newBeta=%+.2fs (recall=%.1f%%)"
+                                    .format(chunkResumeFrom, shift, candBeta, candRec * 100)
+                            )
+                            val newPiecewise = SyncFinder.piecewiseToStorage(chunkResumeFrom, activeBeta, candBeta)
+                            activePiecewise = newPiecewise
+                            activeBeta = candBeta
+                            withContext(kotlinx.coroutines.NonCancellable) {
+                                store.updateAutoSync(videoUri, lock?.offsetMs ?: 0L, lock?.speed ?: 1f, newPiecewise)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (extractor.isEndOfStream) {
                 store.markAutoSyncChecked(videoUri)
+                AppLog.d("SYNC_JOB", "Progressive sync reached EOF for $videoUri")
                 return@withContext Result.success()
             }
 
-            // v0.8.7 P0: commit the computed lock OUTSIDE the cancellable
-            // scope. updateAutoSync is a suspend Room write; when WorkManager
-            // cancelled this job mid-write (ExistingWorkPolicy.REPLACE from a
-            // forced "Resync now") the suspension point threw
-            // CancellationException and a fully-computed lock was never
-            // persisted — the 09-19 log's "Tier 1 envelope lock" line with no
-            // matching "LOCKED" line after it. A lock the engine has already
-            // computed must always land.
-            val audioSpanSec = sources.envelope.size * 0.1
-            val isVerifiedLock = extractionComplete || (audioSpanSec >= 300.0 && lock.recall >= 0.35)
-
-            if (!isVerifiedLock) {
-                AppLog.d(
-                    "SYNC_JOB",
-                    "lock deferred: extraction incomplete (span=${audioSpanSec}s, recall=${lock.recall}) — resuming to complete extraction",
-                )
+            if (!coroutineContext.isActive || isStopped) {
+                AppLog.d("SYNC_JOB", "Progressive sync paused by caller — state saved to OnsetCache")
                 return@withContext Result.retry()
             }
 
-            withContext(kotlinx.coroutines.NonCancellable) {
-                store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, lock.piecewise)
-            }
-            if (!extractionComplete && runAttemptCount < 3) {
-                AppLog.d(
-                    "SYNC_JOB",
-                    "LOCKED (provisional, ${lock.tag}) uri=$videoUri — extraction partial, resuming to refit",
-                )
+            if (lock == null) {
+                if (runAttemptCount >= 3) {
+                    store.markAutoSyncChecked(videoUri)
+                    return@withContext Result.success()
+                }
                 return@withContext Result.retry()
             }
-            // The verdict is final for this video (a lock now exists, so the
-            // player's schedule gate stops anyway) — mark it explicitly so
-            // the two gates can never disagree.
-            store.markAutoSyncChecked(videoUri)
-            AppLog.d(
-                "SYNC_JOB",
-                "LOCKED${if (forced) " (forced)" else ""} (${lock.tag}) uri=$videoUri " +
-                    "offset=${lock.offsetMs}ms speed=${lock.speed} " +
-                    "recall=${"%.2f".format(lock.recall)}"
-            )
-            Result.success()
+
+            return@withContext Result.success()
         } catch (c: kotlinx.coroutines.CancellationException) {
             // v0.8.7 P0: WorkManager cancels an in-flight unique job when a
             // forced "Resync now" enqueues with REPLACE. That used to surface

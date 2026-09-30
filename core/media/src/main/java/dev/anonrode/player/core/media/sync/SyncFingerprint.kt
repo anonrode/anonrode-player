@@ -83,7 +83,7 @@ object SyncFingerprint {
                 )
             )
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .setInitialDelay(if (runNow) 0 else 90, TimeUnit.SECONDS)
+            .setInitialDelay(if (runNow) 0L else 1L, TimeUnit.SECONDS)
             .setConstraints(constraints)
             .addTag(WORK_TAG)
             .build()
