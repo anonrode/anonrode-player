@@ -154,9 +154,17 @@ object SyncFinder {
         return hits.toDouble() / cueStarts.size
     }
 
+    data class ShiftCandidate(
+        val beta: Double,
+        val recall: Double,
+        val margin: Double,
+        val containment: Double,
+    )
+
     /**
      * Fast 1D candidate scan over beta with fixed alpha for the Tier 2 progressive crawler.
-     * Evaluates recall in 0.1s increments across [centerBeta - radius, centerBeta + radius].
+     * Evaluates recall across [centerBeta - radius, centerBeta + radius], refines the peak,
+     * and computes runner-up margin and onset containment to reject spurious alignments.
      */
     fun findBestShift(
         onsets: List<Double>,
@@ -164,16 +172,20 @@ object SyncFinder {
         alpha: Double,
         centerBeta: Double = 0.0,
         radius: Double = 150.0,
-        step: Double = 0.1,
+        step: Double = 0.2,
         window: Double = WINDOW_FINE,
-    ): Pair<Double, Double> {
-        if (onsets.isEmpty() || cueStarts.isEmpty()) return Pair(centerBeta, 0.0)
+    ): ShiftCandidate {
+        if (onsets.isEmpty() || cueStarts.isEmpty()) {
+            return ShiftCandidate(centerBeta, 0.0, 0.0, 0.0)
+        }
         val sortedOnsets = onsets.sorted()
         val sortedStarts = cueStarts.sorted()
         var bestBeta = centerBeta
         var bestRecall = 0.0
         val startB = centerBeta - radius
         val endB = centerBeta + radius
+
+        // 1. Coarse sweep
         var b = startB
         while (b <= endB + 1e-9) {
             val r = evaluate(sortedOnsets, sortedStarts, alpha, b, window)
@@ -183,7 +195,84 @@ object SyncFinder {
             }
             b += step
         }
-        return Pair(bestBeta, bestRecall)
+
+        // 2. Fine refinement around the peak (0.02s steps)
+        val fineStart = bestBeta - step
+        val fineEnd = bestBeta + step
+        var bf = fineStart
+        while (bf <= fineEnd + 1e-9) {
+            val r = evaluate(sortedOnsets, sortedStarts, alpha, bf, window)
+            if (r > bestRecall) {
+                bestRecall = r
+                bestBeta = bf
+            }
+            bf += 0.02
+        }
+
+        // 3. Runner-up score outside ±2.0s of bestBeta
+        var runner = 0.0
+        b = startB
+        while (b <= endB + 1e-9) {
+            if (abs(b - bestBeta) > 2.0) {
+                val r = evaluate(sortedOnsets, sortedStarts, alpha, b, window)
+                if (r > runner) runner = r
+            }
+            b += step
+        }
+        val margin = bestRecall - runner
+        val cont = containment(sortedOnsets, sortedStarts, alpha, bestBeta, WINDOW)
+
+        return ShiftCandidate(bestBeta, bestRecall, margin, cont)
+    }
+
+    /**
+     * Partitions chunk cues to find the exact boundary where the timing shift occurred.
+     */
+    fun findCutBoundary(
+        onsets: List<Double>,
+        chunkCues: List<Double>,
+        alpha: Double,
+        betaBefore: Double,
+        betaAfter: Double,
+        fallbackAudioSec: Double,
+        window: Double = WINDOW_FINE,
+    ): Double {
+        if (chunkCues.isEmpty()) return fallbackAudioSec
+        val sortedOnsets = onsets.sorted()
+        val sortedCues = chunkCues.sorted()
+
+        var bestHits = -1
+        var bestIdx = 0
+
+        for (i in sortedCues.indices) {
+            var hits = 0
+            for (j in 0 until i) {
+                val t = alpha * sortedCues[j] + betaBefore
+                val k = lowerBound(sortedOnsets, t)
+                if ((k > 0 && abs(sortedOnsets[k - 1] - t) <= window) ||
+                    (k < sortedOnsets.size && abs(sortedOnsets[k] - t) <= window)) {
+                    hits++
+                }
+            }
+            for (j in i until sortedCues.size) {
+                val t = alpha * sortedCues[j] + betaAfter
+                val k = lowerBound(sortedOnsets, t)
+                if ((k > 0 && abs(sortedOnsets[k - 1] - t) <= window) ||
+                    (k < sortedOnsets.size && abs(sortedOnsets[k] - t) <= window)) {
+                    hits++
+                }
+            }
+            if (hits > bestHits) {
+                bestHits = hits
+                bestIdx = i
+            }
+        }
+
+        return if (bestIdx > 0) {
+            ((sortedCues[bestIdx - 1] + sortedCues[bestIdx]) / 2.0) * alpha + betaBefore
+        } else {
+            fallbackAudioSec
+        }
     }
 
     /** Fraction of onsets that fall within `window` of a transformed cue. */

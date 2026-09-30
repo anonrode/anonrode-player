@@ -346,9 +346,10 @@ class SyncFingerprintJob(
             var activeSources = sources
             var activePiecewise = lock?.piecewise.orEmpty()
             var activeBeta = (lock?.offsetMs ?: 0L) / 1000.0
-            val activeAlpha = lock?.speed?.toDouble() ?: 1.0
+            var activeAlpha = lock?.speed?.toDouble() ?: 1.0
+            var isComplete = extractionComplete
 
-            while (!extractor.isEndOfStream && coroutineContext.isActive && !isStopped) {
+            while (!isComplete && coroutineContext.isActive && !isStopped) {
                 kotlinx.coroutines.delay(4000L)
                 if (!coroutineContext.isActive || isStopped) break
 
@@ -360,7 +361,27 @@ class SyncFingerprintJob(
                     maxMediaDurationSec = 300.0,
                     isCancelled = { !coroutineContext.isActive || isStopped },
                 )
-                if (chunk.hybrid.isEmpty() && chunk.envelope.isEmpty()) break
+                val atEof = extractor.isEndOfStream
+                if (atEof) {
+                    isComplete = true
+                }
+
+                if (chunk.hybrid.isEmpty() && chunk.envelope.isEmpty()) {
+                    if (atEof) {
+                        OnsetCache.store(
+                            applicationContext, videoUri, videoFile,
+                            OnsetCache.Entry(
+                                silencedetect = activeSources.silencedetect,
+                                vad = activeSources.vad,
+                                envelope = activeSources.envelope,
+                                coveredSec = extractor.lastCoveredSec,
+                                complete = true,
+                            ),
+                        )
+                        break
+                    }
+                    continue
+                }
 
                 activeSources = OnsetExtractor.OnsetSources(
                     silencedetect = OnsetCache.mergeOnsets(activeSources.silencedetect, chunk.silencedetect),
@@ -374,38 +395,67 @@ class SyncFingerprintJob(
                         vad = activeSources.vad,
                         envelope = activeSources.envelope,
                         coveredSec = extractor.lastCoveredSec,
-                        complete = extractor.isEndOfStream,
+                        complete = atEof,
                     ),
                 )
 
-                // Check chunk recall to detect cuts or shifts
-                val chunkEndSec = extractor.lastCoveredSec
-                val chunkCues = starts.filter { it in chunkResumeFrom..chunkEndSec }
-                if (chunkCues.size >= 8 && chunk.hybrid.isNotEmpty()) {
-                    val recActive = SyncFinder.evaluate(chunk.hybrid, chunkCues, activeAlpha, activeBeta)
-                    if (recActive < 0.25) {
-                        val (candBeta, candRec) = SyncFinder.findBestShift(
-                            chunk.hybrid, chunkCues, activeAlpha, centerBeta = activeBeta, radius = 150.0,
-                        )
-                        val shift = candBeta - activeBeta
-                        if (candRec >= 0.45 && kotlin.math.abs(shift) >= 1.0) {
-                            AppLog.d(
-                                "SYNC_JOB",
-                                "Tier 2 Progressive Cut at %.0fs: shift=%+.2fs newBeta=%+.2fs (recall=%.1f%%)"
-                                    .format(chunkResumeFrom, shift, candBeta, candRec * 100)
+                // If initial Tier 1 was deferred due to sparse opening speech, try fitting with accumulated audio
+                if (lock == null && activeSources.hybrid.size >= MIN_ONSETS) {
+                    val promoted = attemptLock(activeSources.hybrid, starts, "progressive-rescue")
+                    if (promoted != null) {
+                        lock = promoted
+                        activeBeta = promoted.offsetMs / 1000.0
+                        activeAlpha = promoted.speed.toDouble()
+                        activePiecewise = promoted.piecewise
+                        withContext(kotlinx.coroutines.NonCancellable) {
+                            store.updateAutoSync(videoUri, promoted.offsetMs, promoted.speed, promoted.piecewise)
+                        }
+                        AppLog.d("SYNC_JOB", "Progressive rescue LOCKED: uri=$videoUri offset=${promoted.offsetMs}ms")
+                    }
+                }
+
+                // Check chunk recall in subtitle time coordinates to detect cuts or shifts
+                if (lock != null) {
+                    val chunkEndSec = extractor.lastCoveredSec
+                    val subStart = (chunkResumeFrom - activeBeta) / activeAlpha
+                    val subEnd = (chunkEndSec - activeBeta) / activeAlpha
+                    val chunkCues = starts.filter { it in minOf(subStart, subEnd)..maxOf(subStart, subEnd) }
+
+                    if (chunkCues.size >= 15 && chunk.hybrid.isNotEmpty()) {
+                        val recActive = SyncFinder.evaluate(chunk.hybrid, chunkCues, activeAlpha, activeBeta)
+                        if (recActive < 0.25) {
+                            val cand = SyncFinder.findBestShift(
+                                chunk.hybrid, chunkCues, activeAlpha, centerBeta = activeBeta, radius = 150.0,
                             )
-                            val newPiecewise = SyncFinder.piecewiseToStorage(chunkResumeFrom, activeBeta, candBeta)
-                            activePiecewise = newPiecewise
-                            activeBeta = candBeta
-                            withContext(kotlinx.coroutines.NonCancellable) {
-                                store.updateAutoSync(videoUri, lock?.offsetMs ?: 0L, lock?.speed ?: 1f, newPiecewise)
+                            val shift = cand.beta - activeBeta
+                            if (cand.recall >= 0.45 && cand.margin >= 0.12 && cand.containment >= 0.18 && kotlin.math.abs(shift) >= 1.0) {
+                                AppLog.d(
+                                    "SYNC_JOB",
+                                    "Tier 2 Progressive Cut at %.0fs: shift=%+.2fs newBeta=%+.2fs (recall=%.1f%%, margin=%.1f%%, cont=%.1f%%)"
+                                        .format(chunkResumeFrom, shift, cand.beta, cand.recall * 100, cand.margin * 100, cand.containment * 100)
+                                )
+                                val cutAudioSec = SyncFinder.findCutBoundary(
+                                    chunk.hybrid, chunkCues, activeAlpha, activeBeta, cand.beta, chunkResumeFrom,
+                                )
+                                val newPiecewise = if (activePiecewise.isEmpty()) {
+                                    SyncFinder.piecewiseToStorage(cutAudioSec, activeBeta, cand.beta)
+                                } else {
+                                    "$activePiecewise;$cutAudioSec:${cand.beta}"
+                                }
+                                activePiecewise = newPiecewise
+                                activeBeta = cand.beta
+                                withContext(kotlinx.coroutines.NonCancellable) {
+                                    store.updateAutoSync(videoUri, lock.offsetMs, lock.speed, newPiecewise)
+                                }
                             }
                         }
                     }
                 }
+
+                if (atEof) break
             }
 
-            if (extractor.isEndOfStream) {
+            if (isComplete) {
                 store.markAutoSyncChecked(videoUri)
                 AppLog.d("SYNC_JOB", "Progressive sync reached EOF for $videoUri")
                 return@withContext Result.success()

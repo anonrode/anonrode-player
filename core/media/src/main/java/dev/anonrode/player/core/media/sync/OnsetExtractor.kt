@@ -120,6 +120,7 @@ class OnsetExtractor(private val context: Context) {
         } else null
         val vadAvailable = SileroVad.modelAvailable(context)
         if (sil != null && !vadAvailable) {
+            lastCoveredSec = if (maxMediaDurationSec > 0.0) maxMediaDurationSec else 0.0
             return OnsetSources(sil, emptyList())
         }
 
@@ -336,6 +337,7 @@ class OnsetExtractor(private val context: Context) {
             val targetEndPtsUs = if (maxMediaDurationSec > 0.0) {
                 ((if (resumeFromSec > 0.0) resumeFromSec else 0.0) + maxMediaDurationSec) * 1_000_000.0
             } else -1.0
+            val t0 = System.currentTimeMillis()
 
             while (!outputDone) {
                 if (isCancelled()) {
