@@ -44,6 +44,8 @@ object IntervalAligner {
         val betaBefore: Double = beta,
         val betaAfter: Double = beta,
         val hasSplit: Boolean = false,
+        val secondPeakLag: Double = 0.0,
+        val secondPeakHits: Int = 0,
     )
 
     /**
@@ -133,10 +135,32 @@ object IntervalAligner {
         val global = align(onsets, cueStarts, maxOffsetSec) ?: nom ?: return null
         if (global.recall < 0.20) return null
 
-        val span = cueStarts.last() - cueStarts.first()
-        if (span < 600.0) return global // Content too short for commercial cuts
+        // 2. High-precision exact prefix-sum cut evaluation across global candidate peaks (handles short cold opens)
+        val beta1 = global.beta
+        val beta2 = global.secondPeakLag
+        if (global.secondPeakHits >= 3 && abs(beta1 - beta2) >= 1.0) {
+            val exactCut = evaluatePrefixSumCut(onsets, cueStarts, global.alpha, beta1, beta2)
+            if (exactCut != null && exactCut.gain >= 0.05) {
+                val elapsed = System.currentTimeMillis() - t0
+                val pw = "0.0:${exactCut.betaBefore};${exactCut.cutAudioSec}:${exactCut.betaAfter}"
+                AppLog.d(TAG, "exact prefix-sum cut locked: before=${exactCut.betaBefore}s after=${exactCut.betaAfter}s cutAudio=${exactCut.cutAudioSec}s recall=${exactCut.recallTwo} gain=${exactCut.gain} in ${elapsed}ms")
+                return global.copy(
+                    piecewise = pw,
+                    cutSubSec = exactCut.cutSubSec,
+                    cutAudioSec = exactCut.cutAudioSec,
+                    betaBefore = exactCut.betaBefore,
+                    betaAfter = exactCut.betaAfter,
+                    recall = exactCut.recallTwo,
+                    hasSplit = true,
+                    elapsedMs = elapsed,
+                )
+            }
+        }
 
-        // 2. Window subtitle cues
+        val span = cueStarts.last() - cueStarts.first()
+        if (span < 600.0) return global // Content too short for multi-window commercial cuts
+
+        // 3. Multi-window Dynamic Programming fallback for complex multi-break content
         data class WinRes(val wStart: Double, val wEnd: Double, val bestOffset: Double, val score: Float, val count: Int)
         val winResults = mutableListOf<WinRes>()
         val candidateOffsets = mutableSetOf<Double>()
@@ -403,11 +427,16 @@ object IntervalAligner {
         // Second peak outside 1.5s window
         val deadbandBins = (1.5 * sampleRate).roundToInt()
         var secondPeakVal = 0f
+        var secondPeakIdx = -1
         for (i in 0 until numLags) {
             if (abs(i - bestIdx) > deadbandBins && slicedCorr[i] > secondPeakVal) {
                 secondPeakVal = slicedCorr[i]
+                secondPeakIdx = i
             }
         }
+
+        val secondPeakLag = if (secondPeakIdx >= 0) lags[secondPeakIdx] else 0.0
+        val secondPeakHits = if (secondPeakIdx >= 0) (secondPeakVal / singleCueNorm).roundToInt() else 0
 
         val margin = (bestVal - secondPeakVal) / max(1f, bestVal)
         val recall = min(1.0, hits.toDouble() / nCues)
@@ -428,6 +457,8 @@ object IntervalAligner {
             hits = hits,
             totalCues = nCues,
             elapsedMs = 0L,
+            secondPeakLag = (secondPeakLag * 1000.0).roundToInt() / 1000.0,
+            secondPeakHits = secondPeakHits,
         )
     }
 
@@ -487,5 +518,108 @@ object IntervalAligner {
                 imag[i] *= invN
             }
         }
+    }
+
+    data class ExactCut(
+        val betaBefore: Double,
+        val betaAfter: Double,
+        val cutSubSec: Double,
+        val cutAudioSec: Double,
+        val recallOne: Double,
+        val recallTwo: Double,
+        val gain: Double,
+        val cutCueIdx: Int,
+    )
+
+    private fun evaluatePrefixSumCut(
+        onsets: List<Double>,
+        cueStarts: List<Double>,
+        alpha: Double,
+        beta1: Double,
+        beta2: Double,
+        tol: Double = 0.35,
+    ): ExactCut? {
+        val n = cueStarts.size
+        if (n < 8) return null
+
+        fun isMatch(c: Double, beta: Double): Int {
+            val expectedAudio = c * alpha + beta
+            val idx = onsets.binarySearch(expectedAudio)
+            val ins = if (idx >= 0) idx else -idx - 1
+            for (k in maxOf(0, ins - 2)..minOf(onsets.size - 1, ins + 2)) {
+                if (abs(onsets[k] - expectedAudio) <= tol) return 1
+            }
+            return 0
+        }
+
+        val m1 = IntArray(n) { isMatch(cueStarts[it], beta1) }
+        val m2 = IntArray(n) { isMatch(cueStarts[it], beta2) }
+        val hits1 = m1.sum()
+        val hits2 = m2.sum()
+        val singleRecall = maxOf(hits1, hits2).toDouble() / n
+
+        // Prefix sums for beta1 -> beta2
+        val cum1 = IntArray(n + 1)
+        for (i in 0 until n) cum1[i + 1] = cum1[i] + m1[i]
+        val cum2 = IntArray(n + 1)
+        for (i in n - 1 downTo 0) cum2[i] = cum2[i + 1] + m2[i]
+
+        var bestScore12 = -1
+        var bestK12 = -1
+        for (k in 1 until n) {
+            val score = cum1[k] + cum2[k]
+            if (score > bestScore12) {
+                bestScore12 = score
+                bestK12 = k
+            }
+        }
+
+        // Prefix sums for beta2 -> beta1 (opposite cut direction)
+        val cum2Fwd = IntArray(n + 1)
+        for (i in 0 until n) cum2Fwd[i + 1] = cum2Fwd[i] + m2[i]
+        val cum1Rev = IntArray(n + 1)
+        for (i in n - 1 downTo 0) cum1Rev[i] = cum1Rev[i + 1] + m1[i]
+
+        var bestScore21 = -1
+        var bestK21 = -1
+        for (k in 1 until n) {
+            val score = cum2Fwd[k] + cum1Rev[k]
+            if (score > bestScore21) {
+                bestScore21 = score
+                bestK21 = k
+            }
+        }
+
+        val bestScore: Int
+        val bestK: Int
+        val bBefore: Double
+        val bAfter: Double
+        if (bestScore12 >= bestScore21) {
+            bestScore = bestScore12
+            bestK = bestK12
+            bBefore = beta1
+            bAfter = beta2
+        } else {
+            bestScore = bestScore21
+            bestK = bestK21
+            bBefore = beta2
+            bAfter = beta1
+        }
+
+        val recallTwo = bestScore.toDouble() / n
+        val gain = recallTwo - singleRecall
+
+        val cutSubSec = cueStarts[bestK]
+        val cutAudioSec = maxOf(0.0, cutSubSec * alpha + bBefore)
+        return ExactCut(
+            betaBefore = bBefore,
+            betaAfter = bAfter,
+            cutSubSec = cutSubSec,
+            cutAudioSec = (cutAudioSec * 10.0).roundToInt() / 10.0,
+            recallOne = singleRecall,
+            recallTwo = recallTwo,
+            gain = gain,
+            cutCueIdx = bestK,
+        )
     }
 }

@@ -129,6 +129,28 @@ class IntervalAlignerTest {
     }
 
     @Test
+    fun `alignPiecewise detects short cold open cut via prefix-sum cut finder`() {
+        // 45s short cold open with only 5 cues before an ad break jump
+        val seg1Audio = listOf(5.0, 14.0, 23.0, 32.0, 42.0)
+        val seg1Cues = seg1Audio.map { it - (-12.0) }
+
+        // Seg 2: 40 cues between t=120s and t=500s, offset = +66.5s
+        val seg2Audio = (0 until 40).map { 120.0 + it * 9.5 }
+        val seg2Cues = seg2Audio.map { it - 66.5 }
+
+        val onsets = (seg1Audio + seg2Audio).sorted()
+        val cueStarts = (seg1Cues + seg2Cues).sorted()
+
+        val result = IntervalAligner.alignPiecewise(onsets, cueStarts)
+        assertNotNull("Expected cut result, got null", result)
+        assertTrue("Expected hasSplit=true", result!!.hasSplit)
+        assertTrue("BetaBefore error: ${result.betaBefore}", abs(result.betaBefore - (-12.0)) <= 0.30)
+        assertTrue("BetaAfter error: ${result.betaAfter}", abs(result.betaAfter - 66.5) <= 0.30)
+        assertTrue("Piecewise string should contain betaBefore", result.piecewise.startsWith("0.0:"))
+        assertTrue("Recall should be near 1.0: ${result.recall}", result.recall >= 0.90)
+    }
+
+    @Test
     fun `align refuses random noise cues without false locking`() {
         val onsets = (1..50).map { it * 15.0 }
         // Completely unrelated random cue positions

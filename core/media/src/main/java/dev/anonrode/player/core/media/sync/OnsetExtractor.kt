@@ -236,7 +236,7 @@ class OnsetExtractor(private val context: Context) {
 
         // silencedetect=noise=-25dB → amplitude threshold vs full scale
         val NOISE_AMP = 10.0.pow(-25.0 / 20.0)
-        const val MIN_SILENCE_SEC = 0.3
+        const val MIN_SILENCE_SEC = 0.18
     }
 
     /**
@@ -450,6 +450,11 @@ class OnsetExtractor(private val context: Context) {
         private var monoSamples = 0L
         private var silenceStart = -1.0
 
+        // adaptive dynamic noise floor
+        private var floorRms = 0.02
+        private val floorLeak = 1.0005
+        private val staticFloor = 10.0.pow(-36.0 / 20.0) // ~0.0158
+
         val limitReached: Boolean
             get() = maxSeconds > 0 && sampleRate > 0 &&
                 monoSamples.toDouble() / sampleRate >= maxSeconds
@@ -506,12 +511,22 @@ class OnsetExtractor(private val context: Context) {
             windowSumSq = 0.0
             windowN = 0
 
-            val loud = rms > NOISE_AMP
+            // Update adaptive background noise floor: drops quickly on quiet, leaks up slowly
+            if (rms < floorRms) {
+                floorRms = (rms * 0.9 + floorRms * 0.1).coerceAtLeast(staticFloor)
+            } else {
+                floorRms = (floorRms * floorLeak).coerceAtMost(0.15)
+            }
+
+            // Dynamic speech threshold: +4 dB above local noise floor (x1.6) or static floor
+            val dynamicThreshold = maxOf(staticFloor, floorRms * 1.6)
+            val loud = rms > dynamicThreshold
+
             if (!loud) {
                 if (silenceStart < 0) silenceStart = wStart
             } else if (silenceStart >= 0) {
                 // silence_end semantics: onset at the first loud window
-                // after a silence of at least MIN_SILENCE_SEC
+                // after a silence of at least MIN_SILENCE_SEC (180ms)
                 if (wEnd - silenceStart >= MIN_SILENCE_SEC) onsets.add(wEnd)
                 silenceStart = -1.0
             }
