@@ -82,18 +82,42 @@ object SyncOrchestrator {
         val on = onsets.sorted()
         val cs = cueStarts.sorted()
 
-        val fastIntervalLock = if (on.size >= 20 && cs.size >= 10) {
-            IntervalAligner.align(on, cs)?.let { al ->
-                Model.Single(
-                    alpha = al.alpha,
-                    beta = al.beta,
-                    recall = al.recall,
-                    margin = al.margin,
+        val intervalResult = if (on.size >= 20 && cs.size >= 10) {
+            IntervalAligner.alignPiecewise(on, cs)
+        } else null
+
+        if (intervalResult != null && intervalResult.hasSplit) {
+            return Model.Cut(
+                alpha = intervalResult.alpha,
+                betaBefore = intervalResult.betaBefore,
+                betaAfter = intervalResult.betaAfter,
+                cutSub = intervalResult.cutSubSec,
+                cutLen = intervalResult.betaAfter - intervalResult.betaBefore,
+                cutAudio = intervalResult.cutAudioSec,
+                confidence = "interval-dp",
+                recallOne = intervalResult.recall,
+                recallTwo = intervalResult.recall,
+                single = Model.Single(
+                    alpha = intervalResult.alpha,
+                    beta = intervalResult.beta,
+                    recall = intervalResult.recall,
+                    margin = intervalResult.margin,
                     halfOk = true,
                     path = "fft-interval",
-                )
-            }
-        } else null
+                ),
+            )
+        }
+
+        val fastIntervalLock = intervalResult?.let { al ->
+            Model.Single(
+                alpha = al.alpha,
+                beta = al.beta,
+                recall = al.recall,
+                margin = al.margin,
+                halfOk = true,
+                path = "fft-interval",
+            )
+        }
 
         val single = envelopeSingle ?: fastIntervalLock ?: (
             if (on.size >= 20 && cs.size >= 10) {

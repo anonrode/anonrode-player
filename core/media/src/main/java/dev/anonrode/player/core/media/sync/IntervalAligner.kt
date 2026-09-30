@@ -38,6 +38,12 @@ object IntervalAligner {
         val hits: Int,
         val totalCues: Int,
         val elapsedMs: Long,
+        val piecewise: String = "",
+        val cutSubSec: Double = 0.0,
+        val cutAudioSec: Double = 0.0,
+        val betaBefore: Double = beta,
+        val betaAfter: Double = beta,
+        val hasSplit: Boolean = false,
     )
 
     /**
@@ -96,6 +102,173 @@ object IntervalAligner {
         }
 
         return null
+    }
+
+    /**
+     * Top-level piecewise alignment: detects commercial cuts and multi-segment offsets
+     * using Dynamic Programming over temporal windows.
+     */
+    fun alignPiecewise(
+        onsets: List<Double>,
+        cues: List<SubtitleCue>,
+        maxOffsetSec: Double = 120.0,
+        windowSec: Double = 300.0,
+        stepSec: Double = 150.0,
+        splitPenalty: Double = 12.0,
+    ): Alignment? = alignPiecewise(onsets, cues.map { it.start }, maxOffsetSec, windowSec, stepSec, splitPenalty)
+
+    fun alignPiecewise(
+        onsets: List<Double>,
+        cueStarts: List<Double>,
+        maxOffsetSec: Double = 120.0,
+        windowSec: Double = 300.0,
+        stepSec: Double = 150.0,
+        splitPenalty: Double = 12.0,
+    ): Alignment? {
+        if (onsets.size < 20 || cueStarts.size < 10) return null
+        val t0 = System.currentTimeMillis()
+
+        // 1. Global alignment first
+        val global = align(onsets, cueStarts, maxOffsetSec) ?: return null
+
+        val span = cueStarts.last() - cueStarts.first()
+        if (span < 600.0) return global // Content too short for commercial cuts
+
+        // 2. Window subtitle cues
+        data class WinRes(val wStart: Double, val wEnd: Double, val bestOffset: Double, val score: Float, val count: Int)
+        val winResults = mutableListOf<WinRes>()
+        val candidateOffsets = mutableSetOf<Double>()
+        candidateOffsets.add(global.beta)
+
+        var wStart = cueStarts.first()
+        val lastCue = cueStarts.last()
+        while (wStart < lastCue) {
+            val wEnd = min(wStart + windowSec, lastCue + 1.0)
+            val cuesW = cueStarts.filter { it in wStart until wEnd }
+            if (cuesW.size >= 8) {
+                val onsetsW = onsets.filter { it >= wStart - maxOffsetSec && it <= wEnd + maxOffsetSec }
+                if (onsetsW.size >= 10) {
+                    val wCorr = correlate(onsetsW, cuesW, alpha = global.alpha, maxOffsetSec = maxOffsetSec)
+                    if (wCorr != null && wCorr.margin >= 0.04) {
+                        winResults.add(WinRes(wStart, wEnd, wCorr.beta, wCorr.hits.toFloat(), cuesW.size))
+                        candidateOffsets.add((wCorr.beta * 10).roundToInt() / 10.0)
+                    }
+                }
+            }
+            wStart += stepSec
+        }
+
+        if (winResults.size < 3 || candidateOffsets.size < 2) {
+            return global
+        }
+
+        val sortedCands = candidateOffsets.sorted()
+        val nW = winResults.size
+        val nC = sortedCands.size
+
+        // DP[w][c]: best cumulative score up to window w selecting candidate c
+        val dp = Array(nW) { DoubleArray(nC) { -1e9 } }
+        val backtrack = Array(nW) { IntArray(nC) }
+
+        for (c in 0 until nC) {
+            val cand = sortedCands[c]
+            val w0 = winResults[0]
+            val match = if (abs(cand - w0.bestOffset) <= 0.3) w0.score.toDouble() else 0.0
+            dp[0][c] = match
+        }
+
+        for (w in 1 until nW) {
+            val wr = winResults[w]
+            for (c in 0 until nC) {
+                val cand = sortedCands[c]
+                val localScore = if (abs(cand - wr.bestOffset) <= 0.3) wr.score.toDouble() else 0.0
+                var bestPrev = -1e9
+                var bestPrevIdx = 0
+                for (prev in 0 until nC) {
+                    val prevCand = sortedCands[prev]
+                    val penalty = if (abs(prevCand - cand) < 0.25) 0.0 else (splitPenalty * wr.score * 0.15)
+                    val v = dp[w - 1][prev] - penalty
+                    if (v > bestPrev) {
+                        bestPrev = v
+                        bestPrevIdx = prev
+                    }
+                }
+                dp[w][c] = bestPrev + localScore
+                backtrack[w][c] = bestPrevIdx
+            }
+        }
+
+        var bestEndIdx = 0
+        var bestEndVal = -1e9
+        for (c in 0 until nC) {
+            if (dp[nW - 1][c] > bestEndVal) {
+                bestEndVal = dp[nW - 1][c]
+                bestEndIdx = c
+            }
+        }
+
+        val path = IntArray(nW)
+        path[nW - 1] = bestEndIdx
+        for (w in nW - 1 downTo 1) {
+            path[w - 1] = backtrack[w][path[w]]
+        }
+
+        // Check if there is a cut transition
+        var cutWindow = -1
+        val firstCand = sortedCands[path[0]]
+        for (w in 1 until nW) {
+            if (abs(sortedCands[path[w]] - firstCand) >= 0.5) {
+                cutWindow = w
+                break
+            }
+        }
+
+        if (cutWindow < 0) {
+            return global
+        }
+
+        val betaBefore = firstCand
+        val betaAfter = sortedCands[path[cutWindow]]
+        val cutSubSec = winResults[cutWindow].wStart
+        val cutAudioSec = (cutSubSec + betaBefore).coerceAtLeast(0.0)
+
+        // Evaluate two-piece recall
+        var hitsBefore = 0
+        var hitsAfter = 0
+        val tol = 0.35
+        for (c in cueStarts) {
+            val expectedAudio = if (c < cutSubSec) (c * global.alpha + betaBefore) else (c * global.alpha + betaAfter)
+            val idx = onsets.binarySearch(expectedAudio)
+            val insertion = if (idx >= 0) idx else -idx - 1
+            var hit = false
+            for (k in max(0, insertion - 2)..min(onsets.size - 1, insertion + 2)) {
+                if (abs(onsets[k] - expectedAudio) <= tol) {
+                    hit = true; break
+                }
+            }
+            if (hit) {
+                if (c < cutSubSec) hitsBefore++ else hitsAfter++
+            }
+        }
+        val recallTwo = (hitsBefore + hitsAfter).toDouble() / cueStarts.size
+
+        if (recallTwo >= global.recall + 0.05) {
+            val pw = "0.0:$betaBefore;$cutAudioSec:$betaAfter"
+            val elapsed = System.currentTimeMillis() - t0
+            AppLog.d(TAG, "piecewise cut locked: before=${betaBefore}s after=${betaAfter}s cutAudio=${cutAudioSec}s recall=${recallTwo} in ${elapsed}ms")
+            return global.copy(
+                piecewise = pw,
+                cutSubSec = cutSubSec,
+                cutAudioSec = cutAudioSec,
+                betaBefore = betaBefore,
+                betaAfter = betaAfter,
+                recall = recallTwo,
+                hasSplit = true,
+                elapsedMs = elapsed,
+            )
+        }
+
+        return global
     }
 
     /**
