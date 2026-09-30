@@ -103,12 +103,10 @@ object SyncOrchestrator {
             val singleConfident = single != null &&
                 single.margin >= SHORT_CIRCUIT_MARGIN && single.halfOk
 
-            // Critical anti-hallucination guard: if the single model was refused,
-            // NEVER accept a "single-method" cut. Only accept if both detectors
-            // independently agreed (confidence == "agree"), two-line recall is high (>= 0.40),
-            // and it beats single-line recall by at least +0.06.
+            // Anti-hallucination guard: accept cuts if either both detectors agreed, or a single detector
+            // found decisive evidence where two-line recall is solid (>= 0.35) and beats single-line by at least +0.06.
             val cutViable = if (single == null) {
-                cut.confidence == "agree" && rec2 >= 0.40 && (rec2 - rec1) >= 0.06
+                (cut.confidence == "agree" || cut.confidence == "single-method") && rec2 >= 0.35 && (rec2 - rec1) >= 0.06
             } else {
                 !(singleConfident && rec2 <= rec1)
             }

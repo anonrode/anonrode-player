@@ -112,9 +112,8 @@ class DriftTracker {
          *  evaluation slots are not enough evidence. */
         private const val MIN_DRIFT_SPAN_SEC = 60.0
 
-        /** Plausible rate mismatch (23.976 vs 24 fps = 0.1 %, NTSC film
-         *  transfers ~0.1 %). Anything larger than this is measurement
-         *  noise, not a real speed difference. */
-        private const val MAX_RATE = 0.025
+        /** Plausible rate mismatch (23.976 vs 24 fps = 0.1 %, PAL 24 vs 25 fps = 4.27 %).
+         *  Anything larger than 4.5 % is an offset discontinuity / cut, not a continuous rate. */
+        private const val MAX_RATE = 0.045
     }
 }
