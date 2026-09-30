@@ -244,7 +244,11 @@ internal class LiveVad private constructor(
 
         /** Returns null when the model is unavailable; caller uses energy instead. */
         fun create(context: Context): LiveVad? = try {
-            if (!SileroVad.modelAvailable(context)) {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            if (am != null && am.isLowRamDevice) {
+                AppLog.d(TAG, "low-RAM device detected — staying on the lightweight energy envelope")
+                null
+            } else if (!SileroVad.modelAvailable(context)) {
                 AppLog.d(TAG, "model asset missing — staying on the energy envelope")
                 null
             } else {

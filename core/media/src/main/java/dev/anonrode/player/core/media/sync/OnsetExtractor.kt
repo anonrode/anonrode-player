@@ -119,7 +119,8 @@ class OnsetExtractor(private val context: Context) {
         val sil = if (resumeFromSec < 0) resolveFfmpegPath()?.let {
             extractWithFfmpeg(it, videoPath, if (maxMediaDurationSec > 0.0) maxMediaDurationSec else 0.0)
         } else null
-        val vadAvailable = includeVad && SileroVad.modelAvailable(context)
+        val isLowRam = (context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager)?.isLowRamDevice == true
+        val vadAvailable = includeVad && !isLowRam && SileroVad.modelAvailable(context)
         if (sil != null && !vadAvailable) {
             lastCoveredSec = if (maxMediaDurationSec > 0.0) maxMediaDurationSec else 0.0
             return OnsetSources(sil, emptyList())

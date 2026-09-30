@@ -82,7 +82,20 @@ object SyncOrchestrator {
         val on = onsets.sorted()
         val cs = cueStarts.sorted()
 
-        val single = envelopeSingle ?: (
+        val fastIntervalLock = if (on.size >= 20 && cs.size >= 10) {
+            IntervalAligner.align(on, cs)?.let { al ->
+                Model.Single(
+                    alpha = al.alpha,
+                    beta = al.beta,
+                    recall = al.recall,
+                    margin = al.margin,
+                    halfOk = true,
+                    path = "fft-interval",
+                )
+            }
+        } else null
+
+        val single = envelopeSingle ?: fastIntervalLock ?: (
             if (on.size >= 20 && cs.size >= 10) {
                 SyncBest.find(on, cs)?.let {
                     Model.Single(
