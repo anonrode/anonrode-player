@@ -113,7 +113,7 @@ class DriftTrackerTest {
     @Test
     fun `a rate above MAX_RATE is clamped, not extrapolated without limit`() {
         val (_, speed) = fed(600.0, 2.0, 0.5).getCorrection() // absurd 50 %
-        assertEquals(1.025, speed.toDouble(), 1e-3) // MAX_RATE = 2.5 %
+        assertEquals(1.045, speed.toDouble(), 1e-3) // MAX_RATE = 4.5 %
     }
 
     @Test
