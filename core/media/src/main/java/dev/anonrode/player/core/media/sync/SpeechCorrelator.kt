@@ -148,22 +148,10 @@ object SpeechCorrelator {
         val n = binCount
         val total = audio.size
 
-        // Adaptive speech sufficiency: speech bins above mean + 0.15 * dynamic range
-        var minVal = Float.MAX_VALUE
-        var maxVal = -Float.MAX_VALUE
-        var sumVal = 0.0
-        for (i in 0 until n) {
-            val v = audio[i]
-            if (v < minVal) minVal = v
-            if (v > maxVal) maxVal = v
-            sumVal += v
-        }
-        val dynamicRange = (maxVal - minVal).coerceAtLeast(0f)
-        val meanVal = (sumVal / n).toFloat()
-        val speechThreshold = (meanVal + 0.15f * dynamicRange).coerceIn(0.1f, 0.45f)
-        var speechBins = 0
-        for (i in 0 until n) if (audio[i] > speechThreshold) speechBins++
-        if (speechBins < MIN_SPEECH_BINS) return Outcome.NotReady
+        // hard decision ONLY for the sufficiency floor + containment diag
+        var hard = 0
+        for (i in 0 until n) if (audio[i] > 0.3f) hard++
+        if (hard < MIN_SPEECH_BINS) return Outcome.NotReady
         if (n < ELIGIBLE_BINS) return Outcome.NotReady // not enough audio to judge yet
 
         // A envelope → 8 bit-planes over a word array (bit i at position i)
@@ -259,9 +247,9 @@ object SpeechCorrelator {
         if (lastBits != 0) dest[words - 1] = dest[words - 1] and ((1L shl lastBits) - 1)
         var inside = 0
         for (i in 0 until n) {
-            if (audio[i] > speechThreshold && ((dest[i shr 6] ushr (i and 63)) and 1L) != 0L) inside++
+            if (audio[i] > 0.3f && ((dest[i shr 6] ushr (i and 63)) and 1L) != 0L) inside++
         }
-        val containment = if (speechBins > 0) inside.toFloat() / speechBins else 0f
+        val containment = if (hard > 0) inside.toFloat() / hard else 0f
 
         val z = peak * sqrt(n.toDouble())
         val zFloor = if (n <= 160) Z_SMALL else Z_SMALL - (Z_SMALL - Z_LARGE) * minOf(1.0, (n - 160.0) / 120.0)
@@ -300,23 +288,10 @@ object SpeechCorrelator {
         val words = (n + 63) / 64
         val planes = Array(8) { LongArray(words) }
 
-        var minVal = Float.MAX_VALUE
-        var maxVal = -Float.MAX_VALUE
-        var sumVal = 0.0
+        var hardCount = 0
         for (i in 0 until n) {
             val v = audio[i]
-            if (v < minVal) minVal = v
-            if (v > maxVal) maxVal = v
-            sumVal += v
-        }
-        val dynamicRange = (maxVal - minVal).coerceAtLeast(0f)
-        val meanVal = (sumVal / n).toFloat()
-        val speechThreshold = (meanVal + 0.15f * dynamicRange).coerceIn(0.1f, 0.45f)
-
-        var speechBins = 0
-        for (i in 0 until n) {
-            val v = audio[i]
-            if (v > speechThreshold) speechBins++
+            if (v > 0.3f) hardCount++
             var q = (v * 255f + 0.5f).toInt()
             if (q > 255) q = 255
             if (q > 0) {
@@ -327,7 +302,7 @@ object SpeechCorrelator {
                 }
             }
         }
-        if (speechBins < MIN_SPEECH_BINS) return null
+        if (hardCount < MIN_SPEECH_BINS) return null
 
         // Exact moments of A for Pearson r
         var sumA = 0.0
