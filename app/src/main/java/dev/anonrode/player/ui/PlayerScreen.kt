@@ -138,6 +138,8 @@ fun PlayerScreen(
      * state (the old top-left banner is retired).
      */
     subSyncRunning: Boolean = false,
+    /** True when a verified sync lock is active (live or persisted). */
+    isSyncLocked: Boolean = false,
     /** True while a fresh calibration pass is running. */
     isCalibrating: Boolean = false,
     /** Start a new calibration pass (popover's RE-SYNC row). */
@@ -549,8 +551,9 @@ fun PlayerScreen(
     // correlation window and while a forced fingerprint is queued/running.
     // v0.7.3: the separate calibration banner is retired — the manual
     // calibration window keeps the SAME "Syncing…" state alive.
-    LaunchedEffect(subSyncRunning, isCalibrating) {
+    LaunchedEffect(subSyncRunning, isCalibrating, isSyncLocked) {
         quick.subSyncRunning.value = subSyncRunning || isCalibrating
+        quick.isSyncLocked.value = isSyncLocked
     }
     ZoomApplyEffect(ui.zoomIdx.intValue, ui)
     RotationLockEffect(activity, quick.rotateMode.value)

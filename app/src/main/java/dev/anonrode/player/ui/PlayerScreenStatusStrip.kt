@@ -78,6 +78,7 @@ internal fun StatusStrip(
     durationSec: Float,
     onTapSync: () -> Unit,
     onResync: () -> Unit,
+    isExplicitlyLocked: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -92,6 +93,7 @@ internal fun StatusStrip(
             enabled = syncEnabled,
             running = syncRunning,
             offsetMs = offsetMs,
+            isExplicitlyLocked = isExplicitlyLocked,
             onClick = onTapSync,
             onResync = onResync,
         )
@@ -137,10 +139,11 @@ private fun StatusSyncPill(
     offsetMs: Long,
     onClick: () -> Unit,
     onResync: () -> Unit,
+    isExplicitlyLocked: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val view = LocalView.current
-    val locked = enabled && offsetMs != 0L
+    val locked = enabled && (offsetMs != 0L || isExplicitlyLocked)
     val dotColor = when {
         !enabled -> Color.White.copy(alpha = 0.28f)
         running -> Color(0xFFFFC247)
@@ -264,10 +267,11 @@ private fun StatusTextPill(
     )
 }
 
-/** "+1.2s" / "−0.3s" with a real minus glyph — matches the hero chip's format. */
+/** "+1.2s" / "−0.3s" / "0.0s" with a real minus glyph — matches the hero chip's format. */
 private fun offsetText(ms: Long): String {
     val s = ms / 1000f
-    return (if (s >= 0f) "+" else "−") + "%.1fs".format(abs(s))
+    if (abs(s) < 0.05f) return "0.0s"
+    return (if (s > 0f) "+" else "−") + "%.1fs".format(abs(s))
 }
 
 /** mm:ss (or h:mm:ss past an hour) — self-contained so this file has no

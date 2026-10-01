@@ -379,7 +379,7 @@ object SyncFinder {
         return jumps to medians
     }
 
-    private fun lowerBound(arr: List<Double>, target: Double): Int {
+    internal fun lowerBound(arr: List<Double>, target: Double): Int {
         var lo = 0; var hi = arr.size
         while (lo < hi) {
             val mid = (lo + hi) ushr 1

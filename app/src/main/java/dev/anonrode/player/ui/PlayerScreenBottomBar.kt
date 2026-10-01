@@ -171,6 +171,7 @@ internal fun PlayerScreenBottomBar(
                 durationSec = durationSec.value,
                 onTapSync = { actions.openSyncPopover() },
                 onResync = { actions.resyncNow() },
+                isExplicitlyLocked = actions.quick.isSyncLocked.value,
             )
         }
 

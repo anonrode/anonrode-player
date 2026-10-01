@@ -50,8 +50,9 @@ object SyncLogShare {
      *  re-anchor decision is prime suspect material for "it unlocked wrong
      *  while I was looping". */
     private val SYNC_TAGS = listOf(
-        "SYNC", "SYNC_JOB", "SYNC_ORCH", "ONSET", "VAD", "SUB",
-        "SUB_RESOLVER", "SUB_TREE", "AB", "PLAY", "ENGINE",
+        "SYNC", "SYNC_JOB", "SYNC_ORCH", "SPOT_SYNC", "SYNC_FIND", "PIECEWISE",
+        "INTERVAL", "ONSET", "VAD", "SUB", "SUB_RESOLVER", "SUB_TREE",
+        "AB", "PLAY", "ENGINE",
     )
 
     /** Share-sheet text cap (clipper / messenger safety, not a log cap). */
@@ -62,7 +63,7 @@ object SyncLogShare {
      * Blocking file IO (the log is capped at ~1.5 MB by AppLog's rotation,
      * so the read is bounded); [shareSyncLog] hops to IO for this.
      */
-    fun buildReport(context: Context): String? = try {
+    fun buildReport(context: Context, extraDiagnostics: String? = null): String? = try {
         val dir = File(context.filesDir, DIR)
         val sources = listOf(File(dir, "$FILE.old"), File(dir, FILE))
             .filter { it.isFile }
@@ -82,6 +83,10 @@ object SyncLogShare {
         } catch (_: Throwable) {
             "unknown"
         }
+
+        val app = context.applicationContext as? AnonrodeApp
+        val engine = if (app?.isReady == true) app.engine else null
+
         val sb = StringBuilder(64 * 1024)
         sb.append("anonrode-player — subtitle sync log\n")
         sb.append("app version: ").append(version).append('\n')
@@ -90,7 +95,36 @@ object SyncLogShare {
             .append('\n')
         sb.append("log lines: ").append(total)
             .append(if (sources.size > 1) " (rotation file included)" else "").append('\n')
-            .append('\n')
+
+        if (engine != null) {
+            val posMs = engine.player?.currentPosition ?: 0L
+            val spd = engine.player?.playbackParameters?.speed ?: 1.0f
+            sb.append("\n── active playback & sync state ──\n")
+            sb.append("media uri: ").append(engine.currentUri ?: "none").append('\n')
+            sb.append("position: ").append("%.2fs".format(posMs / 1000.0))
+                .append(" (playback speed: ").append("%.2fx".format(spd)).append(")\n")
+            sb.append("cues loaded: ").append(engine.activeSyncCues.size).append('\n')
+            sb.append("live sync locked: ").append(engine.isLiveLocked)
+                .append(" (offset: ").append("%.2fs".format(engine.subtitleOffsetMs / 1000.0))
+                .append(", drift: ").append("%.4f".format(engine.subtitleSpeedFactor)).append(")\n")
+            sb.append("persisted lock: ").append(engine.persistedAutoMs).append("ms\n")
+            if (!extraDiagnostics.isNullOrBlank()) {
+                sb.append(extraDiagnostics.trim()).append('\n')
+            }
+        } else if (!extraDiagnostics.isNullOrBlank()) {
+            sb.append("\n── diagnostic notes ──\n").append(extraDiagnostics.trim()).append('\n')
+        }
+
+        // Quick milestone breakdown
+        val lastLock = sync.findLast { it.contains("LOCKED offset=") || it.contains("spot probe locked:") }
+        val cuts = sync.filter { it.contains("offset jump:") || it.contains("[PIECEWISE]") }
+        if (lastLock != null || cuts.isNotEmpty()) {
+            sb.append("\n── key sync milestones ──\n")
+            lastLock?.let { sb.append("• latest lock: ").append(it.trim()).append('\n') }
+            cuts.takeLast(3).forEach { sb.append("• cut event: ").append(it.trim()).append('\n') }
+        }
+
+        sb.append('\n')
         sb.append("── sync-decision lines (newest ").append(sync.size)
             .append(" of this session) ──\n")
         sync.forEach { sb.append(it).append('\n') }
@@ -113,14 +147,14 @@ object SyncLogShare {
      * report. Call on the main thread (it hops to IO for the read and back
      * for the share). Never throws: the worst case is a toast and no sheet.
      */
-    suspend fun shareSyncLog(context: Context) {
+    suspend fun shareSyncLog(context: Context, extraDiagnostics: String? = null) {
         AppLog.d("APP", "sync log share requested")
         AppLog.flush()
         // AppLog batches writes on its own daemon worker with a 1 s
         // coalescing window; flush() queues the drain, so give the worker a
         // moment before the read or the newest decisions are missing.
         delay(400)
-        val text = withContext(Dispatchers.IO) { buildReport(context) }
+        val text = withContext(Dispatchers.IO) { buildReport(context, extraDiagnostics) }
         if (text == null) {
             Toast.makeText(context, "No log file to share yet", Toast.LENGTH_SHORT).show()
             return

@@ -7,6 +7,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
 import dev.anonrode.player.core.media.log.AppLog
+import dev.anonrode.player.core.model.SubtitleCue
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -119,8 +120,7 @@ class OnsetExtractor(private val context: Context) {
         val sil = if (resumeFromSec < 0) resolveFfmpegPath()?.let {
             extractWithFfmpeg(it, videoPath, if (maxMediaDurationSec > 0.0) maxMediaDurationSec else 0.0)
         } else null
-        val isLowRam = (context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager)?.isLowRamDevice == true
-        val vadAvailable = includeVad && !isLowRam && SileroVad.modelAvailable(context)
+        val vadAvailable = includeVad && SileroVad.modelAvailable(context)
         if (sil != null && !vadAvailable) {
             lastCoveredSec = if (maxMediaDurationSec > 0.0) maxMediaDurationSec else 0.0
             return OnsetSources(sil, emptyList())
@@ -163,6 +163,155 @@ class OnsetExtractor(private val context: Context) {
             lastDecodeTruncated = true
         }
         return OnsetSources(silOnsets, vadOnsets, vadEnvelope)
+    }
+
+    /**
+     * Spot-Sync fast seek probe (<500ms): decodes a short window (default 6s)
+     * at [positionSec] and matches local cues via [SyncFinder.findBestShift].
+     */
+    fun probeSpotSync(
+        videoPath: String?,
+        videoUri: Uri? = null,
+        cues: List<SubtitleCue>,
+        positionSec: Double,
+        activeOffsetSec: Double = 0.0,
+        probeDurationSec: Double = 6.0,
+        radiusSec: Double = 60.0,
+        isCancelled: () -> Boolean = { false },
+    ): Double? {
+        if (cues.isEmpty() || positionSec < 0.0) return null
+        val sources = extractSources(
+            videoPath = videoPath,
+            videoUri = videoUri,
+            includeVad = true,
+            resumeFromSec = positionSec,
+            maxMediaDurationSec = probeDurationSec,
+            isCancelled = isCancelled,
+        )
+        if (isCancelled()) return null
+
+        val audioOnsets = sources.hybrid
+        if (audioOnsets.isEmpty()) return null
+
+        val minAudio = audioOnsets.minOrNull() ?: positionSec
+        val maxAudio = audioOnsets.maxOrNull() ?: (positionSec + probeDurationSec)
+
+        val startB = activeOffsetSec - radiusSec
+        val endB = activeOffsetSec + radiusSec
+
+        // Filter cues that can match within the probe search range
+        // audio_time = cue.start + beta => cue.start = audio_time - beta
+        val minCue = minAudio - endB - 1.0
+        val maxCue = maxAudio - startB + 1.0
+        val candidateCues = cues.filter { it.start in minCue..maxCue }
+        if (candidateCues.isEmpty()) return null
+
+        val sortedOnsets = audioOnsets.sorted()
+        val sortedStarts = candidateCues.map { it.start }.sorted()
+
+        var bestBeta = activeOffsetSec
+        var bestScore = 0.0
+        var bestHits = 0
+        var bestLocalCues = 0
+
+        var b = startB
+        while (b <= endB + 1e-9) {
+            var hits = 0
+            var localCueCount = 0
+            for (s in sortedStarts) {
+                val t = s + b
+                if (t in (minAudio - 0.5)..(maxAudio + 0.5)) {
+                    localCueCount++
+                    val k = SyncFinder.lowerBound(sortedOnsets, t)
+                    if ((k > 0 && abs(sortedOnsets[k - 1] - t) <= 0.35) ||
+                        (k < sortedOnsets.size && abs(sortedOnsets[k] - t) <= 0.35)) {
+                        hits++
+                    }
+                }
+            }
+            if (hits > 0 && localCueCount > 0) {
+                val recall = hits.toDouble() / localCueCount
+                val precision = hits.toDouble() / sortedOnsets.size
+                val score = 0.5 * recall + 0.5 * precision
+                if (score > bestScore) {
+                    bestScore = score
+                    bestBeta = b
+                    bestHits = hits
+                    bestLocalCues = localCueCount
+                }
+            }
+            b += 0.1
+        }
+
+        // Refine peak around bestBeta
+        var bf = bestBeta - 0.1
+        val fineEnd = bestBeta + 0.1
+        while (bf <= fineEnd + 1e-9) {
+            var hits = 0
+            var localCueCount = 0
+            for (s in sortedStarts) {
+                val t = s + bf
+                if (t in (minAudio - 0.5)..(maxAudio + 0.5)) {
+                    localCueCount++
+                    val k = SyncFinder.lowerBound(sortedOnsets, t)
+                    if ((k > 0 && abs(sortedOnsets[k - 1] - t) <= 0.35) ||
+                        (k < sortedOnsets.size && abs(sortedOnsets[k] - t) <= 0.35)) {
+                        hits++
+                    }
+                }
+            }
+            if (hits > 0 && localCueCount > 0) {
+                val recall = hits.toDouble() / localCueCount
+                val precision = hits.toDouble() / sortedOnsets.size
+                val score = 0.5 * recall + 0.5 * precision
+                if (score > bestScore) {
+                    bestScore = score
+                    bestBeta = bf
+                    bestHits = hits
+                    bestLocalCues = localCueCount
+                }
+            }
+            bf += 0.02
+        }
+
+        // Runner-up check outside +-2.0s
+        var runner = 0.0
+        b = startB
+        while (b <= endB + 1e-9) {
+            if (abs(b - bestBeta) > 2.0) {
+                var hits = 0
+                var localCueCount = 0
+                for (s in sortedStarts) {
+                    val t = s + b
+                    if (t in (minAudio - 0.5)..(maxAudio + 0.5)) {
+                        localCueCount++
+                        val k = SyncFinder.lowerBound(sortedOnsets, t)
+                        if ((k > 0 && abs(sortedOnsets[k - 1] - t) <= 0.35) ||
+                            (k < sortedOnsets.size && abs(sortedOnsets[k] - t) <= 0.35)) {
+                            hits++
+                        }
+                    }
+                }
+                if (hits > 0 && localCueCount > 0) {
+                    val recall = hits.toDouble() / localCueCount
+                    val precision = hits.toDouble() / sortedOnsets.size
+                    val score = 0.5 * recall + 0.5 * precision
+                    if (score > runner) runner = score
+                }
+            }
+            b += 0.1
+        }
+
+        val margin = bestScore - runner
+        val recall = if (bestLocalCues > 0) bestHits.toDouble() / bestLocalCues else 0.0
+        val precision = if (sortedOnsets.isNotEmpty()) bestHits.toDouble() / sortedOnsets.size else 0.0
+
+        if (bestHits >= 1 && (recall >= 0.50 || precision >= 0.33) && margin >= 0.05) {
+            AppLog.d("SPOT_SYNC", "spot probe locked: beta=%.3fs hits=%d localCues=%d recall=%.2f prec=%.2f margin=%.2f".format(bestBeta, bestHits, bestLocalCues, recall, precision, margin))
+            return bestBeta
+        }
+        AppLog.d("SPOT_SYNC", "spot probe refused at pos=%.1fs: bestBeta=%.3fs hits=%d/%d recall=%.2f prec=%.2f margin=%.2f".format(positionSec, bestBeta, bestHits, bestLocalCues, recall, precision, margin))
+        return null
     }
 
     /**

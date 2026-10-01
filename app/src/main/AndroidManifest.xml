@@ -29,6 +29,7 @@
         android:icon="@drawable/ic_launcher"
         android:supportsRtl="true"
         android:appCategory="video"
+        android:largeHeap="true"
         android:requestLegacyExternalStorage="true"
         android:theme="@style/Theme.AnonrodePlayer">
 

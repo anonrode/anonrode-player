@@ -151,11 +151,17 @@ internal class LiveVad private constructor(
                         return
                     }
                 }
-                if (closed.get()) 0 else pendingLen.also { pendingLen = 0 }
+                if (closed.get()) {
+                    0
+                } else {
+                    val count = pendingLen
+                    System.arraycopy(pending, 0, scratch, 0, count)
+                    pendingLen = 0
+                    count
+                }
             }
             if (n <= 0) continue
             try {
-                synchronized(lock) { System.arraycopy(pending, 0, scratch, 0, n) }
                 val wrapped = ByteBuffer.wrap(scratch, 0, n).order(ByteOrder.LITTLE_ENDIAN)
                 synchronized(vadLock) {
                     vad.processPcm(wrapped, formatRate, formatChannels, formatIsFloat)
@@ -244,11 +250,7 @@ internal class LiveVad private constructor(
 
         /** Returns null when the model is unavailable; caller uses energy instead. */
         fun create(context: Context): LiveVad? = try {
-            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
-            if (am != null && am.isLowRamDevice) {
-                AppLog.d(TAG, "low-RAM device detected — staying on the lightweight energy envelope")
-                null
-            } else if (!SileroVad.modelAvailable(context)) {
+            if (!SileroVad.modelAvailable(context)) {
                 AppLog.d(TAG, "model asset missing — staying on the energy envelope")
                 null
             } else {

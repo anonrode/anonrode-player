@@ -331,6 +331,9 @@ class PlayerActivity : ComponentActivity() {
      */
     private var subSyncRunning by mutableStateOf(false)
 
+    /** True when a verified auto-sync lock is active. */
+    private var isSyncLocked by mutableStateOf(false)
+
     /**
      * v0.7.4 P1-2 companion: true while a background fingerprint job for
      * the CURRENT video has actually been enqueued — i.e., there is a real
@@ -494,6 +497,38 @@ class PlayerActivity : ComponentActivity() {
                 break
             }
         }
+
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                onSeekDiscontinuity(newPosition.positionMs)
+            }
+        }
+    }
+
+    private fun onSeekDiscontinuity(newPosMs: Long) {
+        val app = AnonrodeApp.get(this)
+        if (!currentSettings.subtitleAutoSyncEnabled) return
+        if (app.engine.activeSyncCues.isEmpty()) return
+        val tRaw = newPosMs / 1000.0
+        val isMapped = if (piecewiseSegments.isNotEmpty()) {
+            true
+        } else {
+            isSyncLocked
+        }
+        if (isMapped) {
+            val offsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
+                ?: (app.engine.subtitleOffsetMs / 1000.0)
+            AppLog.d("SYNC", "seek to ${newPosMs}ms (%.1fs): pre-mapped snap to %+.2fs (piecewise=%b, isSyncLocked=%b)".format(tRaw, offsetSec, piecewiseSegments.isNotEmpty(), isSyncLocked))
+        } else {
+            AppLog.d("SYNC", "seek landing at ${newPosMs}ms is unmapped, triggering spot-sync probe")
+            app.engine.triggerSpotSync(newPosMs) { offsetMs ->
+                AppLog.d("SYNC", "spot-sync probe aligned subtitles to offset ${offsetMs}ms")
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -516,13 +551,26 @@ class PlayerActivity : ComponentActivity() {
         val app = AnonrodeApp.get(this)
         val engine = app.engine
 
-        // A live re-lock clears the persisted piecewise curve (persistence
-        // side does it in the same write); drop our in-memory copy too so
-        // the render loop stops applying a stale piecewise beta. Callback
-        // fires on the sync-eval worker thread — post to main.
+        // When a live lock lands, harmonize any in-memory piecewise curve
+        // so the active segment adopts the live offset and doesn't fight it.
+        // Callback fires on the sync-eval worker thread — post to main.
         engine.onLiveSyncLocked = {
             handler.post {
-                piecewiseSegments = emptyList()
+                val currentPosSec = (engine.player?.currentPosition ?: 0L) / 1000.0
+                val liveOffsetSec = engine.subtitleOffsetMs / 1000.0
+                if (piecewiseSegments.isNotEmpty()) {
+                    val updated = piecewiseSegments.toMutableList()
+                    val idx = updated.indexOfLast { it.first <= currentPosSec }
+                    if (idx >= 0) {
+                        updated[idx] = updated[idx].first to liveOffsetSec
+                    } else {
+                        updated.add(0, 0.0 to liveOffsetSec)
+                    }
+                    piecewiseSegments = updated.sortedBy { it.first }
+                } else {
+                    piecewiseSegments = emptyList()
+                }
+                isSyncLocked = true
                 // A live lock just landed: stop the spinner / calibration
                 // banner immediately rather than waiting for their timeouts.
                 subSyncRunning = false
@@ -749,6 +797,7 @@ class PlayerActivity : ComponentActivity() {
                             onSetSubSyncEnabled = { enabled -> onSetSubSyncEnabled(enabled) },
                             onResyncNow = { onResyncNow() },
                             subSyncRunning = subSyncRunning,
+                            isSyncLocked = isSyncLocked,
                             castRouteName = castRouteName,
                             subtitleStyle = subStyle,
                             onSubtitleStyleChanged = { applySubtitleStyle(it) },
@@ -1040,6 +1089,7 @@ class PlayerActivity : ComponentActivity() {
                     val engine = AnonrodeApp.get(this@PlayerActivity).engine
                     engine.applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor)
                     piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
+                    isSyncLocked = s.autoSyncOffsetMs != 0L || s.autoSyncCheckedAtMs != 0L || engine.isLiveLocked
                     subSyncRunning = false
                 }
             }
@@ -1183,6 +1233,7 @@ class PlayerActivity : ComponentActivity() {
                 // Generation guard: a newer openVideo supersedes this one.
                 if (gen != openGeneration) return@launch
                 piecewiseSegments = parsePiecewise(state?.autoSyncPiecewise ?: "")
+                isSyncLocked = auto != 0L || (state?.autoSyncCheckedAtMs ?: 0L) != 0L
 
                 // Policy A (v0.6.2, revised v0.7.1, trust rule v0.8): gate
                 // the background fingerprint on TWO signals.
@@ -1983,7 +2034,9 @@ class PlayerActivity : ComponentActivity() {
                 }
                 val delayMs = if (boundarySec == null) 100L else {
                     val delayRaw = (boundarySec * spd + offsetSec - tRaw) * 1000.0
-                    ceil(delayRaw).toLong().coerceIn(8L, 100L)
+                    val playbackSpeed = p.playbackParameters.speed.coerceAtLeast(0.25f)
+                    val wallDelayMs = delayRaw / playbackSpeed
+                    ceil(wallDelayMs).toLong().coerceIn(8L, 100L)
                 }
                 handler.postDelayed(this, delayMs)
             }
@@ -2305,9 +2358,10 @@ class PlayerActivity : ComponentActivity() {
                     // stop burning the spinner on it.
                     handler.post {
                         if (currentSettings.subtitleAutoSyncEnabled && uri == currentUriStr) {
-                            AnonrodeApp.get(this@PlayerActivity).engine
-                                .applyPersistedLock(st!!.autoSyncOffsetMs, st.autoSyncSpeedFactor)
+                            val engine = AnonrodeApp.get(this@PlayerActivity).engine
+                            engine.applyPersistedLock(st!!.autoSyncOffsetMs, st.autoSyncSpeedFactor)
                             piecewiseSegments = parsePiecewise(st.autoSyncPiecewise)
+                            isSyncLocked = st.autoSyncOffsetMs != 0L || (st.autoSyncCheckedAtMs != 0L)
                         }
                         subSyncRunning = false
                     }
@@ -2358,7 +2412,13 @@ class PlayerActivity : ComponentActivity() {
     private fun shareSyncLog() {
         lifecycleScope.launch {
             try {
-                SyncLogShare.shareSyncLog(this@PlayerActivity)
+                val pwDiag = if (piecewiseSegments.isNotEmpty()) {
+                    "piecewise segments (${piecewiseSegments.size}): " +
+                        piecewiseSegments.joinToString("; ") { "t>=%.1fs -> %+.2fs".format(it.first, it.second) }
+                } else {
+                    "piecewise segments: none (scalar offset)"
+                }
+                SyncLogShare.shareSyncLog(this@PlayerActivity, pwDiag)
             } catch (t: Throwable) {
                 AppLog.e("APP", "sync log share failed", t)
             }
@@ -2377,6 +2437,7 @@ class PlayerActivity : ComponentActivity() {
         // Reset in-memory and persisted locks immediately so old bogus locks stop applying
         app.engine.clearPersistedLock()
         piecewiseSegments = emptyList()
+        isSyncLocked = false
         // Force-enable live re-lock and re-arm budget — "resync now" prioritizes
         // the lightweight live audio processor over heavy background decoding thrash.
         app.engine.setSubSyncEnabled(true)

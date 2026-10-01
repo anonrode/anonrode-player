@@ -315,6 +315,12 @@ internal class QuickRowUiState {
     val subSyncRunning = mutableStateOf(false)
 
     /**
+     * True when auto-sync has a verified lock (live or persisted).
+     * Drives active synced state for 0.0s offset in StatusSyncPill.
+     */
+    val isSyncLocked = mutableStateOf(false)
+
+    /**
      * The Quick Access Ribbon's item order, as stable tool keys. Persisted
      * (see [dev.anonrode.player.PlayerPrefs.ribbonOrder]) so a user's
      * arrangement survives process death.

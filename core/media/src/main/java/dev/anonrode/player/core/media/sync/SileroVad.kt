@@ -43,6 +43,7 @@ class SileroVad(context: Context) : AutoCloseable {
         private const val MIN_SPEECH_MS = 150
         private const val MIN_SILENCE_MS = 100
         private val FRAME_SEC = WINDOW.toDouble() / SR.toDouble() // 0.032
+        private const val RING_CAPACITY = 4000 // 400 seconds of 100ms bins
 
         fun modelAvailable(context: Context): Boolean = try {
             context.assets.open(MODEL_ASSET).use { true }
@@ -60,8 +61,23 @@ class SileroVad(context: Context) : AutoCloseable {
     private var hasContext = false
     private val chunk = FloatArray(WINDOW)
     private var chunkN = 0
-    private val bins = ArrayList<Byte>(4096)
-    private val probBins = ArrayList<Float>(4096)
+
+    // Online debounce tracking (zero heap allocations)
+    private var totalFrames = 0
+    private var curRunVal: Byte = -1
+    private var curRunStart = 0
+    private var curRunLen = 0
+    private var prevZeroLen: Int? = null
+    private var regionStart = -1
+    private var regionFirstLen = 0
+    private val detectedOnsets = ArrayList<Double>()
+
+    // Bounded circular 100ms envelope ring buffer (4000 bins = 400s)
+    private val ringBuffer = FloatArray(RING_CAPACITY)
+    private val envelopeSums = FloatArray(RING_CAPACITY)
+    private val envelopeCounts = IntArray(RING_CAPACITY)
+    private var totalBins = 0
+    private var currentEnvIdx = -1
 
     /** v0.8.3: absolute media time the first bin belongs to (non-zero only
      *  on a resumed decode pass) — added to every onset time so the caller
@@ -79,8 +95,9 @@ class SileroVad(context: Context) : AutoCloseable {
         try {
             val bytes = context.assets.open(MODEL_ASSET).use { it.readBytes() }
             val opts = OrtSession.SessionOptions().apply {
-                setIntraOpNumThreads(2)
+                setIntraOpNumThreads(1)
                 setInterOpNumThreads(1)
+                setMemoryPatternOptimization(true)
             }
             s = env.createSession(bytes, opts)
             val srT = OnnxTensor.createTensor(env, SR)
@@ -152,8 +169,40 @@ class SileroVad(context: Context) : AutoCloseable {
                     // Direct buffer reading eliminates GC pauses and multi-dimensional array reflection
                     val outVal = result.get(0) as OnnxTensor
                     val prob = outVal.floatBuffer.get(0)
-                    probBins.add(prob)
-                    bins.add(if (prob > THRESHOLD) 1.toByte() else 0.toByte())
+
+                    // 1. Online debounce for speech onsets (zero heap allocation)
+                    val v: Byte = if (prob > THRESHOLD) 1.toByte() else 0.toByte()
+                    val frameIdx = totalFrames++
+                    if (curRunVal == (-1).toByte()) {
+                        curRunVal = v
+                        curRunStart = frameIdx
+                        curRunLen = 1
+                    } else if (v == curRunVal) {
+                        curRunLen++
+                    } else {
+                        processRun(curRunVal, curRunStart, curRunLen)
+                        curRunVal = v
+                        curRunStart = frameIdx
+                        curRunLen = 1
+                    }
+
+                    // 2. Incremental 100ms envelope ring buffer (capacity 4000 bins = 400s)
+                    val envIdx = (frameIdx * FRAME_SEC / 0.1).toInt()
+                    if (envIdx > currentEnvIdx) {
+                        for (b in (currentEnvIdx + 1)..envIdx) {
+                            val slot = b % RING_CAPACITY
+                            envelopeSums[slot] = 0f
+                            envelopeCounts[slot] = 0
+                            ringBuffer[slot] = 0f
+                        }
+                        currentEnvIdx = envIdx
+                        totalBins = envIdx + 1
+                    }
+                    val slot = envIdx % RING_CAPACITY
+                    envelopeSums[slot] += prob
+                    envelopeCounts[slot]++
+                    ringBuffer[slot] = envelopeSums[slot] / envelopeCounts[slot]
+
                     val stVal = result.get(1) as OnnxTensor
                     val stFb = stVal.floatBuffer
                     stFb.position(0)
@@ -166,41 +215,65 @@ class SileroVad(context: Context) : AutoCloseable {
         hasContext = true
     }
 
+    private fun processRun(runVal: Byte, start: Int, len: Int) {
+        val sp = maxOf(1, (MIN_SPEECH_MS / (1000.0 * FRAME_SEC)).toInt())
+        val sil = maxOf(1, (MIN_SILENCE_MS / (1000.0 * FRAME_SEC)).toInt())
+        if (runVal.toInt() == 1) {
+            if (regionStart < 0) {
+                regionStart = start
+                regionFirstLen = len
+            }
+        } else {
+            if (regionStart >= 0) {
+                if (regionFirstLen >= sp && prevZeroLen != null && prevZeroLen!! >= sil) {
+                    detectedOnsets.add(regionStart * FRAME_SEC + onsetOffsetSec)
+                }
+                regionStart = -1
+            }
+            prevZeroLen = len
+        }
+    }
+
     /** Speech-START onsets from the collected bins (fix-1 debounce). */
     fun finish(): List<Double> {
-        val onsets = onsetsFromBins(bins)
-        AppLog.d("VAD", "${bins.size} bins -> ${onsets.size} speech-start onsets")
-        return onsets
+        if (curRunVal != (-1).toByte()) {
+            processRun(curRunVal, curRunStart, curRunLen)
+            curRunVal = (-1).toByte()
+        }
+        val sp = maxOf(1, (MIN_SPEECH_MS / (1000.0 * FRAME_SEC)).toInt())
+        val sil = maxOf(1, (MIN_SILENCE_MS / (1000.0 * FRAME_SEC)).toInt())
+        if (regionStart >= 0 && regionFirstLen >= sp && prevZeroLen != null && prevZeroLen!! >= sil) {
+            detectedOnsets.add(regionStart * FRAME_SEC + onsetOffsetSec)
+            regionStart = -1
+        }
+        AppLog.d("VAD", "$totalFrames bins -> ${detectedOnsets.size} speech-start onsets")
+        return ArrayList(detectedOnsets)
     }
 
     /**
      * Resamples the continuous 32ms model probability bins into a 100ms
-     * soft speech envelope (FloatArray) covering the entire analyzed audio.
+     * soft speech envelope (FloatArray) covering the entire analyzed audio (capped at 400s).
      */
     fun getSpeechEnvelope(targetBinSec: Double = 0.1): FloatArray {
-        val n = probBins.size
-        if (n == 0) return FloatArray(0)
-        val totalSec = n * FRAME_SEC
-        val outBins = maxOf(1, (totalSec / targetBinSec).toInt())
-        val envelope = FloatArray(outBins)
-        val counts = IntArray(outBins)
-
-        for (i in 0 until n) {
-            val tSec = i * FRAME_SEC
-            val outIdx = minOf(outBins - 1, (tSec / targetBinSec).toInt())
-            envelope[outIdx] += probBins[i]
-            counts[outIdx]++
+        val total = totalBins
+        if (total == 0) return FloatArray(0)
+        val count = minOf(total, RING_CAPACITY)
+        val out = FloatArray(count)
+        if (total <= RING_CAPACITY) {
+            System.arraycopy(ringBuffer, 0, out, 0, count)
+        } else {
+            val start = (total - RING_CAPACITY) % RING_CAPACITY
+            val len1 = RING_CAPACITY - start
+            System.arraycopy(ringBuffer, start, out, 0, len1)
+            if (start > 0) {
+                System.arraycopy(ringBuffer, 0, out, len1, start)
+            }
         }
-
-        for (i in 0 until outBins) {
-            val c = counts[i]
-            if (c > 0) envelope[i] /= c
-        }
-        return envelope
+        return out
     }
 
     /** Absolute media time (s) the collected bins cover (call after [finish]). */
-    fun coveredSec(): Double = onsetOffsetSec + bins.size * FRAME_SEC
+    fun coveredSec(): Double = onsetOffsetSec + totalFrames * FRAME_SEC
 
     /**
      * Clears every piece of accumulated state so the detector can be re-anchored
@@ -225,8 +298,20 @@ class SileroVad(context: Context) : AutoCloseable {
      * @param newOnsetOffsetSec absolute media time the next window belongs to.
      */
     fun reset(newOnsetOffsetSec: Double = onsetOffsetSec) {
-        bins.clear()
-        probBins.clear()
+        totalFrames = 0
+        curRunVal = (-1).toByte()
+        curRunStart = 0
+        curRunLen = 0
+        prevZeroLen = null
+        regionStart = -1
+        regionFirstLen = 0
+        detectedOnsets.clear()
+
+        totalBins = 0
+        currentEnvIdx = -1
+        java.util.Arrays.fill(ringBuffer, 0f)
+        java.util.Arrays.fill(envelopeSums, 0f)
+        java.util.Arrays.fill(envelopeCounts, 0)
         onsetOffsetSec = newOnsetOffsetSec
         java.util.Arrays.fill(state, 0f)
         java.util.Arrays.fill(contextSamples, 0f)
@@ -240,61 +325,6 @@ class SileroVad(context: Context) : AutoCloseable {
         try { srTensor?.close() } catch (_: Throwable) {}
         try { session?.close() } catch (_: Throwable) {}
         // env is the shared singleton; never close it
-    }
-
-    // ── debounce: 0/1 bins -> speech-START events ────────────────────
-    // Port of _fix1_vad_onsets.onsets_from_bins with the chosen defaults
-    // (min_speech 150 ms, min_silence 100 ms, merge_gap 0 = no merge).
-    private fun onsetsFromBins(
-        b: List<Byte>,
-        minSpeechMs: Int = MIN_SPEECH_MS,
-        minSilenceMs: Int = MIN_SILENCE_MS,
-    ): List<Double> {
-        val n = b.size
-        if (n == 0) return emptyList()
-        val sp = maxOf(1, (minSpeechMs / (1000.0 * FRAME_SEC)).toInt())
-        val sil = maxOf(1, (minSilenceMs / (1000.0 * FRAME_SEC)).toInt())
-
-        // run-length encode
-        data class Run(val v: Byte, val start: Int, val len: Int)
-        val runs = ArrayList<Run>()
-        var i = 0
-        while (i < n) {
-            val v = b[i]
-            var j = i + 1
-            while (j < n && b[j] == v) j++
-            runs.add(Run(v, i, j - i))
-            i = j
-        }
-
-        val onsets = ArrayList<Double>()
-        var prevZeroLen: Int? = null
-        var regionStart = -1
-        var regionFirstLen = 0
-        for (run in runs) {
-            if (run.v.toInt() == 1) {
-                if (regionStart < 0) {
-                    regionStart = run.start
-                    regionFirstLen = run.len
-                }
-            } else {
-                if (regionStart >= 0) {
-                    if (regionFirstLen >= sp &&
-                        prevZeroLen != null && prevZeroLen >= sil
-                    ) {
-                        onsets.add(regionStart * FRAME_SEC + onsetOffsetSec)
-                    }
-                    regionStart = -1
-                }
-                prevZeroLen = run.len
-            }
-        }
-        if (regionStart >= 0 && regionFirstLen >= sp &&
-            prevZeroLen != null && prevZeroLen >= sil
-        ) {
-            onsets.add(regionStart * FRAME_SEC + onsetOffsetSec)
-        }
-        return onsets
     }
 
     // ── linear resampler to 16 kHz mono ──────────────────────────────

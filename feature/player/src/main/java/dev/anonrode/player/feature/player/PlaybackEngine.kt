@@ -17,14 +17,20 @@ import dev.anonrode.player.core.media.audio.VolumeBoostProcessor
 import dev.anonrode.player.core.media.audio.VoiceClarityProcessor
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.sync.AudioSyncProcessor
+import android.net.Uri
+import dev.anonrode.player.core.media.sync.OnsetExtractor
 import dev.anonrode.player.core.media.sync.SyncFingerprint
 import dev.anonrode.player.core.media.sync.SyncListener
 import dev.anonrode.player.core.model.SubtitleCue
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
+import kotlin.math.abs
+import kotlin.math.roundToLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -118,6 +124,8 @@ class PlaybackEngine(
 
     val isLiveLocked: Boolean get() = syncProcessor.isLocked
 
+    @Volatile var isExplicitResync: Boolean = false
+
     /**
      * v0.7.1: apply a persisted (fingerprint) lock to the LIVE session —
      * called by the host when Room reports a lock for the video the user
@@ -127,11 +135,21 @@ class PlaybackEngine(
      */
     fun applyPersistedLock(autoOffsetMs: Long, speedFactor: Float) {
         if (autoOffsetMs == persistedAutoMs && speedFactor == persistedSpeed) return
+        if (isLiveLocked) {
+            val currentLiveAutoMs = subtitleOffsetMs - manualDelayMs
+            val diff = abs(autoOffsetMs - currentLiveAutoMs)
+            if (diff >= 1000L) {
+                AppLog.d("SYNC", "guarding active live lock (${currentLiveAutoMs}ms): rejecting divergent persisted lock (${autoOffsetMs}ms)")
+                return
+            }
+        }
         persistedAutoMs = autoOffsetMs
         persistedSpeed = speedFactor
         subtitleOffsetMs = autoOffsetMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
-        syncProcessor.setEnabled(false)
+        if (!isLiveLocked) {
+            syncProcessor.setEnabled(false)
+        }
         AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor")
     }
 
@@ -234,10 +252,52 @@ class PlaybackEngine(
      * Re-arm the live sync processor on user demand ("Resync now").
      */
     fun rearmLiveSync() {
+        isExplicitResync = true
         val pos = player?.currentPosition ?: 0L
         syncProcessor.rearm(pos)
         if (lastSyncCues.isNotEmpty()) {
             syncProcessor.setCues(lastSyncCues)
+        }
+    }
+
+    private val onsetExtractor by lazy { OnsetExtractor(appContext) }
+    @Volatile private var spotSyncJob: Job? = null
+
+    /**
+     * Spot-Sync fast seek probe (<500ms): when seeking into an unmapped
+     * segment, decode and correlate a short window of audio around
+     * [positionMs] to realign subtitles instantly.
+     */
+    fun triggerSpotSync(positionMs: Long, onResult: ((offsetMs: Long) -> Unit)? = null) {
+        val uriStr = currentUri ?: return
+        val cues = lastSyncCues
+        if (cues.isEmpty()) return
+        val uri = Uri.parse(uriStr)
+        val path = if (uri.scheme == "file") uri.path else null
+
+        spotSyncJob?.cancel()
+        spotSyncJob = scope.launch(Dispatchers.IO) {
+            val posSec = positionMs / 1000.0
+            val activeOffset = subtitleOffsetMs / 1000.0
+            val bestOffsetSec = onsetExtractor.probeSpotSync(
+                videoPath = path,
+                videoUri = uri,
+                cues = cues,
+                positionSec = posSec,
+                activeOffsetSec = activeOffset,
+                probeDurationSec = 6.0,
+                radiusSec = 60.0,
+                isCancelled = { !isActive },
+            )
+            if (bestOffsetSec != null && isActive) {
+                val offsetMs = (bestOffsetSec * 1000.0).roundToLong()
+                AppLog.d("SYNC", "spot-sync locked at pos=${positionMs}ms offset=${offsetMs}ms")
+                withContext(Dispatchers.Main) {
+                    isExplicitResync = true
+                    onSyncLocked(bestOffsetSec.toFloat(), 1.0f)
+                    onResult?.invoke(offsetMs)
+                }
+            }
         }
     }
 
@@ -546,12 +606,18 @@ class PlaybackEngine(
     }
 
     override fun onSyncLocked(offsetSeconds: Float, speedFactor: Float) {
-        if (persistedAutoMs != 0L || persistedSpeed != 1f) {
+        val autoMs = (offsetSeconds * 1000f).toLong()
+        val isResync = isExplicitResync
+        val offsetDiff = abs(offsetSeconds * 1000f - persistedAutoMs.toFloat())
+        val isSignificantJump = offsetDiff >= 1000f
+        if (persistedAutoMs != 0L && !isResync && !isSignificantJump) {
             AppLog.d("SYNC", "ignoring live lock: verified persisted lock already active (${persistedAutoMs}ms x$persistedSpeed)")
             return
         }
-        AppLog.d("SYNC", "LOCKED offset=" + offsetSeconds + "s speed=" + speedFactor)
-        val autoMs = (offsetSeconds * 1000f).toLong()
+        isExplicitResync = false
+        AppLog.d("SYNC", "LOCKED offset=" + offsetSeconds + "s speed=" + speedFactor + (if (isSignificantJump) " (offset jump: diff=${offsetDiff}ms)" else ""))
+        persistedAutoMs = autoMs
+        persistedSpeed = speedFactor
         subtitleOffsetMs = autoMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
         val uri = currentUri
@@ -562,6 +628,7 @@ class PlaybackEngine(
     }
 
     override fun onSyncNoMatch() {
+        isExplicitResync = false
         // Live re-lock gave up: keep the persisted fingerprint lock (if any)
         // rather than dropping back to the bare manual delay — undoing a good
         // stored lock mid-episode would desync already-correct subtitles.
@@ -868,6 +935,7 @@ class PlaybackEngine(
         } catch (t: Throwable) {
             AppLog.e("ENGINE", "player release failed in engine.release()", t)
         }
+        spotSyncJob?.cancel()
         syncProcessor.release()
         playerInstance = null
         scope.cancel()
