@@ -13,6 +13,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.pow
 import kotlin.math.sqrt
@@ -107,7 +108,7 @@ class OnsetExtractor(private val context: Context) {
      * preventing 45-minute battery thrashing on low-end SoCs. -1 decodes to EOF.
      */
     fun extractSources(
-        videoPath: String,
+        videoPath: String? = null,
         videoUri: Uri? = null,
         resumeFromSec: Double = -1.0,
         maxMediaDurationSec: Double = -1.0,
@@ -117,7 +118,7 @@ class OnsetExtractor(private val context: Context) {
         lastDecodeTruncated = false
         isEndOfStream = false
         lastCoveredSec = 0.0
-        val sil = if (resumeFromSec < 0) resolveFfmpegPath()?.let {
+        val sil = if (resumeFromSec < 0 && !videoPath.isNullOrEmpty()) resolveFfmpegPath()?.let {
             extractWithFfmpeg(it, videoPath, if (maxMediaDurationSec > 0.0) maxMediaDurationSec else 0.0)
         } else null
         val vadAvailable = includeVad && SileroVad.modelAvailable(context)
@@ -179,7 +180,7 @@ class OnsetExtractor(private val context: Context) {
         radiusSec: Double = 60.0,
         isCancelled: () -> Boolean = { false },
     ): Double? {
-        if (cues.isEmpty() || positionSec < 0.0) return null
+        if (cues.isEmpty() || positionSec < 0.0 || (videoPath.isNullOrEmpty() && videoUri == null)) return null
         val sources = extractSources(
             videoPath = videoPath,
             videoUri = videoUri,
