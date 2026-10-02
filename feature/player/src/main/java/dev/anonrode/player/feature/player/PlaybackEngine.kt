@@ -74,14 +74,16 @@ class PlaybackEngine(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val appContext: Context = context.applicationContext
-    private var currentUri: String? = null
+    var currentUri: String? = null
+        private set
     private var manualDelayMs: Long = 0L
 
     /** Persisted auto-sync offset (fingerprint lock) applied at [play]. Kept
      *  so [onSyncNoMatch] can fall back to it instead of dropping the lock:
      *  a failed LIVE re-lock must not undo a good persisted one. Written on
      *  the main thread, read from the sync-eval worker thread. */
-    @Volatile private var persistedAutoMs: Long = 0L
+    @Volatile var persistedAutoMs: Long = 0L
+        private set
     @Volatile private var persistedSpeed: Float = 1f
 
     /**

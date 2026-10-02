@@ -93,8 +93,6 @@ class AudioSyncProcessor(
     // flush()/reset()/position re-anchor and a fresh non-empty setCues
     // re-arm the schedule.
     @Volatile internal var passesUsed = 0
-    @Volatile internal var scheduleIndex = 0
-    @Volatile private var lastScheduledBin = 0
     @Volatile internal var gaveUp = false
 
     /**
@@ -167,8 +165,6 @@ class AudioSyncProcessor(
             // toggle's OFF state keeps the processor dormant even after a
             // track switch.
             if (enabled) {
-                scheduleIndex = 0
-                lastScheduledBin = 0
                 passesUsed = 0
                 gaveUp = false
             } else {
@@ -231,8 +227,6 @@ class AudioSyncProcessor(
             // exact signature: `bc=205` three times in 25 ms, then a wall of
             // `judged, gates refused`. It also dropped a confirmed lock via
             // `locked = false` on every style tap.
-            scheduleIndex = 0
-            lastScheduledBin = 0
             passesUsed = 0
             gaveUp = false
             locked = false // belt & braces: never inherit a stale lock
@@ -254,8 +248,6 @@ class AudioSyncProcessor(
      * allowing the engine to start a fresh calibration pass immediately.
      */
     fun rearm(positionMs: Long = -1L) {
-        scheduleIndex = 0
-        lastScheduledBin = 0
         passesUsed = 0
         gaveUp = false
         locked = false
@@ -452,7 +444,6 @@ class AudioSyncProcessor(
         java.util.Arrays.fill(bpY1, 0f)
         java.util.Arrays.fill(bpY2, 0f)
         stableHits = 0; lastOffset = Double.NaN
-        scheduleIndex = 0; lastScheduledBin = 0
         passesUsed = 0; gaveUp = false
         // P1-4: a fresh window must also drop the drift history. Without
         // this the six points a post-seek / episode-switch lock fits can
@@ -593,21 +584,23 @@ class AudioSyncProcessor(
         // bin of evidence matters more than another correlation. The
         // audio render thread still pays only one volatile compare here
         // per 100 ms bin.
-        if (!gaveUp && cues.isNotEmpty() && enabled) {
-            val shouldSchedule = if (scheduleIndex < SpeechCorrelator.PASS_BINS.size) {
-                if (binCount >= SpeechCorrelator.PASS_BINS[scheduleIndex]) {
-                    scheduleIndex++
-                    true
-                } else false
-            } else {
-                if (binCount >= lastScheduledBin + 200) {
-                    lastScheduledBin = binCount
-                    true
-                } else false
-            }
-            if (shouldSchedule) {
-                passesScheduled++
-                scheduleEvaluate(posMs)
+        if (passesUsed < SpeechCorrelator.PASS_BINS.size &&
+            binCount >= SpeechCorrelator.PASS_BINS[passesUsed] &&
+            cues.isNotEmpty() && !gaveUp && enabled
+        ) {
+            passesUsed++
+            passesScheduled++
+            scheduleEvaluate(posMs)
+            if (passesUsed == SpeechCorrelator.PASS_BINS.size) {
+                // Last pass scheduled: the listening budget is spent —
+                // stop binning and hand off to the whole-file engine.
+                // If that final pass still locks, onSyncLocked lands
+                // normally (evaluate() is gated on `locked`, not
+                // `gaveUp`) and a post-handoff live lock is superseded
+                // by the fingerprint's verdict by design (trust rule).
+                gaveUp = true
+                AppLog.d("SYNC", "pass budget spent ($passesUsed), handing off to fingerprint")
+                listener.onSyncNoMatch()
             }
         }
     }
@@ -686,13 +679,7 @@ class AudioSyncProcessor(
                 } else {
                     lastOffset = Double.NaN
                 }
-                passesUsed++
-                AppLog.d("SYNC", "pass t=${req.posMs / 1000}s bc=${req.binCount}: judged, gates refused (hits=$stableHits, pass=$passesUsed/${SpeechCorrelator.PASS_BINS.size})")
-                if (passesUsed >= SpeechCorrelator.PASS_BINS.size) {
-                    gaveUp = true
-                    AppLog.d("SYNC", "pass budget spent ($passesUsed), handing off to fingerprint")
-                    listener.onSyncNoMatch()
-                }
+                AppLog.d("SYNC", "pass t=${req.posMs / 1000}s bc=${req.binCount}: judged, gates refused (hits=$stableHits)")
                 return
             }
             is SpeechCorrelator.Outcome.Match -> outcome.result
@@ -701,7 +688,6 @@ class AudioSyncProcessor(
         // Discard stale results: a flush()/reset()/position re-anchor may
         // have landed on the audio thread while findOffset was running.
         if (req.generation != generation || locked) return
-        passesUsed++
 
         stableHits = if (!lastOffset.isNaN() &&
             abs(result.offsetSeconds - lastOffset) <= 0.25) stableHits + 1 else 1
