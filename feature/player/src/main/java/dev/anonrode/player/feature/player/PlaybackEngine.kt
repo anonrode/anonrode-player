@@ -155,7 +155,6 @@ class PlaybackEngine(
         if (piecewise.isNotEmpty()) currentPiecewise = piecewise
         subtitleOffsetMs = autoOffsetMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
-        isLiveLocked = autoOffsetMs != 0L
         syncProcessor.setEnabled(true)
         if (autoOffsetMs != 0L) {
             syncProcessor.setBaselineLock(autoOffsetMs / 1000f, speedFactor)
@@ -632,7 +631,6 @@ class PlaybackEngine(
         persistedSpeed = speedFactor
         subtitleOffsetMs = autoMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
-        isLiveLocked = true
         val uri = currentUri
         if (uri != null) {
             scope.launch { onAutoSyncSave(uri, autoMs, speedFactor, currentPiecewise) }
