@@ -307,7 +307,7 @@ class OnsetExtractor(private val context: Context) {
         val recall = if (bestLocalCues > 0) bestHits.toDouble() / bestLocalCues else 0.0
         val precision = if (sortedOnsets.isNotEmpty()) bestHits.toDouble() / sortedOnsets.size else 0.0
 
-        if (bestHits >= 1 && (recall >= 0.50 || precision >= 0.33) && margin >= 0.05) {
+        if (bestHits >= 3 && bestLocalCues >= 3 && recall >= 0.60 && precision >= 0.40 && margin >= 0.08) {
             AppLog.d("SPOT_SYNC", "spot probe locked: beta=%.3fs hits=%d localCues=%d recall=%.2f prec=%.2f margin=%.2f".format(bestBeta, bestHits, bestLocalCues, recall, precision, margin))
             return bestBeta
         }

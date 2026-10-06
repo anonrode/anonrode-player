@@ -99,6 +99,16 @@ object AppLog {
         }
     }
 
+    /** Force-write everything queued and block until writes hit disk, up to [timeoutMs]. */
+    fun flushSync(timeoutMs: Long = 1_000L) {
+        try {
+            val future = worker.submit { writePending() }
+            future.get(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (t: Throwable) {
+            // Never throw out of the logger.
+        }
+    }
+
     private fun enqueue(line: String) {
         pending.add(line)
         // Drop oldest lines if the queue outruns the disk (or init never

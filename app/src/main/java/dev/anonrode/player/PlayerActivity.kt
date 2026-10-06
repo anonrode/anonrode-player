@@ -176,6 +176,7 @@ class PlayerActivity : ComponentActivity() {
 
     /** URI of the media the engine is playing (speed persistence target). */
     private var currentUriStr: String? = null
+    internal val activeUriStr: String? get() = currentUriStr
 
     /** In-flight open pipeline: the [openVideo] coroutine, later replaced by
      *  its [commitPlay] coroutine. Cancelled when a newer open starts. */
