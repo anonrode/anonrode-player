@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -91,13 +92,12 @@ internal fun Modifier.playerGestureLayer(
                 onTap = {
                     if (isPipMode) return@detectTapGestures
                     if (!ui.locked.value) {
-                        ui.controlsVisible.value = !ui.controlsVisible.value
+                        actions.toggleHud()
                     } else {
                         // Single-tap on locked screen: show the lock
-                        // badge so the user knows the screen IS locked
-                        // (mirrors the HTML mockup's "Controls locked"
-                        // toast).
-                        actions.showTransientToast("Locked — long-press to unlock")
+                        // scrim so the user knows the screen IS locked
+                        ui.lockScrimVisible.value = true
+                        actions.showTransientToast("Controls locked")
                     }
                 },
                 onDoubleTap = { off ->
@@ -106,10 +106,10 @@ internal fun Modifier.playerGestureLayer(
                     val x = off.x
                     when {
                         x < w * 0.35f -> {
-                            if (doubleTapSeekEnabled) actions.seekBy(-actions.seekIncrementSec)
+                            if (doubleTapSeekEnabled) actions.seekDelta(-actions.seekIncrementSec)
                         }
                         x > w * 0.65f -> {
-                            if (doubleTapSeekEnabled) actions.seekBy(actions.seekIncrementSec)
+                            if (doubleTapSeekEnabled) actions.seekDelta(actions.seekIncrementSec)
                         }
                         else -> {
                             actions.togglePlayPause()
@@ -120,9 +120,7 @@ internal fun Modifier.playerGestureLayer(
                 onLongPress = {
                     if (isPipMode) return@detectTapGestures
                     if (ui.locked.value) {
-                        ui.locked.value = false
-                        ui.controlsVisible.value = true
-                        actions.showTransientToast("Unlocked")
+                        actions.unlockControls()
                     }
                 },
             )
@@ -148,16 +146,22 @@ internal fun Modifier.playerGestureLayer(
                     if (gestures.mode.value == null) {
                         val dx = abs(x - gestures.startX.floatValue)
                         val dy = abs(y - gestures.startY.floatValue)
-                        if (dx > 24 || dy > 24) {
-                            // Each gesture family is individually gated
-                            // by its PlayerSettings toggle; a disabled
-                            // family simply never engages (mode stays
-                            // null and the drag is a no-op).
+                        if (dx > 20 || dy > 20) {
+                            val scrW = gestures.scrW.floatValue
                             val m = when {
-                                dx > dy -> if (swipeToSeekEnabled) "seek" else null
-                                gestures.startX.floatValue < gestures.scrW.floatValue / 2 ->
-                                    if (brightnessGestureEnabled) "bri" else null
-                                else -> if (volumeGestureEnabled) "vol" else null
+                                dy > 1.5f * dx -> {
+                                    when {
+                                        gestures.startX.floatValue <= scrW * 0.45f ->
+                                            if (brightnessGestureEnabled) "bri" else null
+                                        gestures.startX.floatValue >= scrW * 0.55f ->
+                                            if (volumeGestureEnabled) "vol" else null
+                                        else -> null
+                                    }
+                                }
+                                dx > 1.5f * dy -> {
+                                    if (swipeToSeekEnabled) "seek" else null
+                                }
+                                else -> null
                             }
                             gestures.mode.value = m
                             if (m != null) ui.controlsVisible.value = false
@@ -167,42 +171,36 @@ internal fun Modifier.playerGestureLayer(
                         "seek" -> {
                             val d = actions.livePlayer.duration.takeIf { it > 0 }
                                 ?: return@detectDragGestures
-                            // Cumulative delta from the gesture start —
-                            // using the per-event increment (lastX) here
-                            // re-anchored every tick and the scrub never
-                            // moved away from the start position.
-                            val deltaFrac = (x - gestures.startX.floatValue) / gestures.scrW.floatValue
-                            val target =
-                                (gestures.startPosMs.floatValue + deltaFrac * d).coerceIn(0f, d.toFloat())
-                            // Perf fix: the drag does NOT seek per pointer
-                            // event — each seek is a track re-position +
-                            // buffer re-read (50ms+ on HEVC), the classic
-                            // janky scrub. Track the pending target here
-                            // (HUD pill + state for the seek bar to read);
-                            // ONE seek fires in onDragEnd.
+                            val density = actions.view.resources.displayMetrics.density.coerceAtLeast(1f)
+                            val deltaPx = x - gestures.startX.floatValue
+                            val deltaDp = deltaPx / density
+                            val absDp = abs(deltaDp)
+                            val sign = if (deltaPx >= 0f) 1f else -1f
+                            // Progressive scrub scaling: fine scrub for small movements (~1.5s per 10dp),
+                            // smooth velocity acceleration beyond 50dp.
+                            val deltaSec = if (absDp <= 50f) {
+                                absDp * 0.15f
+                            } else {
+                                val excess = absDp - 50f
+                                7.5f + excess * 0.15f + 0.008f * excess * excess
+                            }
+                            val deltaMs = sign * deltaSec * 1000f
+                            val target = (gestures.startPosMs.floatValue + deltaMs).coerceIn(0f, d.toFloat())
                             gestures.pendingSeekMs.floatValue = target
-                            actions.showHud(Icons.Filled.FastForward,
-                                fmtTime(target.toLong()) + " / " + fmtTime(d))
+                            val diffSec = ((target - gestures.startPosMs.floatValue) / 1000f).roundToInt()
+                            val diffSign = if (diffSec >= 0) "+" else ""
+                            actions.showHud(
+                                if (deltaPx >= 0f) Icons.Filled.FastForward else Icons.Filled.FastRewind,
+                                "${fmtTime(target.toLong())} (${diffSign}${diffSec}s) / ${fmtTime(d)}"
+                            )
                         }
                         "vol" -> {
-                            val maxV = actions.audioManager
-                                .getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                            val frac = ((gestures.startY.floatValue - y) / (gestures.scrH.floatValue * 0.7f)).coerceIn(-1f, 1f)
-                            val nv = (gestures.startVol.intValue + (frac * maxV).roundToInt())
-                                .coerceIn(0, maxV)
-                            actions.audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nv, 0)
-                            actions.showHud(Icons.AutoMirrored.Filled.VolumeUp,
-                                "${nv * 100 / maxV}%")
+                            val dy = gestures.startY.floatValue - y
+                            actions.updateVolumeGesture(dy)
                         }
                         "bri" -> {
-                            val frac = ((gestures.startY.floatValue - y) / (gestures.scrH.floatValue * 0.7f)).coerceIn(-1f, 1f)
-                            val nb = (gestures.startBri.floatValue + frac * 0.9f).coerceIn(0.02f, 1f)
-                            actions.activity?.window?.let { w ->
-                                val attr = w.attributes
-                                attr.screenBrightness = nb
-                                w.attributes = attr
-                            }
-                            actions.showHud(Icons.Filled.WbSunny, "${(nb * 100).roundToInt()}%")
+                            val dy = gestures.startY.floatValue - y
+                            actions.updateBrightnessGesture(dy)
                         }
                     }
                     gestures.lastX.floatValue = x
@@ -269,44 +267,20 @@ internal fun Modifier.playerGestureLayer(
                     false
                 } ?: true
                 if (!activated) return@awaitEachGesture
-                // Long-press survived — engage the boost.
-                ui.boostActive.value = true
-                ui.boostSpeed.floatValue = BOOST_SPEED
-                actions.view.haptic(HapticFeedbackConstants.LONG_PRESS)
-                (actions.engine?.player ?: actions.livePlayer).setPlaybackSpeed(BOOST_SPEED)
-                actions.showHud(Icons.Filled.FastForward, "2× speed · ↔ Slide to adjust")
+                // Long-press survived — engage the rock-solid 2.0x speed boost.
+                actions.startSpeedBoost()
                 try {
                     // Hold until the finger lifts; a second finger going
-                    // down aborts the boost. Consume the changes so the
-                    // drag detector can't start seeking mid-boost.
+                    // down aborts the boost. Consume changes so no other gesture fires.
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         event.changes.forEach { it.consume() }
                         val pressed = event.changes.filter { it.pressed }
                         val heldPointer = event.changes.firstOrNull { it.id == down.id && it.pressed }
                         if (heldPointer == null || pressed.isEmpty() || pressed.size > 1) break
-
-                        // Horizontal movement while holding adjusts temporary speed
-                        val deltaX = heldPointer.position.x - down.position.x
-                        val speedDelta = (deltaX / (gestures.scrW.floatValue * 0.35f)) * 1.5f
-                        val rawTarget = (BOOST_SPEED + speedDelta).coerceIn(1.0f, 3.5f)
-                        val steppedSpeed = (rawTarget * 4f).roundToInt() / 4f
-                        if (steppedSpeed != ui.boostSpeed.floatValue) {
-                            ui.boostSpeed.floatValue = steppedSpeed
-                            (actions.engine?.player ?: actions.livePlayer).setPlaybackSpeed(steppedSpeed)
-                            actions.showHud(Icons.Filled.FastForward, "%.2f× speed · ↔ Slide".format(steppedSpeed))
-                        }
                     }
                 } finally {
-                    // Restore exactly once per activation, to the user's
-                    // chosen speed (NOT a hardcoded 1×). Read the player
-                    // fresh off the engine: a decoder rebuild mid-hold
-                    // swaps the ExoPlayer instance under us.
-                    ui.boostActive.value = false
-                    val normalSpeed = actions.speeds[actions.speedIdx.intValue]
-                    (actions.engine?.player ?: actions.livePlayer).setPlaybackSpeed(normalSpeed)
-                    actions.showHud(Icons.Filled.FastForward,
-                        speedLabel(normalSpeed) + " speed")
+                    actions.stopSpeedBoost()
                 }
             }
         }

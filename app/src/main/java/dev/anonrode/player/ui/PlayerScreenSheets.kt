@@ -9,6 +9,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -16,12 +23,15 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.anonrode.player.audio.SubtitleColor
 import dev.anonrode.player.audio.SubtitlePosition
 import dev.anonrode.player.audio.SubtitleSize
@@ -161,5 +171,364 @@ internal fun SubtitleStyleDropdown(
             text = { Text("Reset", color = accent) },
             onClick = onReset,
         )
+    }
+}
+
+/**
+ * Tier 2: Three-Dots Floating Card (top-right card).
+ *
+ * Provides instant access to:
+ * - Subtitle Auto-Sync status (Locked / Calibrating / Off)
+ * - Subtitle Style & Font
+ * - Audio Decoder Pipeline (HW / SW)
+ * - Resume Behavior
+ * - Full App Settings link (→)
+ */
+@Composable
+internal fun ThreeDotsMenuCard(
+    visible: Boolean,
+    accent: Color,
+    isSyncLocked: Boolean,
+    isSyncRunning: Boolean,
+    syncEnabled: Boolean,
+    decoderModeLabel: String,
+    onSubtitleSyncClick: () -> Unit,
+    onSubtitleStyleClick: () -> Unit,
+    onDecoderPipelineClick: () -> Unit,
+    onResumeBehaviorClick: () -> Unit,
+    onOpenSettingsClick: () -> Unit,
+    onShareSyncLog: () -> Unit = {},
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!visible) return
+    Box(
+        modifier = modifier
+            .widthIn(min = 250.dp, max = 280.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF0F172A).copy(alpha = 0.96f))
+            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
+            .padding(12.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {} // Consume taps so clicking inside doesn't dismiss
+            ),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = "PLAYBACK & SUB-SYNC",
+                color = Color(0xFF94A3B8),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 1.2.sp,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+            HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(bottom = 4.dp))
+
+            // Subtitle Auto-Sync tile with status badge ("Locked" / "Calibrating" / "Off")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onSubtitleSyncClick() }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Subtitle Auto-Sync",
+                    color = Color(0xFFE2E8F0),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                val statusText = when {
+                    isSyncLocked -> "Locked"
+                    isSyncRunning -> "Calibrating"
+                    !syncEnabled -> "Off"
+                    else -> "Auto"
+                }
+                val (badgeBg, badgeFg) = when {
+                    isSyncLocked -> Color(0xFF10B981).copy(alpha = 0.18f) to Color(0xFF34D399) // Emerald-400
+                    isSyncRunning -> Color(0xFFF59E0B).copy(alpha = 0.18f) to Color(0xFFFBBF24) // Amber-400
+                    !syncEnabled -> Color(0xFF64748B).copy(alpha = 0.18f) to Color(0xFF94A3B8) // Slate-400
+                    else -> Color(0xFF38BDF8).copy(alpha = 0.18f) to Color(0xFF38BDF8) // Sky-400
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(badgeBg)
+                        .border(1.dp, badgeFg.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        text = statusText,
+                        color = badgeFg,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+
+            // Subtitle Style & Font button
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onSubtitleStyleClick() }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Subtitle Style & Font",
+                    color = Color(0xFFE2E8F0),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "Aa",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+
+            // Audio Decoder Pipeline button with current decoder label ("HW" / "SW")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onDecoderPipelineClick() }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Audio Decoder Pipeline",
+                    color = Color(0xFFE2E8F0),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(accent.copy(alpha = 0.15f))
+                        .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        text = decoderModeLabel,
+                        color = accent,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+
+            // Resume Behavior tile
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onResumeBehaviorClick() }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Resume Behavior",
+                    color = Color(0xFFE2E8F0),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "Saved",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+
+            // Share Sync Log tile
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onShareSyncLog() }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Share Sync Log",
+                    color = Color(0xFFE2E8F0),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "Log",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+
+            HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
+
+            // Full App Settings link (`Full App Settings →`) with sky-blue tint (`Color(0xFF38BDF8).copy(alpha = 0.12f)`)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF38BDF8).copy(alpha = 0.12f))
+                    .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.30f), RoundedCornerShape(8.dp))
+                    .clickable { onOpenSettingsClick() }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Full App Settings",
+                        color = Color(0xFF7DD3FC),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "→",
+                        color = Color(0xFF38BDF8),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Tier 3: Audio Track Picker Sheet.
+ * Slides up from bottom with rounded top corners.
+ */
+@Composable
+internal fun AudioTrackPickerSheet(
+    visible: Boolean,
+    accent: Color,
+    onDismiss: () -> Unit,
+    onSelectTrack: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    if (!visible) return
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+            .background(Color(0xFF0F172A).copy(alpha = 0.98f))
+            .border(
+                1.dp,
+                Color.White.copy(alpha = 0.12f),
+                RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // Drag handle
+            Box(
+                modifier = Modifier
+                    .size(width = 40.dp, height = 4.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF475569))
+                    .clickable { onDismiss() }
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Select Audio Track",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Done",
+                    color = accent,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clickable { onDismiss() }
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            // Tracks list item 1 (Default / Original)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF38BDF8).copy(alpha = 0.15f))
+                    .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                    .clickable {
+                        onSelectTrack("1. Japanese (Original, 5.1ch)")
+                        onDismiss()
+                    }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "1. Japanese (Original, 5.1ch)",
+                    color = Color(0xFFBAE6FD),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(text = "✓", color = Color(0xFF38BDF8), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(8.dp))
+            // Tracks list item 2 (Secondary / Dub)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White.copy(alpha = 0.05f))
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                    .clickable {
+                        onSelectTrack("2. English (Dub, 2.0ch)")
+                        onDismiss()
+                    }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "2. English (Dub, 2.0ch)",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Normal,
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+        }
     }
 }

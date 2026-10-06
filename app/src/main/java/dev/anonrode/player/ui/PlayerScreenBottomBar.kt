@@ -1,5 +1,6 @@
 package dev.anonrode.player.ui
 
+import android.content.res.Configuration
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,7 +27,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -62,6 +63,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -118,16 +121,19 @@ internal fun PlayerScreenBottomBar(
     hasPreviousEpisode: Boolean,
     hasNextEpisode: Boolean,
     seekIncrementSec: Int,
-    /** Signed live subtitle offset — drives the sync hero chip's label. */
-    liveOffsetMs: Long,
-    /** Media has subtitle tracks (embedded OR a loaded sidecar) — the CC
-     *  chip's visibility. (Was keyed on "a cue is on screen right now", so
-     *  it vanished between cues.) */
-    hasSubtitleTrack: Boolean,
+    /** Signed live subtitle offset — kept for signature compatibility. */
+    liveOffsetMs: Long = 0L,
+    /** Media has subtitle tracks — kept for signature compatibility. */
+    hasSubtitleTrack: Boolean = false,
     onPlayPrevious: () -> Unit,
     onPlayNext: () -> Unit,
     actions: PlayerScreenActions,
 ) {
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val horizontalPadding = fluid(min = 12.dp, max = 24.dp)
+    val verticalTopPadding = fluidVertical(base = 8.dp, isLandscape = isLandscape)
+    val verticalBottomPadding = fluidVertical(base = 6.dp, isLandscape = isLandscape)
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -141,10 +147,10 @@ internal fun PlayerScreenBottomBar(
             .navigationBarsPadding()
             .displayCutoutPadding()
             .padding(
-                start = PlayerDimens.gapLg,
-                top = PlayerDimens.gapSm,
-                end = PlayerDimens.gapLg,
-                bottom = PlayerDimens.gapXs,
+                start = horizontalPadding,
+                top = verticalTopPadding,
+                end = horizontalPadding,
+                bottom = verticalBottomPadding,
             )
             .onSizeChanged {
                 // Never shrink back to 0: while the chrome auto-hides the
@@ -154,30 +160,7 @@ internal fun PlayerScreenBottomBar(
                 if (it.height > 0) actions.ui.bottomBarHeightPx.intValue = it.height
             },
     ) {
-        // ── Status strip — v0.9 Single-Plane Chrome ─────────────────────────
-        // Information, not buttons. The flagship sub-sync feature was one pill
-        // among six in the old utility row; here it is a READ-OUT you can see
-        // working. Speed shows only when it differs from 1.0×, remaining time
-        // rides the right edge. Tapping the sync pill opens the sync tray —
-        // same action the old hero chip's tap had.
-        if (!actions.ui.locked.value && !actions.gestures.subDragging.value) {
-            StatusStrip(
-                accent = accent,
-                syncEnabled = actions.quick.subSyncEnabled.value,
-                syncRunning = actions.quick.subSyncRunning.value,
-                offsetMs = liveOffsetMs,
-                speed = actions.speeds.getOrElse(actions.speedIdx.intValue) { 1f },
-                positionSec = positionSec.value,
-                durationSec = durationSec.value,
-                onTapSync = { actions.openSyncPopover() },
-                onResync = { actions.resyncNow() },
-                isExplicitlyLocked = actions.quick.isSyncLocked.value,
-            )
-        }
-
-        // ── 1) Seek row — ALWAYS visible (except locked/PiP: whole block
-        //    skipped by the host). Recomposes on the 10Hz tick ONLY here —
-        //    same State discipline as the v0.7.1 perf pass.
+        // ── Row 1: Scrubber Timeline — ALWAYS visible (except locked/PiP) ──
         SeekBarRow(
             accent = accent,
             positionSec = positionSec,
@@ -193,8 +176,7 @@ internal fun PlayerScreenBottomBar(
             },
         )
 
-        // ── 2) Transport + utility — auto-hide together (one AnimatedVisibility
-        //    so they never disagree about when the chrome is up).
+        // ── Row 2: Bottom Controls (auto-hide together with chrome) ──
         androidx.compose.animation.AnimatedVisibility(
             visible = visible,
             enter = fadeIn(animationSpec = tween(220)) +
@@ -203,7 +185,7 @@ internal fun PlayerScreenBottomBar(
                 slideOutVertically(animationSpec = tween(220)) { it / 2 },
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
-                Spacer(Modifier.height(PlayerDimens.gapSm))
+                Spacer(Modifier.height(fluidVertical(base = 6.dp, isLandscape = isLandscape)))
                 TransportRow(
                     accent = accent,
                     isPlaying = isPlaying,
@@ -214,8 +196,8 @@ internal fun PlayerScreenBottomBar(
                     onPlayNext = onPlayNext,
                     actions = actions,
                     onPlayPause = { actions.togglePlayPause() },
-                    onSeekBack = { actions.seekBy(-seekIncrementSec) },
-                    onSeekForward = { actions.seekBy(seekIncrementSec) },
+                    onSeekBack = { actions.seekDelta(-seekIncrementSec) },
+                    onSeekForward = { actions.seekDelta(seekIncrementSec) },
                 )
             }
         }
@@ -260,17 +242,18 @@ internal fun SeekBarRow(
         Text(
             leftLabel,
             color = Color.White.copy(alpha = 0.75f),
-            fontSize = 14.sp,
+            fontSize = fluidText(min = 11.sp, max = 13.sp),
+            fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Start,
             modifier = Modifier
                 .widthIn(min = PlayerDimens.timeLabelMinW)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
-                    indication = ripple(bounded = false, radius = 32.dp, color = accent),
+                    indication = ripple(bounded = false, radius = 24.dp, color = Color(0xFF38BDF8)),
                 ) { showRemainingOnLeft = !showRemainingOnLeft }
         )
-        Box(Modifier.weight(1f).padding(horizontal = PlayerDimens.gapSm)) {
+        Box(Modifier.weight(1f).padding(horizontal = fluid(min = 6.dp, max = 12.dp))) {
             val visualPos by animateFloatAsState(
                 targetValue = when {
                     localSeek.floatValue >= 0f -> localSeek.floatValue
@@ -319,7 +302,7 @@ internal fun SeekBarRow(
                         .fillMaxWidth(posFrac)
                         .height(4.dp)
                         .clip(CircleShape)
-                        .background(accent)
+                        .background(Color(0xFF38BDF8))
                 )
                 if (abStartMs != null) {
                     val aFrac = (abStartMs.toFloat() / (dur * 1000f)).coerceIn(0f, 1f)
@@ -331,9 +314,9 @@ internal fun SeekBarRow(
                         Box(
                             Modifier
                                 .align(Alignment.CenterEnd)
-                                .size(width = 3.dp, height = 12.dp)
+                                .size(width = 3.dp, height = 14.dp)
                                 .clip(RoundedCornerShape(1.dp))
-                                .background(Color(0xFFFFB300))
+                                .background(Color(0xFFFBBF24))
                         )
                     }
                 }
@@ -347,9 +330,9 @@ internal fun SeekBarRow(
                         Box(
                             Modifier
                                 .align(Alignment.CenterEnd)
-                                .size(width = 3.dp, height = 12.dp)
+                                .size(width = 3.dp, height = 14.dp)
                                 .clip(RoundedCornerShape(1.dp))
-                                .background(Color(0xFFFFB300))
+                                .background(Color(0xFFFBBF24))
                         )
                     }
                 }
@@ -369,14 +352,15 @@ internal fun SeekBarRow(
                         modifier = Modifier
                             .size(14.dp)
                             .shadow(2.dp, CircleShape)
-                            .background(Color.White, CircleShape)
+                            .background(Color(0xFF38BDF8), CircleShape)
+                            .border(1.5.dp, Color.White, CircleShape)
                     )
                 },
                 // The painted Boxes above are the visible track; the M3
                 // track goes transparent so only the thumb + drag surface
                 // of the real Slider remain in play.
                 colors = SliderDefaults.colors(
-                    thumbColor = Color.White,
+                    thumbColor = Color(0xFF38BDF8),
                     activeTrackColor = Color.Transparent,
                     inactiveTrackColor = Color.Transparent,
                 ),
@@ -402,14 +386,15 @@ internal fun SeekBarRow(
         Text(
             rightLabel,
             color = Color.White.copy(alpha = 0.75f),
-            fontSize = 14.sp,
+            fontSize = fluidText(min = 11.sp, max = 13.sp),
+            fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.End,
             modifier = Modifier
                 .widthIn(min = PlayerDimens.timeLabelMinW)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
-                    indication = ripple(bounded = false, radius = 32.dp, color = accent),
+                    indication = ripple(bounded = false, radius = 24.dp, color = Color(0xFF38BDF8)),
                 ) { showCurrentOnRight = !showCurrentOnRight }
         )
     }
@@ -468,7 +453,7 @@ private fun ScrubBubble(
     }
 }
 
-/* ── Transport row — faithful reference: [🔒]  [⏮] [⟲ 10s] [▶/⏸] [10s ⟳] [⏭]  [◫] [⤢] ── */
+/* ── Transport row — faithful reference: [🔒]  [|‹] [▶/⏸] [›|]  [◫] [⤢] ── */
 @Composable
 private fun TransportRow(
     accent: Color,
@@ -485,55 +470,54 @@ private fun TransportRow(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Far Left: Lock controls
-        ControlChip(
-            icon = if (actions.ui.locked.value) Icons.Filled.Lock else Icons.Filled.LockOpen,
-            contentDescription = if (actions.ui.locked.value) "Controls locked" else "Lock controls",
-            accent = accent,
-            selected = actions.ui.locked.value,
-            onClick = { actions.lockControls() },
-        )
+        // Far Left wing: Lock controls (weight 1f, left-aligned)
+        Box(
+            modifier = Modifier.weight(1f),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            ControlChip(
+                icon = if (actions.ui.locked.value) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                contentDescription = if (actions.ui.locked.value) "Controls locked" else "Lock controls",
+                accent = accent,
+                selected = actions.ui.locked.value,
+                onClick = { actions.toggleLock() },
+            )
+        }
 
-        // Center: Transport cluster (⏮, ⟲ 10s, ▶/⏸, 10s ⟳, ⏭)
+        // Center cluster: Transport (|‹, Hero ▶/⏸, ›|) with fluid responsive spacing
         Row(
-            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapSm, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(
+                fluid(min = 16.dp, max = 32.dp),
+                Alignment.CenterHorizontally,
+            ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ControlChip(
                 icon = Icons.Filled.SkipPrevious,
-                contentDescription = "Previous episode",
-                accent = accent,
-                enabled = hasPreviousEpisode,
-                onClick = onPlayPrevious,
-            )
-            TimeSeekButton(
-                direction = TimeSeekDirection.BACK,
-                seconds = seekIncrementSec,
+                contentDescription = if (hasPreviousEpisode) "Rewind ${seekIncrementSec}s (Hold for previous episode)" else "Rewind ${seekIncrementSec}s",
                 accent = accent,
                 onClick = onSeekBack,
+                onLongClick = if (hasPreviousEpisode) onPlayPrevious else null,
             )
             BigPlayPauseButton(isPlaying = isPlaying, accent = accent, onClick = onPlayPause)
-            TimeSeekButton(
-                direction = TimeSeekDirection.FORWARD,
-                seconds = seekIncrementSec,
-                accent = accent,
-                onClick = onSeekForward,
-            )
             ControlChip(
                 icon = Icons.Filled.SkipNext,
-                contentDescription = "Next episode",
+                contentDescription = if (hasNextEpisode) "Forward ${seekIncrementSec}s (Hold for next episode)" else "Forward ${seekIncrementSec}s",
                 accent = accent,
-                enabled = hasNextEpisode,
-                onClick = onPlayNext,
+                onClick = onSeekForward,
+                onLongClick = if (hasNextEpisode) onPlayNext else null,
             )
         }
 
-        // Far Right: Aspect ratio & Fullscreen / Rotate
+        // Far Right wing: Aspect ratio & Fullscreen / Rotate (weight 1f, right-aligned)
         Row(
-            horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapSm, Alignment.End),
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(
+                fluid(min = 4.dp, max = 12.dp),
+                Alignment.End,
+            ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             var aspectMenu by remember { mutableStateOf(false) }
@@ -542,10 +526,7 @@ private fun TransportRow(
                     icon = Icons.Filled.AspectRatio,
                     contentDescription = "Aspect ratio",
                     accent = accent,
-                    onClick = {
-                        val nextIdx = (actions.ui.zoomIdx.intValue + 1) % ZoomModes.size
-                        actions.setZoom(nextIdx)
-                    },
+                    onClick = { actions.cycleAspect() },
                     onLongClick = { aspectMenu = true },
                 )
                 DropdownMenu(

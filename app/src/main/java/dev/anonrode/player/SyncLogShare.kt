@@ -71,7 +71,6 @@ object SyncLogShare {
         for (f in sources) {
             f.useLines { seq -> seq.forEach { lines.add(it) } }
         }
-        if (lines.isEmpty()) return null
         val total = lines.size
         val sync = lines.filter { line -> SYNC_TAGS.any { line.contains("[$it]") } }
             .takeLast(SYNC_LINES)
@@ -150,15 +149,20 @@ object SyncLogShare {
     suspend fun shareSyncLog(context: Context, extraDiagnostics: String? = null) {
         AppLog.d("APP", "sync log share requested")
         AppLog.flush()
-        // AppLog batches writes on its own daemon worker with a 1 s
-        // coalescing window; flush() queues the drain, so give the worker a
-        // moment before the read or the newest decisions are missing.
         delay(400)
         val text = withContext(Dispatchers.IO) { buildReport(context, extraDiagnostics) }
-        if (text == null) {
-            Toast.makeText(context, "No log file to share yet", Toast.LENGTH_SHORT).show()
-            return
-        }
+            ?: run {
+                // If log reading produced null, format an emergency diagnostic report
+                val app = context.applicationContext as? AnonrodeApp
+                val engine = if (app?.isReady == true) app.engine else null
+                val posMs = engine?.player?.currentPosition ?: 0L
+                "anonrode-player — subtitle sync log (memory snapshot)\n" +
+                "media uri: ${engine?.currentUri ?: "none"}\n" +
+                "position: %.2fs\n".format(posMs / 1000.0) +
+                "cues loaded: ${engine?.activeSyncCues?.size ?: 0}\n" +
+                "live locked: ${engine?.isLiveLocked}\n" +
+                (extraDiagnostics?.let { "\n$it\n" } ?: "")
+            }
         try {
             val send = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"

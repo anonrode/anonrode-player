@@ -11,6 +11,9 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Rational
 import android.view.WindowManager
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.mediarouter.media.MediaRouter
 import androidx.mediarouter.media.MediaRouter.RouteInfo
 import androidx.activity.ComponentActivity
@@ -609,6 +612,16 @@ class PlayerActivity : ComponentActivity() {
 
         // startStateStoreCollector(uriStr) is launched by openVideo for each active video,
         // keeping live state and Room in sync across episode switches.
+
+        // Fullscreen edge-to-edge layout & display cutout immersion:
+        // Allow the window and video surface to draw under the status bar, navigation bar,
+        // and notch/cutout area so aspect ratios like CROP and STR can cover 100% of the display.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        applyFullscreenImmersion()
 
         // A video player keeps the screen on while it's up; the DataStore
         // setting can opt out once its async read lands (default = on).
@@ -1843,6 +1856,27 @@ class PlayerActivity : ComponentActivity() {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         pipMode = isInPictureInPictureMode
         AppLog.d("PIP", "pip mode = " + isInPictureInPictureMode)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!pipMode) {
+            applyFullscreenImmersion()
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && !pipMode) {
+            applyFullscreenImmersion()
+        }
+    }
+
+    private fun applyFullscreenImmersion() {
+        val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
+        windowInsetsController.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
     }
 
     override fun onStart() {

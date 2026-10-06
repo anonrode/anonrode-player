@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalView
@@ -284,18 +285,23 @@ internal fun BigPlayPauseButton(
     modifier: Modifier = Modifier,
 ) {
     val view = LocalView.current
+    val cinemaGradient = Brush.verticalGradient(
+        listOf(
+            Color(0xFF2A3647),
+            Color(0xFF1A2330),
+            Color(0xFF111722),
+        )
+    )
     Box(
         modifier = modifier
             .size(PlayerDimens.playBig)
             .clip(CircleShape)
-            .border(2.dp, Color.White, CircleShape)
+            .background(cinemaGradient)
+            .border(1.dp, Color.White.copy(alpha = 0.22f), CircleShape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = ripple(bounded = true, radius = 40.dp, color = accent),
                 onClick = {
-                    // The old transport row wrapped this call in a
-                    // VIRTUAL_KEY blip; the primitive owns it now so no
-                    // caller can forget it.
                     view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     onClick()
                 },

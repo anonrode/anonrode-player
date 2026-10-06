@@ -126,16 +126,109 @@ internal class PlayerScreenActions(
 
     fun showTransientToast(msg: String) = hud.showTransientToast(view, msg)
 
+    // ── 3-Tier Hierarchy Navigation & Visibility ──
+    fun toggleHud() {
+        if (ui.locked.value) return
+        val next = !ui.controlsVisible.value
+        ui.controlsVisible.value = next
+        if (!next) {
+            closeTier2And3()
+        }
+    }
+
+    fun setHudVisible(visible: Boolean) {
+        if (ui.locked.value) return
+        ui.controlsVisible.value = visible
+        if (!visible) closeTier2And3()
+    }
+
+    fun toggleThreeDotsMenu() {
+        ui.threeDotsMenuOpen.value = !ui.threeDotsMenuOpen.value
+        if (ui.threeDotsMenuOpen.value) {
+            ui.audioSheetOpen.value = false
+            ui.subStyleSheetOpen.value = false
+        }
+    }
+
+    fun openThreeDotsMenu() {
+        ui.threeDotsMenuOpen.value = true
+        ui.audioSheetOpen.value = false
+        ui.subStyleSheetOpen.value = false
+    }
+
+    fun closeThreeDotsMenu() {
+        ui.threeDotsMenuOpen.value = false
+    }
+
+    fun openAudioSheet() {
+        ui.threeDotsMenuOpen.value = false
+        ui.subStyleSheetOpen.value = false
+        ui.audioSheetOpen.value = true
+        view.haptic()
+        onOpenAudioTrackPicker()
+    }
+
+    fun closeAudioSheet() {
+        ui.audioSheetOpen.value = false
+    }
+
+    fun openSubtitleStyleSheet() {
+        ui.threeDotsMenuOpen.value = false
+        ui.subStyleSheetOpen.value = true
+    }
+
+    fun closeSubtitleStyleSheet() {
+        ui.subStyleSheetOpen.value = false
+    }
+
+    fun closeTier2And3() {
+        ui.closeTier2And3()
+        quick.closeRibbonCustomise()
+        quick.closeSyncPopover()
+        quick.closeStyleTray()
+    }
+
     fun togglePlayPause() {
         if (livePlayer.isPlaying) livePlayer.pause() else livePlayer.play()
     }
 
+    fun toggleLock() {
+        val next = !ui.locked.value
+        ui.locked.value = next
+        ui.lockScrimVisible.value = next
+        if (next) {
+            ui.controlsVisible.value = false
+            closeTier2And3()
+            showTransientToast("Screen Locked")
+        } else {
+            ui.controlsVisible.value = true
+            showTransientToast("Screen Unlocked")
+        }
+        view.haptic()
+    }
+
     fun lockControls() {
         ui.locked.value = true
+        ui.lockScrimVisible.value = true
+        ui.controlsVisible.value = false
+        closeTier2And3()
+        view.haptic()
+        showTransientToast("Screen Locked")
+    }
+
+    fun unlockControls() {
+        ui.locked.value = false
+        ui.lockScrimVisible.value = false
+        ui.controlsVisible.value = true
+        view.haptic()
+        showTransientToast("Screen Unlocked")
     }
 
     fun toggleShowCC() {
-        ui.showCC.value = !ui.showCC.value
+        val next = !ui.showCC.value
+        ui.showCC.value = next
+        view.haptic()
+        showTransientToast(if (next) "Subtitles on" else "Subtitles off")
     }
 
     fun toggleNightMode() {
@@ -149,6 +242,20 @@ internal class PlayerScreenActions(
         view.haptic()
         (livePlayer as? ExoPlayer)?.shuffleModeEnabled = ui.shuffleOn.value
         showTransientToast(if (ui.shuffleOn.value) "Shuffle on" else "Shuffle off")
+        persistPlaylistMode()
+    }
+
+    fun toggleLoop() {
+        val next = if (ui.repeatMode.value == RepeatLoopMode.OFF) RepeatLoopMode.ONE else RepeatLoopMode.OFF
+        ui.repeatMode.value = next
+        view.haptic()
+        val exoMode = when (next) {
+            RepeatLoopMode.OFF -> Player.REPEAT_MODE_OFF
+            RepeatLoopMode.ONE -> Player.REPEAT_MODE_ONE
+            RepeatLoopMode.ALL -> Player.REPEAT_MODE_ALL
+        }
+        livePlayer.repeatMode = exoMode
+        showTransientToast(if (next == RepeatLoopMode.ONE) "Loop Video: ON" else "Loop Video: OFF")
         persistPlaylistMode()
     }
 
@@ -201,14 +308,18 @@ internal class PlayerScreenActions(
     }
 
     fun cycleSleepTimer() {
-        val options = SleepOptions
-        val currentIdx = options.indexOfFirst { sleep.isSelected(it) }.coerceAtLeast(0)
-        val nextIdx = (currentIdx + 1) % options.size
-        val nextOpt = options[nextIdx]
-        selectSleep(nextOpt)
+        val options = listOf(0, 15, 30, 45, 60)
+        val curMin = ui.sleepMinutes.intValue
+        val nextIdx = (options.indexOf(curMin).coerceAtLeast(0) + 1) % options.size
+        val nextMin = options[nextIdx]
+        ui.sleepMinutes.intValue = nextMin
+        val matchedOpt = SleepOptions.firstOrNull { it.minutes == nextMin } ?: SleepOption(if (nextMin == 0) "Off" else "${nextMin}m", nextMin)
+        selectSleep(matchedOpt)
         view.haptic()
-        showTransientToast("Sleep: ${nextOpt.label}")
+        showTransientToast(if (nextMin == 0) "Sleep Timer Off" else "Sleep Timer: ${nextMin}m")
     }
+
+    fun advanceAb() = cycleAbRepeat()
 
     fun cycleAbRepeat() {
         val curPos = livePlayer.currentPosition
@@ -402,6 +513,30 @@ internal class PlayerScreenActions(
      * the engine sat in the default HW+SW hybrid. The label the chip renders
      * now comes from the host, which reads it back off the engine.
      */
+    fun toggleDecoder() {
+        if (isRebuildingDecoder) {
+            showTransientToast("Decoder swap in progress…")
+            return
+        }
+        val nextHw = !ui.isHwDecoder.value
+        ui.isHwDecoder.value = nextHw
+        view.haptic()
+        AppLog.d("PLAYER", "decoder toggle to hw=$nextHw")
+        showTransientToast(if (nextHw) "Hardware (HW) Decoder" else "Software (SW) Decoder")
+        onRebuildDecoder(nextHw)
+    }
+
+    /**
+     * Advance the decoder one step through the engine's real three profiles
+     * (HW+SW -> APP -> HW -> HW+SW).
+     *
+     * This used to be `toggleHwDecoder`, which flipped a local `hwDecoder`
+     * boolean and handed it to the host. The host ignored that boolean and
+     * called `cycleDecoderMode()` anyway, so the chip could land on any of
+     * three engine states while showing two — including reading "SW" while
+     * the engine sat in the default HW+SW hybrid. The label the chip renders
+     * now comes from the host, which reads it back off the engine.
+     */
     fun cycleDecoderMode() {
         if (isRebuildingDecoder) {
             showTransientToast("Decoder swap in progress…")
@@ -409,13 +544,12 @@ internal class PlayerScreenActions(
         }
         AppLog.d("PLAYER", "decoder request: cycle, current=" + decoderModeLabel)
         showTransientToast("Switching decoder profile…")
-        // Fire the real rebuild via the host. The host tears down the
-        // ExoPlayer, builds a new one with the next renderers factory, and
-        // re-anchors the sync processor at the saved position. The chip shows
-        // "…" while isRebuildingDecoder is true; the host clears it once the
-        // new player reports STATE_READY and refreshes decoderModeLabel.
-        onRebuildDecoder(decoderModeLabel != "APP")
+        val nextHw = decoderModeLabel == "APP" || !ui.isHwDecoder.value
+        ui.isHwDecoder.value = nextHw
+        onRebuildDecoder(nextHw)
     }
+
+    fun toggleOrientation() = cycleRotateMode()
 
     /** Step the 3-state rotation mode forward (sensor → landscape →
      *  portrait → sensor). The activity orientation is reapplied by
@@ -511,16 +645,25 @@ internal class PlayerScreenActions(
         showTransientToast("Speed " + speedLabel(sp))
     }
 
+    fun cycleAspect() {
+        val nextIdx = (ui.zoomIdx.intValue + 1) % ZoomModes.size
+        setZoom(nextIdx)
+    }
+
     /**
      * Pick an exact zoom/aspect mode (v0.7.3): direct mode selection from
      * the aspect pill's dropdown replaces the old double-blind cycle — and
      * the HUD pill still flashes the abbreviation for touch feedback.
      */
     fun setZoom(idx: Int) {
-        if (idx !in ZoomModes.indices || idx == ui.zoomIdx.intValue) return
+        if (idx !in ZoomModes.indices) return
         ui.zoomIdx.intValue = idx
         onZoomChanged(idx)
-        showHud(Icons.Filled.AspectRatio, ZoomModes[idx].abbreviation)
+        val mode = ZoomModes[idx]
+        val label = if (mode.abbreviation == "STR") "STRETCH" else mode.abbreviation
+        ui.showAspectBadge(view, label)
+        view.haptic()
+        showTransientToast("Aspect Ratio: $label")
     }
 
     /**
@@ -533,6 +676,11 @@ internal class PlayerScreenActions(
         ui.zoomIdx.intValue = next
         onZoomChanged(ui.zoomIdx.intValue)
         showHud(Icons.Filled.AspectRatio, ZoomModes[ui.zoomIdx.intValue].abbreviation)
+    }
+
+    fun seekDelta(seconds: Int) {
+        seekBy(seconds)
+        ui.showSeekRipple(view, if (seconds < 0) -1 else 1, abs(seconds))
     }
 
     fun seekBy(sec: Int) {
@@ -557,6 +705,59 @@ internal class PlayerScreenActions(
         view.postDelayed({ ui.flashSide.value = 0 }, 420)
     }
 
+    fun startSpeedBoost() {
+        if (ui.boostActive.value) return
+        ui.showSpeedBanner(view, 2.0f)
+        (engine?.player ?: livePlayer).setPlaybackSpeed(2.0f)
+        view.haptic()
+    }
+
+    fun stopSpeedBoost() {
+        if (!ui.boostActive.value) return
+        ui.hideSpeedBanner()
+        val normalSpeed = speeds.getOrElse(speedIdx.intValue) { 1.0f }
+        (engine?.player ?: livePlayer).setPlaybackSpeed(normalSpeed)
+    }
+
+    fun updateVolumeGesture(deltaY: Float) {
+        val maxV = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val scrH = gestures.scrH.floatValue.takeIf { it > 0f } ?: 1000f
+        val frac = (deltaY / (scrH * 0.7f)).coerceIn(-1f, 1f)
+        val nv = (gestures.startVol.intValue + (frac * maxV).roundToInt()).coerceIn(0, maxV)
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nv, 0)
+        val progress = nv.toFloat() / maxV.toFloat()
+        val pctText = "${(progress * 100).roundToInt()}%"
+        ui.showVerticalHud(view, VerticalHudType.VOLUME, progress, pctText)
+    }
+
+    fun updateBrightnessGesture(deltaY: Float) {
+        val scrH = gestures.scrH.floatValue.takeIf { it > 0f } ?: 1000f
+        val frac = (deltaY / (scrH * 0.7f)).coerceIn(-1f, 1f)
+        val nb = (gestures.startBri.floatValue + frac * 0.9f).coerceIn(0.02f, 1f)
+        activity?.window?.let { w ->
+            val attr = w.attributes
+            attr.screenBrightness = nb
+            w.attributes = attr
+        }
+        val pctText = "${(nb * 100).roundToInt()}%"
+        ui.showVerticalHud(view, VerticalHudType.BRIGHTNESS, nb, pctText)
+    }
+
+    fun onSubtitleDrag(amountY: Float) {
+        val scrH = gestures.scrH.floatValue.takeIf { it > 0f } ?: 1000f
+        val deltaFrac = amountY / scrH
+        gestures.subX.floatValue = SUB_DEFAULT_X
+        gestures.subY.floatValue = (gestures.subY.floatValue + deltaFrac).coerceIn(SUB_Y_MIN, SUB_Y_MAX)
+    }
+
+    fun onSubtitleDragEnd() {
+        gestures.subDragging.value = false
+        val uri = persistUri() ?: ""
+        PlayerPrefs.saveSubtitlePosition(context, uri, SUB_DEFAULT_X, gestures.subY.floatValue)
+    }
+
+    fun captureScreenshot() = captureFrame()
+
     /**
      * Save the current video frame: PixelCopy the PlayerView's SurfaceView
      * (which holds the decoded frame — a plain view screenshot would be
@@ -580,6 +781,8 @@ internal class PlayerScreenActions(
             showTransientToast("Screenshot failed — surface not ready")
             return
         }
+        ui.triggerScreenshotFlash(view)
+        view.haptic()
         val bmp = Bitmap.createBitmap(
             surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888
         )

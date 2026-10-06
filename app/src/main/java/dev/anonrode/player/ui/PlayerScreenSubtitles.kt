@@ -1,7 +1,7 @@
 package dev.anonrode.player.ui
 
 import android.view.HapticFeedbackConstants
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
@@ -35,6 +35,7 @@ private val SubtitleOutlineOffsets = listOf(
 /**
  * The subtitle cue: high-contrast outlined (bold + black outline, no box), centered
  * on a draggable stage position (persisted per video and globally).
+ * Position is percentage-based (10% to 85%), decoupled from chrome height.
  * [modifier] carries the caller's BoxScope alignment.
  */
 @Composable
@@ -54,34 +55,31 @@ internal fun PlayerSubtitleOverlay(
     Box(
         modifier = modifier
             .offset {
-                val baseTargetY = gestures.subY.floatValue * gestures.scrH.floatValue
-                val lift = if (!gestures.subDragging.value && bottomBarHeightPx > 0f) {
-                    val subBottom = baseTargetY + 40f
-                    val controlsTop = gestures.scrH.floatValue - bottomBarHeightPx
-                    if (subBottom > controlsTop) (subBottom - controlsTop + 16f) else 0f
-                } else 0f
-                val effectiveY = baseTargetY - lift
+                // Direct percentage-based Y position, decoupled from chrome height.
+                // Horizontally locked to 0 for exact optical and mathematical screen centering.
+                val effectiveY = gestures.subY.floatValue * gestures.scrH.floatValue
                 IntOffset(
-                    ((gestures.subX.floatValue * gestures.scrW.floatValue) - gestures.scrW.floatValue / 2f).roundToInt(),
+                    0,
                     (effectiveY - gestures.scrH.floatValue / 2f).roundToInt(),
                 )
             }
             .graphicsLayer {
-                val s = if (gestures.subDragging.value) 1.08f else 1f
+                val s = if (gestures.subDragging.value) 1.04f else 1f
                 scaleX = s
                 scaleY = s
-                alpha = if (gestures.subDragging.value) 0.9f else 1f
+                alpha = if (gestures.subDragging.value) 0.95f else 1f
             }
             .pointerInput(showCC) {
-                detectDragGesturesAfterLongPress(
+                detectDragGestures(
                     onDragStart = {
-                        view.haptic(HapticFeedbackConstants.LONG_PRESS)
+                        view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
                         gestures.subDragging.value = true
                     },
                     onDrag = { change, amount ->
                         change.consume()
                         gestures.subX.floatValue = SUB_DEFAULT_X
-                        gestures.subY.floatValue = (gestures.subY.floatValue + amount.y / gestures.scrH.floatValue).coerceIn(SUB_Y_MIN, SUB_Y_MAX)
+                        val scrH = gestures.scrH.floatValue.takeIf { it > 0f } ?: 1000f
+                        gestures.subY.floatValue = (gestures.subY.floatValue + amount.y / scrH).coerceIn(SUB_Y_MIN, SUB_Y_MAX)
                     },
                     onDragEnd = {
                         gestures.subDragging.value = false
@@ -90,7 +88,7 @@ internal fun PlayerSubtitleOverlay(
                     onDragCancel = { gestures.subDragging.value = false },
                 )
             }
-            .padding(horizontal = 32.dp),
+            .padding(horizontal = 24.dp),
         contentAlignment = Alignment.Center,
     ) {
         OutlinedSubtitleText(text, style = style)
@@ -116,9 +114,8 @@ internal fun PlayerSubtitleOverlay(
 }
 
 /**
- * High-contrast subtitle look: bold white text with a black 8-way outline, no
- * background box, centered, at most three lines. Styled from the host-owned
- * [SubtitleStyle] (size + color; placement is drag-driven).
+ * High-contrast subtitle look: crisp yellow text Color(0xFFFEF08A) on dark blur pill
+ * Color.Black.copy(alpha = 0.85f), centered horizontally, at most three lines.
  */
 @Composable
 internal fun OutlinedSubtitleText(
@@ -127,20 +124,30 @@ internal fun OutlinedSubtitleText(
     style: SubtitleStyle = SubtitleStyle(),
 ) {
     val sizeSp = style.size.fontSp
-    val lineSp = (sizeSp.value * 1.5f).sp
-    val fillColor = style.color.value
+    val lineSp = (sizeSp.value * 1.4f).sp
+    val subtitleYellow = Color(0xFFFEF08A)
+    val fillColor = if (style.color == dev.anonrode.player.audio.SubtitleColor.WHITE ||
+        style.color == dev.anonrode.player.audio.SubtitleColor.YELLOW) {
+        subtitleYellow
+    } else {
+        style.color.value
+    }
     val weight = if (style.bold) FontWeight.Bold else FontWeight.Medium
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+    Box(
+        modifier = modifier
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .background(Color.Black.copy(alpha = 0.85f))
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         SubtitleOutlineOffsets.forEach { (dx, dy) ->
             Text(
-                text,
-                color = Color.Black,
+                text = text,
+                color = Color.Black.copy(alpha = 0.85f),
                 fontWeight = weight,
                 fontSize = sizeSp,
                 lineHeight = lineSp,
                 textAlign = TextAlign.Center,
-                // 3 lines, no ellipsis: fansub ASS conversions often carry
-                // 3-line cues; hard-truncating at 2 silently lost content.
                 maxLines = 3,
                 softWrap = true,
                 overflow = TextOverflow.Visible,
@@ -148,7 +155,7 @@ internal fun OutlinedSubtitleText(
             )
         }
         Text(
-            text,
+            text = text,
             color = fillColor,
             fontWeight = weight,
             fontSize = sizeSp,

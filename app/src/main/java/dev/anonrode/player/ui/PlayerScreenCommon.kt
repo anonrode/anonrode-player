@@ -32,10 +32,10 @@ internal val OverlayMenuDivider = Color(0xFF33333B)
 /** Subtitle drag safe margins, as fractions of the stage (box center). */
 internal const val SUB_X_MIN = 0.06f
 internal const val SUB_X_MAX = 0.94f
-internal const val SUB_Y_MIN = 0.12f
-internal const val SUB_Y_MAX = 0.90f
+internal const val SUB_Y_MIN = 0.10f
+internal const val SUB_Y_MAX = 0.85f
 internal const val SUB_DEFAULT_X = 0.5f
-internal const val SUB_DEFAULT_Y = 0.66f
+internal const val SUB_DEFAULT_Y = 0.78f
 
 /** Show the Next-Episode shortcut pill within this many seconds of the end. */
 internal const val NEXT_BUTTON_WINDOW_SEC = 30f
@@ -63,15 +63,15 @@ internal fun fmtTime(ms: Long): String {
  */
 enum class RibbonTool(val label: String) {
     NIGHT_MODE("Night Mode"),
+    SPEED("Speed"),
+    MUTE("Mute"),
+    LOOP("Loop"),
     CUSTOMISE("Customise"),
     SHUFFLE("Shuffle"),
-    LOOP("Loop"),
-    MUTE("Mute"),
     SLEEP_TIMER("Sleep Timer"),
     AB_REPEAT("A-B Repeat"),
     AUDIO_EFFECT("Audio Effect"),
     EQUALIZER("Equalizer"),
-    SPEED("Speed"),
     SCREENSHOT("Screenshot"),
     BACKGROUND_PLAY("Background Play"),
     ROTATION("Screen Rotation");

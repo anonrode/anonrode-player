@@ -575,7 +575,9 @@ fun PlayerScreen(
         locked = ui.locked.value,
         stayAwake = overflowOpen.value || quick.showSyncPopover.value ||
             quick.showStyleTray.value ||
-            gestures.subStyleMenuOpen.value || hostSheetOpen,
+            gestures.subStyleMenuOpen.value || hostSheetOpen ||
+            ui.threeDotsMenuOpen.value || ui.audioSheetOpen.value ||
+            ui.subStyleSheetOpen.value || ui.equalizerSheetOpen.value,
         autoHideControlsMs = autoHideControlsMs,
         onHide = { ui.controlsVisible.value = false },
     )
@@ -634,6 +636,18 @@ fun PlayerScreen(
             )
         }
 
+        // ── aspect ratio transient badge (top-right) ──
+        if (ui.aspectBadge.value != null && !isPipMode) {
+            AspectBadgeOverlay(
+                badgeText = ui.aspectBadge.value ?: "",
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .displayCutoutPadding()
+                    .padding(top = 16.dp, end = 16.dp),
+            )
+        }
+
         // ── subtitle: high-contrast outline, draggable ──
         if (ui.showCC.value && !isPipMode) {
             cueText?.let { txt ->
@@ -651,8 +665,17 @@ fun PlayerScreen(
             }
         }
 
-        // ── double-tap flash ──
-        if (ui.flashSide.value != 0 && !isPipMode) {
+        // ── seek ripple overlay (double-tap seek) ──
+        if (ui.seekRippleSide.intValue != 0 && !isPipMode) {
+            SeekRippleOverlay(
+                side = ui.seekRippleSide.intValue,
+                seconds = ui.seekRippleSeconds.intValue,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        // ── double-tap flash (fallback) ──
+        if (ui.flashSide.value != 0 && !isPipMode && ui.seekRippleSide.intValue == 0) {
             DoubleTapFlash(
                 modifier = Modifier.align(
                     if (ui.flashSide.value < 0) Alignment.CenterStart else Alignment.CenterEnd
@@ -675,13 +698,50 @@ fun PlayerScreen(
             )
         }
 
+        // ── vertical gesture HUD pill (Volume on right, Brightness on left) ──
+        if (ui.verticalHudVisible.value && !isPipMode) {
+            VerticalGestureHudPill(
+                type = ui.verticalHudType.value,
+                progress = ui.verticalHudProgress.floatValue,
+                valueText = ui.verticalHudValueText.value,
+                accent = accent,
+                modifier = Modifier
+                    .align(if (ui.verticalHudType.value == VerticalHudType.VOLUME) Alignment.CenterEnd else Alignment.CenterStart)
+                    .padding(horizontal = 24.dp),
+            )
+        }
+
+        // ── speed banner HUD (hold-to-2x top-center) ──
+        if (ui.speedBannerVisible.value && !isPipMode) {
+            SpeedBannerHud(
+                speedText = ui.speedBannerText.value,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .displayCutoutPadding()
+                    .padding(top = 16.dp),
+            )
+        }
+
         // ── buffering spinner (center, undecorated) ──
         if (ui.isBuffering.value && !isPipMode) {
             BufferingSpinner(modifier = Modifier.align(Alignment.Center), accent = accent)
         }
 
-        // ── lock badge — the ONLY chrome that survives locking; it lives
-        //    where the top bar was, so it carries the status-bar inset. ──
+        // ── camera flash white overlay (screenshot capture) ──
+        if (ui.screenshotFlash.value) {
+            CameraFlashOverlay(modifier = Modifier.fillMaxSize())
+        }
+
+        // ── lock scrim overlay ──
+        if (ui.locked.value && ui.lockScrimVisible.value && !isPipMode) {
+            LockScrimOverlay(
+                onUnlock = { actions.unlockControls() },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        // ── lock badge ──
         if (ui.locked.value && !isPipMode) {
             LockBadge(
                 modifier = Modifier
@@ -689,13 +749,11 @@ fun PlayerScreen(
                     .statusBarsPadding()
                     .displayCutoutPadding(),
                 accent = accent,
-                onUnlock = { ui.locked.value = false },
+                onUnlock = { actions.unlockControls() },
             )
         }
 
-        // ── controls overlay — the seek bar row inside stays visible even
-        //    when the chrome is hidden (UI-4 fix); hidden entirely only
-        //    while in PiP / locked.
+        // ── controls overlay ──
         PlayerControlsOverlay(
             visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
             showSeekBar = !ui.locked.value && !isPipMode,
@@ -715,8 +773,63 @@ fun PlayerScreen(
             onBack = onBack,
             onPlayPrevious = onPlayPrevious,
             onPlayNext = onPlayNext,
-            onMore = { overflowOpen.value = true },
+            onMore = { actions.toggleThreeDotsMenu() },
         )
+
+        // ── Tier 2: Three Dots Floating Card ──
+        if (ui.threeDotsMenuOpen.value && !isPipMode) {
+            ThreeDotsMenuCard(
+                visible = ui.threeDotsMenuOpen.value,
+                accent = accent,
+                isSyncLocked = quick.isSyncLocked.value,
+                isSyncRunning = quick.subSyncRunning.value,
+                syncEnabled = quick.subSyncEnabled.value,
+                decoderModeLabel = decoderModeLabel,
+                onSubtitleSyncClick = {
+                    actions.closeThreeDotsMenu()
+                    actions.openSyncPopover()
+                },
+                onSubtitleStyleClick = {
+                    actions.closeThreeDotsMenu()
+                    actions.openStyleTray()
+                },
+                onDecoderPipelineClick = {
+                    actions.cycleDecoderMode()
+                },
+                onResumeBehaviorClick = {
+                    actions.closeThreeDotsMenu()
+                    actions.showTransientToast("Resume behavior: from last position")
+                },
+                onOpenSettingsClick = {
+                    actions.closeThreeDotsMenu()
+                    overflowOpen.value = true
+                },
+                onShareSyncLog = {
+                    actions.closeThreeDotsMenu()
+                    onShareSyncLog()
+                },
+                onDismiss = { actions.closeThreeDotsMenu() },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .displayCutoutPadding()
+                    .padding(top = topAnchor, end = 16.dp),
+            )
+        }
+
+        // ── Tier 3: Audio Track Picker Sheet ──
+        if (ui.audioSheetOpen.value && !isPipMode) {
+            AudioTrackPickerSheet(
+                visible = ui.audioSheetOpen.value,
+                accent = accent,
+                onDismiss = { actions.closeAudioSheet() },
+                onSelectTrack = { trackName ->
+                    actions.closeAudioSheet()
+                    actions.showTransientToast("Audio Track: $trackName")
+                },
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
 
         // ── Control Center (was the flat overflow sheet; v0.7.3 sectioned
         //    hub with live values + the wired dead ends). Single "more"

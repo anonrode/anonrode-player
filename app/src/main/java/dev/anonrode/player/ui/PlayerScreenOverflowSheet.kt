@@ -400,7 +400,7 @@ private fun SectionHeader(text: String) {
  * (and typically dismisses, via the caller); optional long-press adds a
  * secondary surface (EQ tile: tap toggles, long-press opens the panel).
  * Active state colors with the user's SKIN accent — not the old
- * hardcoded MX green.
+ * hardcoded default green.
  */
 @Composable
 private fun CenterTile(

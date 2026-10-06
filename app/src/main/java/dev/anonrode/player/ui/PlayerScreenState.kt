@@ -47,9 +47,27 @@ enum class RepeatLoopMode(val label: String) {
     }
 }
 
+enum class AbRepeatState(val label: String) {
+    OFF("A - B Repeat"),
+    POINT_A("Point A Set"),
+    LOOPING_AB("Looping A-B");
+
+    fun next(): AbRepeatState = when (this) {
+        OFF -> POINT_A
+        POINT_A -> LOOPING_AB
+        LOOPING_AB -> OFF
+    }
+}
+
+enum class VerticalHudType {
+    VOLUME,
+    BRIGHTNESS
+}
+
 @Stable
 @UnstableApi
 internal class PlayerUiState(initialIsPlaying: Boolean) {
+    // ── Tier 1: Direct HUD visibility & transport flags ──
     val controlsVisible = mutableStateOf(true)
     val isPlaying = mutableStateOf(initialIsPlaying)
 
@@ -57,14 +75,19 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
     val isBuffering = mutableStateOf(false)
     val locked = mutableStateOf(false)
 
-    /**
-     * True while the hold-to-2× speed boost gesture is engaged. Guards
-     * against re-entrant gestures double-applying the speed change.
-     */
-    val boostActive = mutableStateOf(false)
-    val boostSpeed = mutableFloatStateOf(2.0f)
+    // ── Tier 2: Three-Dots Floating Card ──
+    val threeDotsMenuOpen = mutableStateOf(false)
+
+    // ── Tier 3: Bottom / Modal Sheets ──
+    val audioSheetOpen = mutableStateOf(false)
+    val subStyleSheetOpen = mutableStateOf(false)
+    val equalizerSheetOpen = mutableStateOf(false)
+
+    // ── Top Zone Controls ──
+    val isHwDecoder = mutableStateOf(true)
     val showCC = mutableStateOf(true)
 
+    // ── Quick Ribbon 13 Tools State ──
     val nightMode = mutableStateOf(false)
     val shuffleOn = mutableStateOf(false)
     val repeatMode = mutableStateOf(RepeatLoopMode.OFF)
@@ -74,49 +97,111 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
     val abEndMs = mutableStateOf<Long?>(null)
     val audioEffectOn = mutableStateOf(false)
     val backgroundPlayOn = mutableStateOf(false)
+    val sleepMinutes = mutableIntStateOf(0)
+    val screenshotFlash = mutableStateOf(false)
 
+    val abRepeatState: AbRepeatState
+        get() = when {
+            abStartMs.value != null && abEndMs.value != null -> AbRepeatState.LOOPING_AB
+            abStartMs.value != null -> AbRepeatState.POINT_A
+            else -> AbRepeatState.OFF
+        }
+
+    // ── Bottom Zone & Aspect Ratio ──
     /** Index into [ZoomModes]: FIT → CROP → STR → 16:9 → 4:3. */
     val zoomIdx = mutableIntStateOf(0)
+    val aspectBadge = mutableStateOf<String?>(null)
     val playerViewRef = mutableStateOf<PlayerView?>(null)
 
-    /**
-     * Measured heights (px) of the top bar and the bottom chrome block,
-     * v0.7.3 overlay anchoring. Overlays (A-B chip, toast, Up Next pill,
-     * sync popover) sit off these numbers instead of the old hand-tuned
-     * `top = 70 / bottom = 140 / 210` dp magic that collided with the
-     * chrome and broke on every shape change. Bars publish into them via
-     * onSizeChanged and NEVER shrink them back to 0 (the values stay stale
-     * while the chrome auto-hides so anchored overlays don't jump).
-     */
     val topBarHeightPx = mutableIntStateOf(0)
     val bottomBarHeightPx = mutableIntStateOf(0)
 
-    /**
-     * First-frame poster. Drawn over the player view so the gap between
-     * "video opens" and "first frame paints" doesn't show as a black
-     * flash. Set asynchronously by FirstFramePosterEffect; cleared when
-     * the player's [androidx.media3.common.Player.Listener] reports
-     * STATE_READY.
-     */
     val posterBitmap = mutableStateOf<ImageBitmap?>(null)
-
-    /**
-     * Seekbar drag position in seconds; -1 = not dragging. Seeking is
-     * applied once on release instead of firing player.seekTo() per pixel
-     * of drag.
-     */
     val localSeek = mutableFloatStateOf(-1f)
-
-    /**
-     * Scrub frame preview (v0.7.1): the throttled, scaled
-     * frame at the current scrub target — slider drag OR swipe gesture —
-     * decoded by ScrubPreviewEffect while scrubbing, null otherwise.
-     * Read only by the scrub bubble in the seek bar row.
-     */
     val scrubPreview = mutableStateOf<ImageBitmap?>(null)
 
-    /** -1 left, +1 right, 0 none — double-tap seek flash side. */
+    // ── Gesture HUDs ──
+    /** -1 left, +1 right, 0 none — double-tap seek flash / ripple side. */
     val flashSide = mutableIntStateOf(0)
+    val seekRippleSide = mutableIntStateOf(0)
+    val seekRippleSeconds = mutableIntStateOf(10)
+
+    /** Hold-to-2× speed boost gesture and top banner HUD. */
+    val boostActive = mutableStateOf(false)
+    val boostSpeed = mutableFloatStateOf(2.0f)
+    val speedBannerVisible = mutableStateOf(false)
+    val speedBannerText = mutableStateOf("2.0× SPEED")
+
+    /** Volume & Brightness vertical pill HUDs. */
+    val verticalHudVisible = mutableStateOf(false)
+    val verticalHudType = mutableStateOf<VerticalHudType?>(null)
+    val verticalHudProgress = mutableFloatStateOf(0.7f)
+    val verticalHudValueText = mutableStateOf("70%")
+
+    /** Screen lock scrim. */
+    val lockScrimVisible = mutableStateOf(false)
+
+    // ── Auto-hide runnables & actions ──
+    private val hideAspectBadgeRunnable = Runnable { aspectBadge.value = null }
+    private val hideScreenshotFlashRunnable = Runnable { screenshotFlash.value = false }
+    private val hideSeekRippleRunnable = Runnable {
+        seekRippleSide.intValue = 0
+        flashSide.intValue = 0
+        seekRippleSeconds.intValue = 10
+    }
+    private val hideVerticalHudRunnable = Runnable { verticalHudVisible.value = false }
+
+    fun showAspectBadge(view: View, badge: String) {
+        aspectBadge.value = badge
+        view.removeCallbacks(hideAspectBadgeRunnable)
+        view.postDelayed(hideAspectBadgeRunnable, 1000L)
+    }
+
+    fun triggerScreenshotFlash(view: View) {
+        screenshotFlash.value = true
+        view.removeCallbacks(hideScreenshotFlashRunnable)
+        view.postDelayed(hideScreenshotFlashRunnable, 150L)
+    }
+
+    fun showSeekRipple(view: View, side: Int, seconds: Int = 10) {
+        if (seekRippleSide.intValue == side) {
+            seekRippleSeconds.intValue += seconds
+        } else {
+            seekRippleSide.intValue = side
+            seekRippleSeconds.intValue = seconds
+        }
+        flashSide.intValue = side
+        view.removeCallbacks(hideSeekRippleRunnable)
+        view.postDelayed(hideSeekRippleRunnable, 650L)
+    }
+
+    fun showVerticalHud(view: View, type: VerticalHudType, progress: Float, valueText: String) {
+        verticalHudType.value = type
+        verticalHudProgress.floatValue = progress.coerceIn(0f, 1f)
+        verticalHudValueText.value = valueText
+        verticalHudVisible.value = true
+        view.removeCallbacks(hideVerticalHudRunnable)
+        view.postDelayed(hideVerticalHudRunnable, 900L)
+    }
+
+    fun showSpeedBanner(view: View, speed: Float = 2.0f) {
+        speedBannerText.value = "${speed}× SPEED"
+        speedBannerVisible.value = true
+        boostActive.value = true
+        boostSpeed.floatValue = speed
+    }
+
+    fun hideSpeedBanner() {
+        speedBannerVisible.value = false
+        boostActive.value = false
+    }
+
+    fun closeTier2And3() {
+        threeDotsMenuOpen.value = false
+        audioSheetOpen.value = false
+        subStyleSheetOpen.value = false
+        equalizerSheetOpen.value = false
+    }
 }
 
 /**
@@ -254,6 +339,11 @@ internal class GestureUiState {
 
     /** Long-press dropdown (Size / Position / Color / Reset) is open. */
     val subStyleMenuOpen = mutableStateOf(false)
+
+    /** Subtitle vertical position as a direct fraction of screen height (10% to 85%). */
+    fun setSubtitleY(fraction: Float) {
+        subY.floatValue = fraction.coerceIn(SUB_Y_MIN, SUB_Y_MAX)
+    }
 
     /**
      * First-invocation skip flag for the style Position preset effect, so
