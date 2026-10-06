@@ -508,8 +508,8 @@ fun LibraryScreen(
                     }
                 }
 
-                // Continue watching
-                if (state.inProgress.isNotEmpty()) {
+                // Continue watching (Home dashboard only — Series is a dedicated folders view)
+                if (state.inProgress.isNotEmpty() && startDestination != LibraryStartDestination.Series) {
                     item(key = "header-continue") {
                         Row(
                             modifier = Modifier

@@ -255,8 +255,9 @@ object SpeechCorrelator {
         val zFloor = if (n <= 160) Z_SMALL else Z_SMALL - (Z_SMALL - Z_LARGE) * minOf(1.0, (n - 160.0) / 120.0)
 
         // Standard gate: peak, margin, containment (restored from v0.6), and z-score
-        // Strictly enforce margin >= PROM_MIN (0.08) to reject harmonic aliases from conversational cadence
-        val lockable = peak >= PEAK_MIN && margin >= PROM_MIN && containment >= CONTAINMENT_MIN && z >= zFloor
+        // High-containment clean dialogue gate allows unambiguous alignment to lock reliably
+        val lockable = (peak >= PEAK_MIN && margin >= PROM_MIN && containment >= CONTAINMENT_MIN && z >= zFloor) ||
+            (containment >= 0.80f && peak >= 0.28f && z >= 7.0 && margin >= 0.03f)
 
         // Renderer convention: applied offset = −peak (subs late → negative).
         val offset = -bestShift * ALIGN_BIN

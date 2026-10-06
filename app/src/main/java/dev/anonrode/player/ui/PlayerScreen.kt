@@ -436,6 +436,7 @@ fun PlayerScreen(
             onSetAudioEffect = { onSetAudioEffect(it) },
             onPersistPlaylistMode = { u, sh, rm -> onPersistPlaylistMode(u, sh, rm) },
             persistUri = { mediaId.ifBlank { null } },
+            onOpenSubtitlePicker = onOpenSubtitlePicker,
         )
     }
 
@@ -778,6 +779,20 @@ fun PlayerScreen(
             onMore = { actions.toggleThreeDotsMenu() },
         )
 
+        // ── live subtitle sync mini-bar HUD (requested at 03:40 of screen recording) ──
+        SubSyncStatusHud(
+            visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
+            isSyncRunning = quick.subSyncRunning.value,
+            isSyncLocked = quick.isSyncLocked.value,
+            liveOffsetMs = liveOffsetMs,
+            accent = accent,
+            onClick = { actions.openSyncPopover() },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 96.dp),
+        )
+
         // ── Tier 2: Three Dots Floating Card ──
         if (ui.threeDotsMenuOpen.value && !isPipMode) {
             ThreeDotsMenuCard(
@@ -790,6 +805,10 @@ fun PlayerScreen(
                 onSubtitleSyncClick = {
                     actions.closeThreeDotsMenu()
                     actions.openSyncPopover()
+                },
+                onSubtitleTracksClick = {
+                    actions.closeThreeDotsMenu()
+                    actions.openSubtitlePicker()
                 },
                 onSubtitleStyleClick = {
                     actions.closeThreeDotsMenu()

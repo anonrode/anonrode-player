@@ -193,6 +193,7 @@ internal fun ThreeDotsMenuCard(
     syncEnabled: Boolean,
     decoderModeLabel: String,
     onSubtitleSyncClick: () -> Unit,
+    onSubtitleTracksClick: () -> Unit = {},
     onSubtitleStyleClick: () -> Unit,
     onDecoderPipelineClick: () -> Unit,
     onResumeBehaviorClick: () -> Unit,
@@ -274,6 +275,31 @@ internal fun ThreeDotsMenuCard(
                         fontFamily = FontFamily.Monospace,
                     )
                 }
+            }
+
+            // Subtitle Tracks & Online Search (MX Player feature)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onSubtitleTracksClick() }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Subtitles & Online Search",
+                    color = Color(0xFFE2E8F0),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "Online / Local",
+                    color = accent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
 
             // Subtitle Style & Font button

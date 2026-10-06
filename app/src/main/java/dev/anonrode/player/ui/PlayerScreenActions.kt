@@ -121,7 +121,12 @@ internal class PlayerScreenActions(
     private val onPersistPlaylistMode: (uri: String, shuffle: Boolean, repeatMode: Int) -> Unit = { _, _, _ -> },
     /** The video whose playlist mode is currently being edited. */
     private val persistUri: () -> String? = { null },
+    private val onOpenSubtitlePicker: () -> Unit = {},
 ) {
+
+    fun openSubtitlePicker() {
+        onOpenSubtitlePicker()
+    }
 
     fun showHud(icon: ImageVector, text: String) =
         hud.showHud(view, icon, text)

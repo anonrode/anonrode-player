@@ -269,6 +269,7 @@ internal fun PlayerScreenTopBar(
                     accent = accent,
                     selected = actions.ui.showCC.value,
                     onClick = { actions.toggleShowCC() },
+                    onLongClick = { actions.openSubtitlePicker() },
                 )
                 DecoderPill(
                     isHw = actions.ui.isHwDecoder.value,
@@ -314,45 +315,55 @@ internal fun PlayerScreenTopBar(
             val density = LocalDensity.current
             val coroutineScope = rememberCoroutineScope()
             val view = LocalView.current
-            val handleWidth = 24.dp
+            val handleWidth = 28.dp
             val maxAvailableWidthDp = (maxWidth - handleWidth - 4.dp).coerceAtLeast(restingWidthDp)
             val restingWidthPx = with(density) { restingWidthDp.toPx() }
             val maxWidthPx = with(density) { maxAvailableWidthDp.toPx() }
 
+            var isExpanded by rememberSaveable { mutableStateOf(false) }
             val drawerWidthAnim = remember { Animatable(restingWidthPx) }
-            var dragStartWidth by remember { mutableFloatStateOf(restingWidthPx) }
 
-            // Adapt resting width on orientation changes when resting
-            LaunchedEffect(restingWidthPx) {
-                if (drawerWidthAnim.value <= restingWidthPx + 12f) {
-                    drawerWidthAnim.snapTo(restingWidthPx)
-                }
+            // Sync anim with isExpanded
+            LaunchedEffect(isExpanded, restingWidthPx, maxWidthPx) {
+                val target = if (isExpanded) maxWidthPx else restingWidthPx
+                drawerWidthAnim.animateTo(
+                    targetValue = target,
+                    animationSpec = tween(durationMillis = 240, easing = LinearOutSlowInEasing),
+                )
             }
 
             // Auto-hide reset: when controls fade, automatically collapse drawer and reset scroll
             LaunchedEffect(actions.ui.controlsVisible.value) {
                 if (!actions.ui.controlsVisible.value) {
+                    isExpanded = false
                     drawerWidthAnim.snapTo(restingWidthPx)
                     actions.quick.ribbonScroll.scrollTo(0)
                 }
             }
 
-            val isFullyOpen = drawerWidthAnim.value >= maxWidthPx - 4f
-
             Row(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Unboxed floating elastic drawer sleeve: clipped to current animated width
+                // Floating elastic drawer sleeve
                 Box(
                     modifier = Modifier
                         .width(with(density) { drawerWidthAnim.value.toDp() })
-                        .clipToBounds(),
+                        .clipToBounds()
+                        .pointerInput(isExpanded) {
+                            if (!isExpanded) {
+                                detectHorizontalDragGestures { change, dragAmount ->
+                                    if (dragAmount > 6f || dragAmount < -6f) {
+                                        change.consume()
+                                        isExpanded = true
+                                    }
+                                }
+                            }
+                        },
                 ) {
                     Row(
-                        modifier = Modifier.then(
-                            if (isFullyOpen) Modifier.horizontalScroll(actions.quick.ribbonScroll)
-                            else Modifier
-                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(actions.quick.ribbonScroll, enabled = isExpanded),
                         horizontalArrangement = Arrangement.spacedBy(toolSpacing),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -364,68 +375,20 @@ internal fun PlayerScreenTopBar(
                     }
                 }
 
-                // Chevron handle: sits directly adjacent to the sleeve edge (zero overlap on tool 4 or tool 5)
+                // Chevron handle: sits directly adjacent to sleeve edge
                 Box(
                     modifier = Modifier
                         .size(width = handleWidth, height = 48.dp)
                         .clip(RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp))
-                        .pointerInput(restingWidthPx, maxWidthPx) {
-                            detectHorizontalDragGestures(
-                                onDragStart = {
-                                    dragStartWidth = drawerWidthAnim.value
-                                    view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                                },
-                                onHorizontalDrag = { change, dragAmount ->
-                                    change.consume()
-                                    val newW = (drawerWidthAnim.value + dragAmount).coerceIn(restingWidthPx, maxWidthPx)
-                                    coroutineScope.launch {
-                                        drawerWidthAnim.snapTo(newW)
-                                    }
-                                },
-                                onDragEnd = {
-                                    val currentW = drawerWidthAnim.value
-                                    val deltaPullTotal = (maxWidthPx - restingWidthPx).coerceAtLeast(1f)
-                                    val pullFrac = (currentW - restingWidthPx) / deltaPullTotal
-                                    val pushedBack = (dragStartWidth - currentW) / deltaPullTotal
-
-                                    // 3-Zone Drag Physics:
-                                    // - Push back by >= 15% (or drop < 35%): snaps back to resting width
-                                    // - Pull >= 65%: snaps open to max screen limit
-                                    // - Pull 35%..65%: HOLDS at the exact position dragged to
-                                    val targetW = when {
-                                        pushedBack >= 0.15f || pullFrac < 0.35f -> restingWidthPx
-                                        pullFrac >= 0.65f -> maxWidthPx
-                                        else -> currentW
-                                    }
-                                    coroutineScope.launch {
-                                        drawerWidthAnim.animateTo(
-                                            targetValue = targetW,
-                                            animationSpec = tween(durationMillis = 220, easing = LinearOutSlowInEasing),
-                                        )
-                                    }
-                                },
-                                onDragCancel = {
-                                    val currentW = drawerWidthAnim.value
-                                    val deltaPullTotal = (maxWidthPx - restingWidthPx).coerceAtLeast(1f)
-                                    val pullFrac = (currentW - restingWidthPx) / deltaPullTotal
-                                    val targetW = if (pullFrac < 0.35f) restingWidthPx else currentW
-                                    coroutineScope.launch {
-                                        drawerWidthAnim.animateTo(targetW, tween(200))
-                                    }
-                                }
-                            )
-                        }
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = ripple(bounded = false, radius = 20.dp, color = accent),
                             onClick = {
                                 view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                                coroutineScope.launch {
-                                    if (drawerWidthAnim.value >= maxWidthPx - 4f) {
-                                        drawerWidthAnim.animateTo(restingWidthPx, tween(240, easing = LinearOutSlowInEasing))
+                                isExpanded = !isExpanded
+                                if (!isExpanded) {
+                                    coroutineScope.launch {
                                         actions.quick.ribbonScroll.scrollTo(0)
-                                    } else {
-                                        drawerWidthAnim.animateTo(maxWidthPx, tween(240, easing = LinearOutSlowInEasing))
                                     }
                                 }
                             }
@@ -433,8 +396,8 @@ internal fun PlayerScreenTopBar(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = if (isFullyOpen) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight,
-                        contentDescription = if (isFullyOpen) "Collapse tools ribbon" else "Expand tools ribbon",
+                        imageVector = if (isExpanded) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight,
+                        contentDescription = if (isExpanded) "Collapse tools ribbon" else "Expand tools ribbon",
                         tint = Color.White.copy(alpha = 0.70f),
                         modifier = Modifier.size(20.dp),
                     )

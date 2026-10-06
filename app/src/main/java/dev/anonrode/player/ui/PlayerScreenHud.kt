@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
@@ -516,4 +517,75 @@ internal fun CameraFlashOverlay(
         modifier = modifier
             .background(Color.White)
     )
+}
+
+/**
+ * Visible live subtitle sync mini-pill HUD requested at 03:40 of screen recording.
+ * Non-intrusively shows [ ⟳ Syncing… ] while correlating, and [ ✓ Synced +0.12s ]
+ * when locked. Clicking it triggers the sync detail popover.
+ */
+@Composable
+internal fun SubSyncStatusHud(
+    visible: Boolean,
+    isSyncRunning: Boolean,
+    isSyncLocked: Boolean,
+    liveOffsetMs: Long,
+    accent: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shouldShow = visible && (isSyncRunning || isSyncLocked)
+    AnimatedVisibility(
+        visible = shouldShow,
+        enter = androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.fadeOut(),
+        modifier = modifier,
+    ) {
+        val lockedColor = Color(0xFF10B981)
+        val activeAccent = if (isSyncLocked) lockedColor else accent
+
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xE60E1017))
+                .border(
+                    width = 1.dp,
+                    color = activeAccent.copy(alpha = 0.35f),
+                    shape = RoundedCornerShape(16.dp),
+                )
+                .clickable(onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (isSyncRunning) {
+                CircularProgressIndicator(
+                    color = accent,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(12.dp),
+                )
+                Text(
+                    text = "Syncing…",
+                    color = Color.White.copy(alpha = 0.90f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            } else if (isSyncLocked) {
+                Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = "Synced",
+                    tint = lockedColor,
+                    modifier = Modifier.size(13.dp),
+                )
+                val offsetSec = liveOffsetMs / 1000.0
+                val sign = if (offsetSec > 0) "+" else ""
+                Text(
+                    text = "Synced ${sign}${String.format(java.util.Locale.US, "%.2f", offsetSec)}s",
+                    color = lockedColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+    }
 }
