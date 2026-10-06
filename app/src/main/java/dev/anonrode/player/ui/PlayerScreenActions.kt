@@ -30,6 +30,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
+import dev.anonrode.player.PlayerPrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -184,8 +186,8 @@ internal class PlayerScreenActions(
     fun closeTier2And3() {
         ui.closeTier2And3()
         quick.closeRibbonCustomise()
-        quick.closeSyncPopover()
-        quick.closeStyleTray()
+        closeSyncPopover()
+        closeStyleTray()
     }
 
     fun togglePlayPause() {

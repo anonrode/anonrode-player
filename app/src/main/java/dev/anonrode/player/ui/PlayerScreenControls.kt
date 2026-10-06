@@ -370,7 +370,7 @@ internal fun PlayerScreenTopBar(
                                     dragStartWidth = drawerWidthAnim.value
                                     view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
                                 },
-                                onDrag = { change, dragAmount ->
+                                onHorizontalDrag = { change, dragAmount ->
                                     change.consume()
                                     val newW = (drawerWidthAnim.value + dragAmount).coerceIn(restingWidthPx, maxWidthPx)
                                     coroutineScope.launch {
@@ -651,14 +651,16 @@ internal fun RibbonToolItem(
                 Color(0xFF111722),
             )
         )
+        val boxModifier = if (selected) {
+            Modifier.background(color = accent.copy(alpha = 0.35f), shape = CircleShape)
+        } else {
+            Modifier.background(brush = cinemaGradient, shape = CircleShape)
+        }
         Box(
             modifier = Modifier
                 .size(34.dp)
                 .clip(CircleShape)
-                .background(
-                    if (selected) accent.copy(alpha = 0.35f)
-                    else cinemaGradient
-                )
+                .then(boxModifier)
                 .border(
                     width = 1.dp,
                     color = if (selected) accent else Color.White.copy(alpha = 0.18f),
