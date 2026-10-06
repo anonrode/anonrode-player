@@ -62,8 +62,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -520,7 +518,7 @@ fun LibraryScreen(
                         ) {
                             Text(
                                 "CONTINUE WATCHING",
-                                color = palette.textSecondary,
+                                color = palette.textDim,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 1.sp,

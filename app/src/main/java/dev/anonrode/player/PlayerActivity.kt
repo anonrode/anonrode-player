@@ -926,44 +926,45 @@ class PlayerActivity : ComponentActivity() {
                                 }
                             },
                         )
-                    }
-                    // ── Non-blocking Resume Pill (replaces modal AlertDialog) ──
-                    val pillMs = resumedPillMs
-                    AnimatedVisibility(
-                        visible = pillMs != null,
-                        enter = fadeIn() + slideInVertically { it },
-                        exit = fadeOut() + slideOutVertically { it },
-                        modifier = androidx.compose.ui.Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 88.dp),
-                    ) {
-                        if (pillMs != null) {
-                            Surface(
-                                shape = RoundedCornerShape(24.dp),
-                                color = Color.Black.copy(alpha = 0.85f),
-                                contentColor = Color.White,
-                                tonalElevation = 6.dp,
-                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-                            ) {
-                                Row(
-                                    modifier = androidx.compose.ui.Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+
+                        // ── Non-blocking Resume Pill (replaces modal AlertDialog) ──
+                        val pillMs = resumedPillMs
+                        AnimatedVisibility(
+                            visible = pillMs != null,
+                            enter = fadeIn() + slideInVertically { it },
+                            exit = fadeOut() + slideOutVertically { it },
+                            modifier = androidx.compose.ui.Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 88.dp),
+                        ) {
+                            if (pillMs != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(24.dp),
+                                    color = Color.Black.copy(alpha = 0.85f),
+                                    contentColor = Color.White,
+                                    tonalElevation = 6.dp,
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
                                 ) {
-                                    Text(
-                                        text = "Resumed at " + fmtClock(pillMs),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = Color.White,
-                                    )
-                                    TextButton(
-                                        onClick = {
-                                            AnonrodeApp.get(this@PlayerActivity).engine.player.seekTo(0)
-                                            resumedPillMs = null
-                                            resumePillJob?.cancel()
-                                        },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                    Row(
+                                        modifier = androidx.compose.ui.Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                                     ) {
-                                        Text("Start over", color = accent, style = MaterialTheme.typography.labelLarge)
+                                        Text(
+                                            text = "Resumed at " + fmtClock(pillMs),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = Color.White,
+                                        )
+                                        TextButton(
+                                            onClick = {
+                                                AnonrodeApp.get(this@PlayerActivity).engine.player.seekTo(0)
+                                                resumedPillMs = null
+                                                resumePillJob?.cancel()
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                        ) {
+                                            Text("Start over", color = palette.accent, style = MaterialTheme.typography.labelLarge)
+                                        }
                                     }
                                 }
                             }
