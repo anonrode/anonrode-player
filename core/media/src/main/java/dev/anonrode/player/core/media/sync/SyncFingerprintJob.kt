@@ -16,6 +16,7 @@ import dev.anonrode.player.core.media.subtitle.SubtitleParser
 import dev.anonrode.player.core.media.subtitle.SubtitleSourceResolver
 import dev.anonrode.player.core.model.SubtitleCue
 import java.io.File
+import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
