@@ -46,9 +46,11 @@ jobs:
         run: |
           ./gradlew testDebugUnitTest --stacktrace || {
             echo "=== FAILED UNIT TESTS DUMP ==="
-            find . -name "*.xml" -path "*/test-results/*" -exec grep -l "<failure" {} + | while read -r f; do
-              echo "--- File: $f ---"
-              cat "$f"
+            find . -name "*.xml" -path "*/test-results/*" | while read -r f; do
+              if grep -q -E "<failure|<error" "$f"; then
+                echo "--- File: $f ---"
+                cat "$f"
+              fi
             done
             exit 1
           }
