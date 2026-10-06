@@ -12,8 +12,8 @@ android {
         applicationId = "dev.anonrode.player"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 36
-        versionName = "0.9.9"
+        versionCode = 37
+        versionName = "0.9.10"
     }
 
     // One stable signing identity for every build so updates always install

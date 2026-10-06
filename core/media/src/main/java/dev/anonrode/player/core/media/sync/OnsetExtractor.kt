@@ -137,9 +137,6 @@ class OnsetExtractor(private val context: Context) {
         // first callback below.
         var offsetSec = 0.0
         var offsetSet = false
-        val nativeAvailable = NativeSyncEngine.isAvailable()
-        val nativeOnsetsList = if (nativeAvailable && vad == null) mutableListOf<Double>() else null
-
         decodeAudio(videoPath, videoUri, resumeFromSec, maxMediaDurationSec, isCancelled) { buf, sr, ch, isFloat, ptsUs ->
             if (isCancelled()) return@decodeAudio false
             if (!offsetSet) {
@@ -150,21 +147,11 @@ class OnsetExtractor(private val context: Context) {
                 }
                 offsetSet = true
             }
-            if (nativeOnsetsList != null && buf.isDirect) {
-                val pts = if (ptsUs > 0L) ptsUs / 1_000_000.0 else offsetSec
-                val nativeOnsets = NativeSyncEngine.extractOnsets(buf, sr, ch, isFloat, pts)
-                if (nativeOnsets != null) {
-                    for (o in nativeOnsets) nativeOnsetsList.add(o)
-                } else {
-                    silence.process(buf, sr, ch, isFloat)
-                }
-            } else {
-                silence.process(buf, sr, ch, isFloat)
-            }
+            silence.process(buf, sr, ch, isFloat)
             vad?.processPcm(buf, sr, ch, isFloat)
             !isCancelled()
         }
-        val silOnsets = sil ?: (nativeOnsetsList?.takeIf { it.isNotEmpty() } ?: silence.finish())
+        val silOnsets = sil ?: silence.finish()
         val (vadOnsets, vadEnvelope) = if (vad != null) {
             try {
                 Pair(vad.finish(), vad.getSpeechEnvelope())
@@ -623,14 +610,16 @@ class OnsetExtractor(private val context: Context) {
                 monoSamples.toDouble() / sampleRate >= maxSeconds
 
         private fun configure(rate: Int, ch: Int) {
-            sampleRate = rate
+            val step = if (rate >= 44100) 3 else if (rate >= 32000) 2 else 1
+            val effectiveRate = rate / step
+            sampleRate = effectiveRate
             channels = ch
-            hpBeta = exp(-2.0 * PI * 300.0 / sampleRate)
-            lpAlpha = 1.0 - exp(-2.0 * PI * 3400.0 / sampleRate)
+            hpBeta = exp(-2.0 * PI * 300.0 / effectiveRate)
+            lpAlpha = 1.0 - exp(-2.0 * PI * 3400.0 / effectiveRate)
             hpX = 0.0
             hpY = 0.0
             lpY = 0.0
-            windowTarget = sampleRate / 100 // 10ms windows
+            windowTarget = effectiveRate / 100 // 10ms windows
         }
 
         fun process(buf: ByteBuffer, rate: Int, ch: Int, isFloat: Boolean) {

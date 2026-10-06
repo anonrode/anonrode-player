@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,6 +39,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalView
+import android.view.HapticFeedbackConstants
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -524,6 +528,7 @@ internal fun CameraFlashOverlay(
  * Non-intrusively shows [ ⟳ Syncing… ] while correlating, and [ ✓ Synced +0.12s ]
  * when locked. Clicking it triggers the sync detail popover.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun SubSyncStatusHud(
     visible: Boolean,
@@ -532,6 +537,7 @@ internal fun SubSyncStatusHud(
     liveOffsetMs: Long,
     accent: Color,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val shouldShow = visible && (isSyncRunning || isSyncLocked)
@@ -543,6 +549,7 @@ internal fun SubSyncStatusHud(
     ) {
         val lockedColor = Color(0xFF10B981)
         val activeAccent = if (isSyncLocked) lockedColor else accent
+        val view = LocalView.current
 
         Row(
             modifier = Modifier
@@ -553,7 +560,22 @@ internal fun SubSyncStatusHud(
                     color = activeAccent.copy(alpha = 0.35f),
                     shape = RoundedCornerShape(16.dp),
                 )
-                .clickable(onClick = onClick)
+                .then(
+                    if (onLongClick != null) {
+                        Modifier.combinedClickable(
+                            onClick = {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                onClick()
+                            },
+                            onLongClick = {
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                onLongClick()
+                            },
+                        )
+                    } else {
+                        Modifier.clickable(onClick = onClick)
+                    }
+                )
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),

@@ -195,6 +195,9 @@ class PlayerActivity : ComponentActivity() {
      *  auto-sync lock. Empty = single affine lock (one offset everywhere). */
     private var piecewiseSegments: List<Pair<Double, Double>> = emptyList()
 
+    /** Smooth micro-slewed offset currently applied in the render loop. */
+    private var appliedOffsetSec = Double.NaN
+
     // ── auto-advance (next episode) state ────────────────────────────
 
     /** Sibling episodes of the playing video; built once per [openVideo]. */
@@ -533,17 +536,21 @@ class PlayerActivity : ComponentActivity() {
         if (!currentSettings.subtitleAutoSyncEnabled) return
         if (app.engine.activeSyncCues.isEmpty()) return
         val tRaw = newPosMs / 1000.0
-        val isMapped = if (piecewiseSegments.isNotEmpty()) {
-            true
-        } else {
-            isSyncLocked
-        }
-        if (isMapped) {
+        appliedOffsetSec = Double.NaN
+        // Re-anchor live sync processor sliding window at new seek position
+        app.engine.setStartPosition(newPosMs)
+
+        val hasNearbyAnchor = piecewiseSegments.any { abs(it.first - tRaw) <= 120.0 }
+        if (hasNearbyAnchor) {
             val offsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
                 ?: (app.engine.subtitleOffsetMs / 1000.0)
             AppLog.d("SYNC", "seek to ${newPosMs}ms (%.1fs): pre-mapped snap to %+.2fs (piecewise=%b, isSyncLocked=%b)".format(tRaw, offsetSec, piecewiseSegments.isNotEmpty(), isSyncLocked))
         } else {
-            AppLog.d("SYNC", "seek landing at ${newPosMs}ms is unmapped, triggering spot-sync probe")
+            // Deep scrub into unmapped territory: use best current hypothesis immediately,
+            // while quietly validating / discovering any local commercial cut via background spot-sync
+            val offsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
+                ?: (app.engine.subtitleOffsetMs / 1000.0)
+            AppLog.d("SYNC", "seek landing at ${newPosMs}ms (%.1fs) is far from known anchors (hyp=%+.2fs), triggering background spot-sync".format(tRaw, offsetSec))
             app.engine.triggerSpotSync(newPosMs) { offsetMs ->
                 AppLog.d("SYNC", "spot-sync probe aligned subtitles to offset ${offsetMs}ms")
             }
@@ -577,23 +584,65 @@ class PlayerActivity : ComponentActivity() {
             handler.post {
                 val currentPosSec = (engine.player?.currentPosition ?: 0L) / 1000.0
                 val liveOffsetSec = engine.subtitleOffsetMs / 1000.0
-                if (piecewiseSegments.isNotEmpty()) {
-                    val updated = piecewiseSegments.toMutableList()
+                val updated = piecewiseSegments.toMutableList()
+                if (updated.isNotEmpty()) {
                     val idx = updated.indexOfLast { it.first <= currentPosSec }
                     if (idx >= 0) {
                         updated[idx] = updated[idx].first to liveOffsetSec
                     } else {
                         updated.add(0, 0.0 to liveOffsetSec)
                     }
-                    piecewiseSegments = updated.sortedBy { it.first }
-                } else {
-                    piecewiseSegments = emptyList()
+                } else if (currentPosSec > 60.0 && engine.persistedAutoMs != 0L) {
+                    updated.add(0.0 to (engine.persistedAutoMs / 1000.0))
+                    updated.add(currentPosSec to liveOffsetSec)
+                }
+                piecewiseSegments = updated.sortedBy { it.first }
+                if (piecewiseSegments.isNotEmpty()) {
+                    val pwStr = piecewiseSegments.joinToString(";") { "%.1f:%.3f".format(java.util.Locale.US, it.first, it.second) }
+                    engine.currentPiecewise = pwStr
+                    val uri = currentUriStr
+                    if (uri != null) {
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            app.stateStore.updateAutoSync(uri, engine.persistedAutoMs, engine.persistedSpeed, pwStr)
+                        }
+                    }
                 }
                 isSyncLocked = true
                 // A live lock just landed: stop the spinner / calibration
                 // banner immediately rather than waiting for their timeouts.
                 subSyncRunning = false
                 isCalibrating = false
+            }
+        }
+
+        engine.onLiveSyncTrackingRefined = { offsetSec, speedF ->
+            handler.post {
+                liveOffsetMs = (offsetSec * 1000f).roundToLong()
+            }
+        }
+
+        engine.onLiveSyncPiecewiseCut = { posSec, offsetSec ->
+            handler.post {
+                val updated = piecewiseSegments.toMutableList()
+                val idx = updated.indexOfLast { abs(it.first - posSec) <= 45.0 }
+                if (idx >= 0) {
+                    updated[idx] = posSec to offsetSec
+                } else {
+                    if (updated.isEmpty() && engine.persistedAutoMs != 0L) {
+                        updated.add(0.0 to (engine.persistedAutoMs / 1000.0))
+                    }
+                    updated.add(posSec to offsetSec)
+                }
+                piecewiseSegments = updated.sortedBy { it.first }
+                val pwStr = piecewiseSegments.joinToString(";") { "%.1f:%.3f".format(java.util.Locale.US, it.first, it.second) }
+                engine.currentPiecewise = pwStr
+                val uri = currentUriStr
+                if (uri != null) {
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        app.stateStore.updateAutoSync(uri, engine.persistedAutoMs, engine.persistedSpeed, pwStr)
+                    }
+                }
+                AppLog.d("SYNC", "piecewise cut applied to state: $pwStr")
             }
         }
 
@@ -1139,7 +1188,7 @@ class PlayerActivity : ComponentActivity() {
                 withContext(Dispatchers.Main) {
                     if (uri != currentUriStr) return@withContext
                     val engine = AnonrodeApp.get(this@PlayerActivity).engine
-                    engine.applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor)
+                    engine.applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor, s.autoSyncPiecewise)
                     piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
                     isSyncLocked = s.autoSyncOffsetMs != 0L || s.autoSyncCheckedAtMs != 0L || engine.isLiveLocked
                     subSyncRunning = false
@@ -1481,10 +1530,11 @@ class PlayerActivity : ComponentActivity() {
             val rawSavedPosMs = stored?.playbackPositionMs ?: 0L
             val durMs = stored?.durationMs ?: 0L
             val savedPosMs = if (durMs > 0 && rawSavedPosMs >= durMs - 2000L) 0L else rawSavedPosMs
-            if (pending.gen != openGeneration) return@launch
+            appliedOffsetSec = Double.NaN
             engine.play(
                 MediaItem.fromUri(pending.uriStr), pending.uriStr, pending.cues,
                 pending.manual, pending.auto, pending.autoSpeed,
+                persistedPiecewise = stored?.autoSyncPiecewise.orEmpty(),
                 resume = resume,
                 // v0.6.2 sub-sync UX pass: live re-lock is now gated by
                 // [subtitleAutoSyncEnabled] (user toggle, default OFF).
@@ -2096,8 +2146,29 @@ class PlayerActivity : ComponentActivity() {
                 val spd = engine.subtitleSpeedFactor.coerceAtLeast(0.5f)
                 // Piecewise cut lock: the offset depends on position (each
                 // segment carries its own beta). Scalar lock: one offset.
-                val offsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
+                val targetOffsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
                     ?: (engine.subtitleOffsetMs / 1000.0)
+
+                // Smooth inter-cue micro-slew:
+                // Only adapt offset during silence gaps between cues (cueText == null)
+                // so text never jitters or jumps while actively being read.
+                if (appliedOffsetSec.isNaN()) {
+                    appliedOffsetSec = targetOffsetSec
+                } else if (cueText == null) {
+                    val diff = targetOffsetSec - appliedOffsetSec
+                    if (abs(diff) > 1.2) {
+                        // Commercial cut / seek jump: snap cleanly during the silent gap
+                        appliedOffsetSec = targetOffsetSec
+                    } else if (abs(diff) > 0.001) {
+                        // Micro-slew: adjust by at most 50ms per frame towards target
+                        appliedOffsetSec += diff.coerceIn(-0.050, 0.050)
+                    }
+                } else if (abs(targetOffsetSec - appliedOffsetSec) > 2.5) {
+                    // Large discontinuity (e.g. scrub while text displayed)
+                    appliedOffsetSec = targetOffsetSec
+                }
+
+                val offsetSec = appliedOffsetSec
                 val t = (tRaw - offsetSec) / spd
                 val cue = findCue(cues, t)
                 cueText = cue?.lines?.joinToString("\n")
@@ -2443,7 +2514,7 @@ class PlayerActivity : ComponentActivity() {
                     handler.post {
                         if (currentSettings.subtitleAutoSyncEnabled && uri == currentUriStr) {
                             val engine = AnonrodeApp.get(this@PlayerActivity).engine
-                            engine.applyPersistedLock(st!!.autoSyncOffsetMs, st.autoSyncSpeedFactor)
+                            engine.applyPersistedLock(st!!.autoSyncOffsetMs, st.autoSyncSpeedFactor, st.autoSyncPiecewise)
                             piecewiseSegments = parsePiecewise(st.autoSyncPiecewise)
                             isSyncLocked = st.autoSyncOffsetMs != 0L || (st.autoSyncCheckedAtMs != 0L)
                         }

@@ -241,8 +241,8 @@ class SyncFingerprintJob(
             val cached = OnsetCache.load(applicationContext, videoUri, videoFile)
             val extractor = OnsetExtractor(applicationContext)
             extractor.decodeTimeoutMs = decodeBudgetMs(videoUri, videoPath)
-            val sources: OnsetExtractor.OnsetSources
-            val extractionComplete: Boolean
+            var sources: OnsetExtractor.OnsetSources = OnsetExtractor.OnsetSources(emptyList(), emptyList())
+            var extractionComplete: Boolean = false
             var lock: LockCandidate? = null
             if (cached != null && cached.complete) {
                 AppLog.d(
@@ -284,25 +284,41 @@ class SyncFingerprintJob(
                     if (anchorPass.silencedetect.size >= 8 && anchorStarts.size >= 8) {
                         val candidate = attemptLock(anchorPass.silencedetect, anchorStarts, "cue-anchor")
                         if (candidate != null && candidate.recall >= 0.65) {
-                            anchorLock = candidate
                             sources = anchorPass
                             extractionComplete = false
-                            lock = candidate
+                            val durMs = getVideoDurationMs(videoUri, videoPath)
+                            val pw = buildMultiSpotPiecewise(
+                                extractor, videoPath, videoUri, cues,
+                                candidate.offsetMs / 1000.0, durMs,
+                                isCancelled = { !coroutineContext.isActive || isStopped }
+                            ).ifEmpty { candidate.piecewise }
+
+                            val lockCandidate = candidate.copy(piecewise = pw)
+                            lock = lockCandidate
                             withContext(kotlinx.coroutines.NonCancellable) {
-                                store.updateAutoSync(videoUri, candidate.offsetMs, candidate.speed, candidate.piecewise)
+                                store.updateAutoSync(videoUri, lockCandidate.offsetMs, lockCandidate.speed, lockCandidate.piecewise)
                             }
+                            OnsetCache.store(
+                                applicationContext, videoUri, videoFile,
+                                OnsetCache.Entry(
+                                    silencedetect = sources.silencedetect,
+                                    vad = emptyList(),
+                                    envelope = FloatArray(0),
+                                    coveredSec = extractor.lastCoveredSec,
+                                    complete = false,
+                                ),
+                            )
                             AppLog.d(
                                 "SYNC_JOB",
-                                "Stage 0 CUE-ANCHOR FAST LOCKED in <1s: uri=$videoUri offset=${candidate.offsetMs}ms speed=${candidate.speed} recall=${candidate.recall}"
+                                "Stage 0 CUE-ANCHOR FAST LOCKED in <1s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall}"
                             )
+                            return@withContext Result.success()
                         }
                     }
                 }
 
                 // Stage 1: Fast silencedetect pass first (MediaCodec @ 200x realtime, ~2.5s on device)
-                val fastPass = if (anchorLock != null) {
-                    sources
-                } else if (cached != null && cached.silencedetect.isNotEmpty()) {
+                val fastPass = if (cached != null && cached.silencedetect.isNotEmpty()) {
                     cached.asSources()
                 } else {
                     extractor.extractSources(
@@ -341,7 +357,15 @@ class SyncFingerprintJob(
                 if (fastLock != null) {
                     sources = fastPass
                     extractionComplete = extractor.isEndOfStream
-                    lock = fastLock
+                    val durMs = getVideoDurationMs(videoUri, videoPath)
+                    val pw = buildMultiSpotPiecewise(
+                        extractor, videoPath, videoUri, cues,
+                        fastLock.offsetMs / 1000.0, durMs,
+                        isCancelled = { !coroutineContext.isActive || isStopped }
+                    ).ifEmpty { fastLock.piecewise }
+
+                    val lockCandidate = fastLock.copy(piecewise = pw)
+                    lock = lockCandidate
                     OnsetCache.store(
                         applicationContext, videoUri, videoFile,
                         OnsetCache.Entry(
@@ -353,11 +377,11 @@ class SyncFingerprintJob(
                         ),
                     )
                     withContext(kotlinx.coroutines.NonCancellable) {
-                        store.updateAutoSync(videoUri, fastLock.offsetMs, fastLock.speed, fastLock.piecewise)
+                        store.updateAutoSync(videoUri, lockCandidate.offsetMs, lockCandidate.speed, lockCandidate.piecewise)
                     }
                     AppLog.d(
                         "SYNC_JOB",
-                        "Tier 1 FAST LOCKED in 2s: uri=$videoUri offset=${fastLock.offsetMs}ms speed=${fastLock.speed} recall=${fastLock.recall}"
+                        "Tier 1 FAST LOCKED in 2s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall}"
                     )
                 } else {
                     // Stage 2: Silero VAD fallback (extracts full neural envelope and hybrid onsets)
@@ -684,17 +708,11 @@ class SyncFingerprintJob(
         return toLockCandidate(model, tag)
     }
 
-    /**
-     * v0.8 P2-2: caller-scaled decode budget. Floor is the old fixed
-     * 600 s; every ms of video adds 1/8 ms of budget (≈8× realtime assumed
-     * audio decode, half the claimed 10-20x worst-case margin), ceiling
-     * 25 min so a corrupt duration can never hang the worker.
-     */
-    private fun decodeBudgetMs(videoUri: String, videoPath: String): Long {
-        val durMs = try {
+    private fun getVideoDurationMs(videoUri: String, videoPath: String?): Long {
+        return try {
             val mmr = MediaMetadataRetriever()
             try {
-                if (File(videoPath).canRead()) mmr.setDataSource(videoPath)
+                if (!videoPath.isNullOrEmpty() && File(videoPath).canRead()) mmr.setDataSource(videoPath)
                 else mmr.setDataSource(applicationContext, Uri.parse(videoUri))
                 mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                     ?.toLongOrNull() ?: 0L
@@ -702,9 +720,63 @@ class SyncFingerprintJob(
                 mmr.release()
             }
         } catch (t: Throwable) {
-            AppLog.d("SYNC_JOB", "duration probe failed, using budget floor")
+            AppLog.d("SYNC_JOB", "duration probe failed: ${t.message}")
             0L
         }
+    }
+
+    /**
+     * Probes 3 spots across long videos (>10 minutes) at 25%, 50%, and 75% duration
+     * to pre-detect commercial cut discontinuities and populate piecewise segments
+     * in the background before the user even scrubs there.
+     */
+    private fun buildMultiSpotPiecewise(
+        extractor: OnsetExtractor,
+        videoPath: String?,
+        videoUri: String,
+        cues: List<SubtitleCue>,
+        baseOffsetSec: Double,
+        durMs: Long,
+        isCancelled: () -> Boolean,
+    ): String {
+        if (durMs < 600_000L || cues.isEmpty()) return ""
+        val durSec = durMs / 1000.0
+        val probePoints = listOf(0.25 * durSec, 0.50 * durSec, 0.75 * durSec)
+        val pwSegments = mutableListOf<Pair<Double, Double>>()
+        pwSegments.add(0.0 to baseOffsetSec)
+        var lastOffset = baseOffsetSec
+
+        for (pt in probePoints) {
+            if (isCancelled()) break
+            val spotOffset = extractor.probeSpotSync(
+                videoPath = videoPath,
+                videoUri = Uri.parse(videoUri),
+                cues = cues,
+                positionSec = pt,
+                activeOffsetSec = lastOffset,
+                probeDurationSec = 6.0,
+                radiusSec = 45.0,
+                isCancelled = isCancelled,
+            )
+            if (spotOffset != null && abs(spotOffset - lastOffset) > 0.80) {
+                pwSegments.add(pt to spotOffset)
+                lastOffset = spotOffset
+                AppLog.d("SYNC_JOB", "multi-spot probe found piecewise jump at t=%.1fs -> %+.2fs".format(pt, spotOffset))
+            }
+        }
+        return if (pwSegments.size > 1) {
+            pwSegments.joinToString(";") { "%.1f:%.3f".format(java.util.Locale.US, it.first, it.second) }
+        } else ""
+    }
+
+    /**
+     * v0.8 P2-2: caller-scaled decode budget. Floor is the old fixed
+     * 600 s; every ms of video adds 1/8 ms of budget (≈8× realtime assumed
+     * audio decode, half the claimed 10-20x worst-case margin), ceiling
+     * 25 min so a corrupt duration can never hang the worker.
+     */
+    private fun decodeBudgetMs(videoUri: String, videoPath: String): Long {
+        val durMs = getVideoDurationMs(videoUri, videoPath)
         return (600_000L + durMs / 8).coerceAtMost(1_500_000L)
     }
 

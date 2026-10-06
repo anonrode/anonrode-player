@@ -162,6 +162,31 @@ internal fun PlayerScreenBottomBar(
                 if (it.height > 0) actions.ui.bottomBarHeightPx.intValue = it.height
             },
     ) {
+        // ── Subtitle Sync Status Pill (Directly Above Scrubber Timeline) ──
+        androidx.compose.animation.AnimatedVisibility(
+            visible = visible && (actions.quick.subSyncRunning.value || actions.quick.isSyncLocked.value),
+            enter = fadeIn(animationSpec = tween(180)),
+            exit = fadeOut(animationSpec = tween(180)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Start,
+            ) {
+                SubSyncStatusHud(
+                    visible = true,
+                    isSyncRunning = actions.quick.subSyncRunning.value,
+                    isSyncLocked = actions.quick.isSyncLocked.value,
+                    liveOffsetMs = liveOffsetMs,
+                    accent = accent,
+                    onClick = { actions.openSyncPopover() },
+                    onLongClick = { actions.resyncNow() },
+                )
+            }
+        }
+
         // ── Row 1: Scrubber Timeline — ALWAYS visible (except locked/PiP) ──
         SeekBarRow(
             accent = accent,

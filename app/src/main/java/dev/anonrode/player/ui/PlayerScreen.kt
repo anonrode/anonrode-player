@@ -779,20 +779,6 @@ fun PlayerScreen(
             onMore = { actions.toggleThreeDotsMenu() },
         )
 
-        // ── live subtitle sync mini-bar HUD (requested at 03:40 of screen recording) ──
-        SubSyncStatusHud(
-            visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
-            isSyncRunning = quick.subSyncRunning.value,
-            isSyncLocked = quick.isSyncLocked.value,
-            liveOffsetMs = liveOffsetMs,
-            accent = accent,
-            onClick = { actions.openSyncPopover() },
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 96.dp),
-        )
-
         // ── Tier 2: Three Dots Floating Card ──
         if (ui.threeDotsMenuOpen.value && !isPipMode) {
             ThreeDotsMenuCard(

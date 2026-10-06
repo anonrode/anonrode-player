@@ -20,25 +20,30 @@ void MultiScaleAligner::evaluateOffset(
     if (sortedOnsets.empty() || sortedCues.empty()) return;
 
     double tol = mConfig.hitToleranceSec;
+    double weightedHits = 0.0;
 
     for (double s : sortedCues) {
         double t = s * alpha + offset;
         if (t >= (minAudio - 0.5) && t <= (maxAudio + 0.5)) {
             outLocalCues++;
             auto it = std::lower_bound(sortedOnsets.begin(), sortedOnsets.end(), t);
-            bool hit = false;
-            if (it != sortedOnsets.end() && std::abs(*it - t) <= tol) {
-                hit = true;
-            } else if (it != sortedOnsets.begin() && std::abs(*(it - 1) - t) <= tol) {
-                hit = true;
+            double bestDiff = 999.0;
+            if (it != sortedOnsets.end()) {
+                bestDiff = std::min(bestDiff, std::abs(*it - t));
             }
-            if (hit) outHits++;
+            if (it != sortedOnsets.begin()) {
+                bestDiff = std::min(bestDiff, std::abs(*(it - 1) - t));
+            }
+            if (bestDiff <= tol) {
+                outHits++;
+                weightedHits += (1.0 - 0.5 * (bestDiff / tol));
+            }
         }
     }
 
     if (outLocalCues > 0 && outHits > 0) {
-        double recall = static_cast<double>(outHits) / outLocalCues;
-        double precision = static_cast<double>(outHits) / sortedOnsets.size();
+        double recall = weightedHits / outLocalCues;
+        double precision = weightedHits / sortedOnsets.size();
         outScore = 0.5 * recall + 0.5 * precision;
     }
 }

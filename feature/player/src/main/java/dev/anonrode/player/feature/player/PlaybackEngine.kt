@@ -58,7 +58,7 @@ class PlaybackEngine(
     context: Context,
     private val positionRestore: suspend (String) -> Long?,
     private val onPositionSave: suspend (uri: String, positionMs: Long, durationMs: Long?, finished: Boolean) -> Unit,
-    private val onAutoSyncSave: suspend (uri: String, offsetMs: Long, speedFactor: Float) -> Unit = { _, _, _ -> },
+    private val onAutoSyncSave: suspend (uri: String, offsetMs: Long, speedFactor: Float, piecewise: String) -> Unit = { _, _, _, _ -> },
 ) : SyncListener {
 
     companion object {
@@ -111,11 +111,18 @@ class PlaybackEngine(
     @Volatile var subtitleSpeedFactor: Float = 1f
         private set
 
+    /** Current piecewise segments string ("startSec:betaSec;..."). */
+    @Volatile var currentPiecewise: String = ""
+
     /** Invoked when a LIVE auto-sync lock lands mid-playback. Fires on the
-     *  sync-eval worker thread — receivers must post to their own thread.
-     *  The UI uses it to drop in-memory piecewise segments, which the
-     *  persistence side clears in the same lock write. */
+     *  sync-eval worker thread — receivers must post to their own thread. */
     @Volatile var onLiveSyncLocked: (() -> Unit)? = null
+
+    /** Invoked when continuous tracking refines offset smoothly without a cut. */
+    @Volatile var onLiveSyncTrackingRefined: ((offsetSeconds: Float, speedFactor: Float) -> Unit)? = null
+
+    /** Invoked when continuous tracking detects and confirms a piecewise commercial cut. */
+    @Volatile var onLiveSyncPiecewiseCut: ((positionSec: Double, offsetSeconds: Double) -> Unit)? = null
 
     /** Invoked when the live engine spends its evaluation budget without a
      *  lock. Fires on the sync-eval worker thread — receivers must post to
@@ -129,21 +136,31 @@ class PlaybackEngine(
     @Volatile var isExplicitResync: Boolean = false
 
     /**
-     * v0.7.1: apply a persisted (fingerprint) lock to the LIVE session —
-     * called by the host when Room reports a lock for the video the user
-     * is currently watching (the background job finished mid-watch).
-     * Kept additive with the manual delay, mirroring [play]'s
-     * syncEnabled branch. A later live re-lock overwrites cleanly.
+     * Re-anchors the live sync audio processor to a new media position (e.g. after a seek).
      */
-    fun applyPersistedLock(autoOffsetMs: Long, speedFactor: Float) {
-        if (autoOffsetMs == persistedAutoMs && speedFactor == persistedSpeed) return
+    fun setStartPosition(positionMs: Long) {
+        syncProcessor.setStartPosition(positionMs)
+    }
+
+    /**
+     * Apply a persisted (fingerprint) lock to the LIVE session —
+     * called by the host when Room reports a lock for the video the user
+     * is currently watching. Also initializes the live sync processor's baseline
+     * so it can continuously track drift and piecewise cuts from that anchor.
+     */
+    fun applyPersistedLock(autoOffsetMs: Long, speedFactor: Float, piecewise: String = "") {
+        if (autoOffsetMs == persistedAutoMs && speedFactor == persistedSpeed && (piecewise.isEmpty() || piecewise == currentPiecewise)) return
         persistedAutoMs = autoOffsetMs
         persistedSpeed = speedFactor
+        if (piecewise.isNotEmpty()) currentPiecewise = piecewise
         subtitleOffsetMs = autoOffsetMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
-        isLiveLocked = false
-        syncProcessor.setEnabled(false)
-        AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor (supersedes unverified live state)")
+        isLiveLocked = autoOffsetMs != 0L
+        syncProcessor.setEnabled(true)
+        if (autoOffsetMs != 0L) {
+            syncProcessor.setBaselineLock(autoOffsetMs / 1000f, speedFactor)
+        }
+        AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor piecewise='$piecewise' (tracking armed)")
     }
 
     /**
@@ -603,8 +620,11 @@ class PlaybackEngine(
         val isResync = isExplicitResync
         isExplicitResync = false
         val offsetDiff = abs(offsetSeconds * 1000f - persistedAutoMs.toFloat())
-        if (persistedAutoMs != 0L && !isResync && offsetDiff > 1000f) {
-            AppLog.d("SYNC", "ignoring divergent live lock ($autoMs ms): verified background lock active (${persistedAutoMs}ms, diff=${offsetDiff}ms)")
+        val currentPosMs = player?.currentPosition ?: 0L
+        // Protect against HotD EP02 intro theme false locks during cold open (<90s).
+        // If deep in playback (t >= 90s), this is a piecewise cut / segment shift!
+        if (persistedAutoMs != 0L && !isResync && offsetDiff > 1000f && currentPosMs < 90_000L) {
+            AppLog.d("SYNC", "ignoring divergent live lock ($autoMs ms): verified background lock active (${persistedAutoMs}ms, diff=${offsetDiff}ms) during intro (<90s)")
             return
         }
         AppLog.d("SYNC", "LOCKED offset=${offsetSeconds}s speed=$speedFactor" + (if (persistedAutoMs != 0L) " (fine drift: diff=${offsetDiff}ms)" else ""))
@@ -615,9 +635,32 @@ class PlaybackEngine(
         isLiveLocked = true
         val uri = currentUri
         if (uri != null) {
-            scope.launch { onAutoSyncSave(uri, autoMs, speedFactor) }
+            scope.launch { onAutoSyncSave(uri, autoMs, speedFactor, currentPiecewise) }
         }
         onLiveSyncLocked?.invoke()
+    }
+
+    override fun onSyncTrackingUpdate(
+        positionSec: Double,
+        offsetSeconds: Float,
+        speedFactor: Float,
+        isPiecewiseJump: Boolean,
+    ) {
+        val autoMs = (offsetSeconds * 1000f).toLong()
+        if (!isPiecewiseJump) {
+            persistedAutoMs = autoMs
+            persistedSpeed = speedFactor
+            subtitleOffsetMs = autoMs + manualDelayMs
+            subtitleSpeedFactor = speedFactor
+            onLiveSyncTrackingRefined?.invoke(offsetSeconds, speedFactor)
+        } else {
+            AppLog.d("SYNC", "piecewise jump detected during continuous playback at t=%.1fs -> %+.2fs".format(positionSec, offsetSeconds))
+            persistedAutoMs = autoMs
+            persistedSpeed = speedFactor
+            subtitleOffsetMs = autoMs + manualDelayMs
+            subtitleSpeedFactor = speedFactor
+            onLiveSyncPiecewiseCut?.invoke(positionSec, offsetSeconds.toDouble())
+        }
     }
 
     override fun onSyncNoMatch() {
@@ -648,6 +691,7 @@ class PlaybackEngine(
         manualDelayMs: Long,
         persistedAutoOffsetMs: Long = 0L,
         persistedSpeedFactor: Float = 1f,
+        persistedPiecewise: String = "",
         resume: Boolean = true,
         syncEnabled: Boolean = true,
         savedPositionMs: Long? = null,
@@ -657,10 +701,14 @@ class PlaybackEngine(
         this.manualDelayMs = manualDelayMs
         persistedAutoMs = persistedAutoOffsetMs
         persistedSpeed = persistedSpeedFactor
+        currentPiecewise = persistedPiecewise
         attachSyncProcessor(cues, 0L)
         if (syncEnabled) {
             subtitleOffsetMs = persistedAutoOffsetMs + manualDelayMs
             subtitleSpeedFactor = persistedSpeedFactor
+            if (persistedAutoOffsetMs != 0L) {
+                syncProcessor.setBaselineLock(persistedAutoOffsetMs / 1000f, persistedSpeedFactor)
+            }
         } else {
             // Auto-sync off: subs render exactly as timed in the file —
             // no persisted lock applied, live listening gated by

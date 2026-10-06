@@ -105,13 +105,9 @@ class AnonrodeApp : Application() {
                 AppLog.d("PLAYER", "save pos=" + pos + "ms dur=" + dur + " finished=" + finished)
                 stateStore.updatePosition(uri, pos, dur, finished)
             },
-            onAutoSyncSave = { uri, offsetMs, speedF ->
-                AppLog.d("SYNC", "persist auto offset=" + offsetMs + "ms speed=" + speedF)
-                // One statement, and clears stale piecewise segments: a live
-                // scalar lock supersedes any fitted cut-map (whose betas were
-                // relative to the OLD alpha/beta). Leaving it would make the
-                // row self-inconsistent.
-                stateStore.updateAutoSync(uri, offsetMs, speedF, "")
+            onAutoSyncSave = { uri, offsetMs, speedF, piecewise ->
+                AppLog.d("SYNC", "persist auto offset=" + offsetMs + "ms speed=" + speedF + " piecewise=" + piecewise)
+                stateStore.updateAutoSync(uri, offsetMs, speedF, piecewise)
             },
         )
         PlayerServiceHolder.engine = engine

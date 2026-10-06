@@ -23,6 +23,15 @@ object NativeSyncEngine {
 
     fun isAvailable(): Boolean = isNativeLoaded
 
+    fun isNeonSupported(): Boolean {
+        if (!isAvailable()) return false
+        return try {
+            nativeIsNeonSupported()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     data class Result(
         val locked: Boolean,
         val offsetSec: Double,
@@ -81,6 +90,44 @@ object NativeSyncEngine {
         )
     }
 
+    fun correlate(
+        audioOnsets: DoubleArray,
+        cueStarts: DoubleArray,
+        cueEnds: DoubleArray = DoubleArray(0),
+        activeOffsetSec: Double = 0.0,
+    ): Result? {
+        if (!isAvailable() || audioOnsets.isEmpty() || cueStarts.isEmpty()) {
+            return null
+        }
+        val raw = try {
+            nativeCorrelate(
+                audioOnsets,
+                cueStarts,
+                cueEnds,
+                activeOffsetSec,
+            )
+        } catch (t: Throwable) {
+            AppLog.e("ANONSYNC", "nativeCorrelate threw", t)
+            null
+        } ?: return null
+
+        if (raw.size < 11) return null
+
+        return Result(
+            locked = raw[0] > 0.5,
+            offsetSec = raw[1],
+            speedFactor = raw[2],
+            recall = raw[3],
+            precision = raw[4],
+            margin = raw[5],
+            hits = raw[6].toInt(),
+            localCues = raw[7].toInt(),
+            hasCut = raw[8] > 0.5,
+            cutTimeSec = raw[9],
+            cutOffsetSec = raw[10],
+        )
+    }
+
     fun extractOnsets(
         pcmBuffer: ByteBuffer,
         sampleRate: Int,
@@ -97,6 +144,24 @@ object NativeSyncEngine {
         }
     }
 
+    fun extractOnsetsShorts(
+        pcmShorts: ShortArray,
+        sampleRate: Int,
+        channels: Int,
+        offsetSec: Double = 0.0,
+    ): DoubleArray? {
+        if (!isAvailable() || pcmShorts.isEmpty()) return null
+        return try {
+            nativeExtractOnsetsShorts(pcmShorts, sampleRate, channels, offsetSec)
+        } catch (t: Throwable) {
+            AppLog.e("ANONSYNC", "nativeExtractOnsetsShorts threw", t)
+            null
+        }
+    }
+
+    @JvmStatic
+    private external fun nativeIsNeonSupported(): Boolean
+
     @JvmStatic
     private external fun nativeAlignPcm(
         byteBuffer: ByteBuffer,
@@ -109,11 +174,27 @@ object NativeSyncEngine {
     ): DoubleArray?
 
     @JvmStatic
+    private external fun nativeCorrelate(
+        audioOnsets: DoubleArray,
+        cueStarts: DoubleArray,
+        cueEnds: DoubleArray,
+        activeOffsetSec: Double,
+    ): DoubleArray?
+
+    @JvmStatic
     private external fun nativeExtractOnsets(
         byteBuffer: ByteBuffer,
         sampleRate: Int,
         channels: Int,
         isFloat: Boolean,
+        offsetSec: Double,
+    ): DoubleArray?
+
+    @JvmStatic
+    private external fun nativeExtractOnsetsShorts(
+        pcmShorts: ShortArray,
+        sampleRate: Int,
+        channels: Int,
         offsetSec: Double,
     ): DoubleArray?
 }

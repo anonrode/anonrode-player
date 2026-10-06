@@ -9,6 +9,7 @@
 namespace anonsync {
 
 static inline float computeRmsNeon(const float* data, size_t count) {
+    if (count == 0) return 0.0f;
     float sumSq = 0.0f;
     size_t i = 0;
 
