@@ -221,8 +221,96 @@ fun SettingsScreen(
                 }
             }
 
-            // ══ PLAYBACK ═════════════════════════════════════════
-            item("sec-playback") { SectionHeader(palette, "Playback") }
+            // ══ GENERAL ══════════════════════════════════════════
+            item("sec-general") { SectionHeader(palette, "General") }
+
+            item("theme") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.Palette,
+                    title = "Theme",
+                    subtitle = "Skin for the library, player & settings",
+                    trailing = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            ValueText(palette = palette, text = activeSkin.displayName)
+                            Spacer(Modifier.width(Dimens.gapSm))
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.accent)
+                            )
+                        }
+                    },
+                    onClick = { openDialog = DLG_THEME },
+                )
+            }
+
+            item("rescan") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.Refresh,
+                    title = "Rescan library",
+                    subtitle = "Rebuild the video list from MediaStore now",
+                    trailing = {
+                        if (rescanning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = palette.accent,
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            ValueText(palette = palette, text = "RUN")
+                        }
+                    },
+                    onClick = {
+                        if (!rescanning) {
+                            rescanning = true
+                            coroutineScope.launch {
+                                val count = withContext(Dispatchers.IO) {
+                                    try {
+                                        AnonrodeApp.get(context).scanner.scan(force = true).videos.size
+                                    } catch (t: Throwable) {
+                                        -1
+                                    }
+                                }
+                                rescanning = false
+                                toast(
+                                    if (count >= 0) "Library refreshed · $count videos"
+                                    else "Rescan failed — try again",
+                                )
+                            }
+                        }
+                    },
+                )
+            }
+
+            item("clearProgress") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.DeleteSweep,
+                    title = "Clear playback progress",
+                    subtitle = "Reset positions, speeds & sync locks for all videos",
+                    trailing = { ValueText(palette = palette, text = "CLEAR") },
+                    onClick = { openDialog = DLG_CLEAR },
+                )
+            }
+
+            item("sharelogs") {
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.Share,
+                    title = "Share app logs",
+                    subtitle = "The sync decision trail — what locked, what refused, and why",
+                    trailing = {},
+                    onClick = {
+                        coroutineScope.launch { SyncLogShare.shareSyncLog(context) }
+                    },
+                )
+            }
+
+            // ══ PLAYER & VIDEO ═══════════════════════════════════
+            item("sec-playback") { SectionHeader(palette, "Player & Video") }
 
             item("resume") {
                 SettingsRow(
@@ -365,6 +453,27 @@ fun SettingsScreen(
                 )
             }
 
+            item("subtree") {
+                val tree = subTreeUri
+                SettingsRow(
+                    palette = palette,
+                    icon = Icons.Filled.FolderOpen,
+                    title = "Subtitles folder access",
+                    subtitle = if (tree == null) {
+                        "Android 13+ hides .srt files from apps — grant the folder holding your subtitles"
+                    } else {
+                        "Sidecar search also scans: ${subtitleTreeLabel(tree)}"
+                    },
+                    trailing = {
+                        ValueText(
+                            palette = palette,
+                            text = if (tree == null) "Set" else "Change",
+                        )
+                    },
+                    onClick = { subTreePicker.launch(null) },
+                )
+            }
+
             item("subsize") {
                 SettingsRow(
                     palette = palette,
@@ -450,48 +559,8 @@ fun SettingsScreen(
                 )
             }
 
-            // ══ AUTO-SYNC & DIAGNOSTICS ════════════════════════
-            item("sec-syncdiag") { SectionHeader(palette, "Auto-sync & diagnostics") }
-
-            item("subtree") {
-                // Snapshot the delegated state once: `subTreeUri` is a
-                // `by remember` property, so the compiler cannot smart-cast
-                // it to non-null inside the branches below.
-                val tree = subTreeUri
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.FolderOpen,
-                    title = "Subtitles folder access",
-                    subtitle = if (tree == null) {
-                        "Android 13+ hides .srt files from apps — grant the folder holding your subtitles"
-                    } else {
-                        "Sidecar search also scans: ${subtitleTreeLabel(tree)}"
-                    },
-                    trailing = {
-                        ValueText(
-                            palette = palette,
-                            text = if (tree == null) "Set" else "Change",
-                        )
-                    },
-                    onClick = { subTreePicker.launch(null) },
-                )
-            }
-
-            item("sharelogs") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Share,
-                    title = "Share app logs",
-                    subtitle = "The sync decision trail — what locked, what refused, and why",
-                    trailing = {},
-                    onClick = {
-                        coroutineScope.launch { SyncLogShare.shareSyncLog(context) }
-                    },
-                )
-            }
-
-            // ══ GESTURES & CONTROLS ══════════════════════════════
-            item("sec-gestures") { SectionHeader(palette, "Gestures & controls") }
+            // ══ CONTROLS & GESTURES ═════════════════════════════
+            item("sec-gestures") { SectionHeader(palette, "Controls & Gestures") }
 
             item("doubleTapSeek") {
                 SettingsRow(
@@ -601,15 +670,16 @@ fun SettingsScreen(
                             palette = palette,
                             text = when (settings.autoHideControlsMs) {
                                 2500L -> "2.5s"
-                                5000L -> "5s"
+                                3500L -> "3.5s"
+                                5500L -> "5.5s"
                                 8000L -> "8s"
-                                else -> "3.5s"
+                                else -> "5.5s"
                             },
                         )
                     },
                     onClick = {
-                        val steps = longArrayOf(2500L, 3500L, 5000L, 8000L)
-                        val idx = steps.indexOf(settings.autoHideControlsMs).coerceAtLeast(0)
+                        val steps = longArrayOf(2500L, 3500L, 5500L, 8000L)
+                        val idx = steps.indexOf(settings.autoHideControlsMs).let { if (it < 0) 2 else it }
                         persist { it.copy(autoHideControlsMs = steps[(idx + 1) % steps.size]) }
                     },
                 )
@@ -674,84 +744,6 @@ fun SettingsScreen(
                         )
                     },
                     onClick = { openDialog = DLG_BOOST },
-                )
-            }
-
-            // ══ APPEARANCE ═══════════════════════════════════════
-            item("sec-appearance") { SectionHeader(palette, "Appearance") }
-
-            item("theme") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Palette,
-                    title = "Theme",
-                    subtitle = "Skin for the library, player & settings",
-                    trailing = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            ValueText(palette = palette, text = activeSkin.displayName)
-                            Spacer(Modifier.width(Dimens.gapSm))
-                            Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .clip(CircleShape)
-                                    .background(palette.accent)
-                            )
-                        }
-                    },
-                    onClick = { openDialog = DLG_THEME },
-                )
-            }
-
-            // ══ LIBRARY & DATA ═══════════════════════════════════
-            item("sec-library") { SectionHeader(palette, "Library & data") }
-
-            item("rescan") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Refresh,
-                    title = "Rescan library",
-                    subtitle = "Rebuild the video list from MediaStore now",
-                    trailing = {
-                        if (rescanning) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                color = palette.accent,
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            ValueText(palette = palette, text = "RUN")
-                        }
-                    },
-                    onClick = {
-                        if (!rescanning) {
-                            rescanning = true
-                            coroutineScope.launch {
-                                val count = withContext(Dispatchers.IO) {
-                                    try {
-                                        AnonrodeApp.get(context).scanner.scan(force = true).videos.size
-                                    } catch (t: Throwable) {
-                                        -1
-                                    }
-                                }
-                                rescanning = false
-                                toast(
-                                    if (count >= 0) "Library refreshed · $count videos"
-                                    else "Rescan failed — try again",
-                                )
-                            }
-                        }
-                    },
-                )
-            }
-
-            item("clearProgress") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.DeleteSweep,
-                    title = "Clear playback progress",
-                    subtitle = "Reset positions, speeds & sync locks for all videos",
-                    trailing = { ValueText(palette = palette, text = "CLEAR") },
-                    onClick = { openDialog = DLG_CLEAR },
                 )
             }
 

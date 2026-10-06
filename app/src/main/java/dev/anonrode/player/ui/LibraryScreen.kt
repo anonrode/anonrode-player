@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -31,9 +32,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tv
@@ -49,12 +52,18 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -102,7 +111,7 @@ import java.util.Locale
 // Colours now read from the live skin palette so the library stays in sync
 // with the player and settings across Dark and Light modes.
 private val BrandTextPrimary = Color(0xFFF0F2F8)
-private val BrandTextSecondary = Color(0xFFF0F2F8).copy(alpha = 0.45f)
+private val BrandTextSecondary = Color(0xFFF0F2F8).copy(alpha = 0.75f)
 
 private typealias InProgressItem = dev.anonrode.player.feature.library.LibraryViewModel.InProgress
 private typealias EpisodeItem = dev.anonrode.player.feature.library.LibraryViewModel.EpisodeItem
@@ -183,6 +192,7 @@ fun LibraryScreen(
     // against the fresh snapshot, so drill-down/search survive rescans too.
     var openFolderPath by rememberSaveable { mutableStateOf<String?>(null) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
+    var showHistorySheet by rememberSaveable { mutableStateOf(false) }
 
     // Bottom-nav selection state used to live here as `navIndex`. Now
     // it belongs to the NavController in MainActivity, so the only scroll
@@ -500,7 +510,34 @@ fun LibraryScreen(
 
                 // Continue watching
                 if (state.inProgress.isNotEmpty()) {
-                    item(key = "header-continue") { SectionLabel(palette, "CONTINUE WATCHING") }
+                    item(key = "header-continue") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = Dimens.gapLg, end = Dimens.gapLg, top = Dimens.gapMd, bottom = Dimens.gapXs),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "CONTINUE WATCHING",
+                                color = palette.textSecondary,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                            )
+                            TextButton(
+                                onClick = { showHistorySheet = true },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            ) {
+                                Text(
+                                    "View all",
+                                    color = palette.accent,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
                     item(key = "continue-row") {
                         LazyRow(
                             contentPadding = PaddingValues(horizontal = Dimens.gapLg),
@@ -543,6 +580,160 @@ fun LibraryScreen(
                             "No videos found",
                             "Video files on this device will show up here.",
                         )
+                    }
+                }
+            }
+        }
+
+        if (showHistorySheet) {
+            HistorySheet(
+                palette = palette,
+                items = state.inProgress,
+                onDismiss = { showHistorySheet = false },
+                onOpenVideo = { video ->
+                    showHistorySheet = false
+                    onOpenVideo(video)
+                },
+                onClearHistory = {
+                    showHistorySheet = false
+                    vm.clearHistory()
+                },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistorySheet(
+    palette: SkinPalette,
+    items: List<InProgressItem>,
+    onDismiss: () -> Unit,
+    onOpenVideo: (dev.anonrode.player.core.model.Video) -> Unit,
+    onClearHistory: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = palette.surface,
+        contentColor = palette.text,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Dimens.gapXl),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapSm),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text(
+                        "Watch History",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = palette.text,
+                    )
+                    Text(
+                        "${items.size} videos in progress",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textDim,
+                    )
+                }
+                TextButton(
+                    onClick = onClearHistory,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.DeleteSweep,
+                        contentDescription = null,
+                        tint = palette.accent,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "Clear History",
+                        color = palette.accent,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            Spacer(Modifier.height(Dimens.gapSm))
+            if (items.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(Dimens.gapXl),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "No watch history",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.textDim,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 450.dp),
+                    contentPadding = PaddingValues(horizontal = Dimens.gapLg, vertical = Dimens.gapSm),
+                    verticalArrangement = Arrangement.spacedBy(Dimens.gapSm),
+                ) {
+                    items(items, key = { it.video.uri }) { item ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onOpenVideo(item.video) },
+                            color = palette.rowBg,
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(Dimens.gapMd),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Dimens.gapMd),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(palette.accent.copy(alpha = 0.15f)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        Icons.Filled.PlayCircle,
+                                        contentDescription = null,
+                                        tint = palette.accent,
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        item.video.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = palette.text,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        item.label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.textDim,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

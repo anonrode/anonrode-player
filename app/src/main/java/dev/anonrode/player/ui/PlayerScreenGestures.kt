@@ -91,6 +91,7 @@ internal fun Modifier.playerGestureLayer(
             detectTapGestures(
                 onTap = {
                     if (isPipMode) return@detectTapGestures
+                    actions.ui.notifyUserInteraction()
                     if (!ui.locked.value) {
                         actions.toggleHud()
                     } else {
@@ -102,6 +103,7 @@ internal fun Modifier.playerGestureLayer(
                 },
                 onDoubleTap = { off ->
                     if (isPipMode || ui.locked.value) return@detectTapGestures
+                    actions.ui.notifyUserInteraction()
                     val w = gestures.scrW.floatValue
                     val x = off.x
                     when {
@@ -117,18 +119,18 @@ internal fun Modifier.playerGestureLayer(
                     }
                     ui.controlsVisible.value = false
                 },
-                onLongPress = {
-                    if (isPipMode) return@detectTapGestures
-                    if (ui.locked.value) {
-                        actions.unlockControls()
+                onLongPress = if (ui.locked.value) {
+                    {
+                        if (!isPipMode) actions.unlockControls()
                     }
-                },
+                } else null,
             )
         }
         .pointerInput(ui.locked.value, isPipMode) {
             detectDragGestures(
                 onDragStart = { off ->
                     if (ui.locked.value || isPipMode) return@detectDragGestures
+                    actions.ui.notifyUserInteraction()
                     gestures.mode.value = null
                     gestures.startX.floatValue = off.x
                     gestures.startY.floatValue = off.y
@@ -140,6 +142,7 @@ internal fun Modifier.playerGestureLayer(
                 },
                 onDrag = { change, _ ->
                     if (ui.locked.value || isPipMode) return@detectDragGestures
+                    actions.ui.notifyUserInteraction()
                     change.consume()
                     val x = change.position.x
                     val y = change.position.y

@@ -71,6 +71,13 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
     val controlsVisible = mutableStateOf(true)
     val isPlaying = mutableStateOf(initialIsPlaying)
 
+    /** Token incremented on user interaction to reset auto-hide controls timer. */
+    val userInteractionKey = mutableLongStateOf(0L)
+
+    fun notifyUserInteraction() {
+        userInteractionKey.longValue = System.currentTimeMillis()
+    }
+
     /** True while the player is stalled/buffering — drives the spinner. */
     val isBuffering = mutableStateOf(false)
     val locked = mutableStateOf(false)

@@ -35,6 +35,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CropFree
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.SkipNext
@@ -486,28 +488,40 @@ private fun TransportRow(
             )
         }
 
-        // Center cluster: Transport (|‹, Hero ▶/⏸, ›|) with fluid responsive spacing
+        // Center cluster: Transport (Rewind 10s, |‹ Prev, Hero ▶/⏸, Next ›|, FastForward 10s) with fluid responsive spacing
         Row(
             horizontalArrangement = Arrangement.spacedBy(
-                fluid(min = 16.dp, max = 32.dp),
+                fluid(min = 10.dp, max = 20.dp),
                 Alignment.CenterHorizontally,
             ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ControlChip(
-                icon = Icons.Filled.SkipPrevious,
-                contentDescription = if (hasPreviousEpisode) "Rewind ${seekIncrementSec}s (Hold for previous episode)" else "Rewind ${seekIncrementSec}s",
+                icon = Icons.Filled.FastRewind,
+                contentDescription = "Rewind ${seekIncrementSec}s",
                 accent = accent,
                 onClick = onSeekBack,
-                onLongClick = if (hasPreviousEpisode) onPlayPrevious else null,
+            )
+            ControlChip(
+                icon = Icons.Filled.SkipPrevious,
+                contentDescription = "Previous video",
+                accent = accent,
+                enabled = hasPreviousEpisode,
+                onClick = onPlayPrevious,
             )
             BigPlayPauseButton(isPlaying = isPlaying, accent = accent, onClick = onPlayPause)
             ControlChip(
                 icon = Icons.Filled.SkipNext,
-                contentDescription = if (hasNextEpisode) "Forward ${seekIncrementSec}s (Hold for next episode)" else "Forward ${seekIncrementSec}s",
+                contentDescription = "Next video",
+                accent = accent,
+                enabled = hasNextEpisode,
+                onClick = onPlayNext,
+            )
+            ControlChip(
+                icon = Icons.Filled.FastForward,
+                contentDescription = "Forward ${seekIncrementSec}s",
                 accent = accent,
                 onClick = onSeekForward,
-                onLongClick = if (hasNextEpisode) onPlayNext else null,
             )
         }
 

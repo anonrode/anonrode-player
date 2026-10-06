@@ -62,9 +62,11 @@ internal fun fmtTime(ms: Long): String {
  * declaration below never invalidates a user's saved arrangement.
  */
 enum class RibbonTool(val label: String) {
-    NIGHT_MODE("Night Mode"),
     SPEED("Speed"),
+    SCREENSHOT("Screenshot"),
+    ROTATION("Screen Rotation"),
     MUTE("Mute"),
+    NIGHT_MODE("Night Mode"),
     LOOP("Loop"),
     CUSTOMISE("Customise"),
     SHUFFLE("Shuffle"),
@@ -72,17 +74,28 @@ enum class RibbonTool(val label: String) {
     AB_REPEAT("A-B Repeat"),
     AUDIO_EFFECT("Audio Effect"),
     EQUALIZER("Equalizer"),
-    SCREENSHOT("Screenshot"),
-    BACKGROUND_PLAY("Background Play"),
-    ROTATION("Screen Rotation");
+    BACKGROUND_PLAY("Background Play");
 
     companion object {
         /**
          * Canonical order — also the fallback when nothing is persisted.
-         * Uses `entries` (not a hand-kept list) so a newly added tool is
-         * automatically part of the default arrangement.
+         * Places the primary 4 tools first: Speed, Screenshot, Rotation, Mute.
          */
-        fun defaultOrder(): List<RibbonTool> = entries.toList()
+        fun defaultOrder(): List<RibbonTool> = listOf(
+            SPEED,
+            SCREENSHOT,
+            ROTATION,
+            MUTE,
+            NIGHT_MODE,
+            LOOP,
+            CUSTOMISE,
+            SHUFFLE,
+            SLEEP_TIMER,
+            AB_REPEAT,
+            AUDIO_EFFECT,
+            EQUALIZER,
+            BACKGROUND_PLAY,
+        )
     }
 }
 

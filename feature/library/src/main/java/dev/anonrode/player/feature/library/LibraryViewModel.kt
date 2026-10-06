@@ -209,6 +209,13 @@ class LibraryViewModel(
         rescanRequests.value++
     }
 
+    /** Clear all playback history and continue-watching progress. */
+    fun clearHistory() {
+        viewModelScope.launch(Dispatchers.IO) {
+            stateStore.clearHistory()
+        }
+    }
+
     /** Live-filter the library as the user types (pure in-memory filter). */
     fun setQuery(raw: String) {
         query = raw

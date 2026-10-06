@@ -19,15 +19,29 @@ import androidx.mediarouter.media.MediaRouter.RouteInfo
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.annotation.RequiresApi
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.Alignment
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
@@ -376,8 +390,9 @@ class PlayerActivity : ComponentActivity() {
 
     private var pendingPlay: PendingPlay? = null
 
-    /** Non-null while the "Resume from …?" prompt is showing (position ms). */
-    private var resumePromptMs by mutableStateOf<Long?>(null)
+    /** Non-null while the non-blocking "Resumed at … [Start over]" bottom pill is showing (position ms). */
+    private var resumedPillMs by mutableStateOf<Long?>(null)
+    private var resumePillJob: Job? = null
 
     /** Persisted audio-track index to re-apply on the next onTracksChanged. */
     private var pendingAudioTrackIdx: Int? = null
@@ -911,25 +926,47 @@ class PlayerActivity : ComponentActivity() {
                             },
                         )
                     }
-                    // ── Resume prompt (Settings → Resume behavior = Ask) ──
-                    val resumePos = resumePromptMs
-                    val pending = pendingPlay
-                    if (resumePos != null && pending != null) {
-                        AlertDialog(
-                            onDismissRequest = { commitPlay(pending, resume = true) },
-                            title = { Text("Resume playback?") },
-                            text = { Text("You left off at " + fmtClock(resumePos) + ".") },
-                            confirmButton = {
-                                TextButton(onClick = { commitPlay(pending, resume = true) }) {
-                                    Text("Resume")
+                    // ── Non-blocking Resume Pill (replaces modal AlertDialog) ──
+                    val pillMs = resumedPillMs
+                    AnimatedVisibility(
+                        visible = pillMs != null,
+                        enter = fadeIn() + slideInVertically { it },
+                        exit = fadeOut() + slideOutVertically { it },
+                        modifier = androidx.compose.ui.Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 88.dp),
+                    ) {
+                        if (pillMs != null) {
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = Color.Black.copy(alpha = 0.85f),
+                                contentColor = Color.White,
+                                tonalElevation = 6.dp,
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                            ) {
+                                Row(
+                                    modifier = androidx.compose.ui.Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    Text(
+                                        text = "Resumed at " + fmtClock(pillMs),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.White,
+                                    )
+                                    TextButton(
+                                        onClick = {
+                                            AnonrodeApp.get(this@PlayerActivity).engine.player.seekTo(0)
+                                            resumedPillMs = null
+                                            resumePillJob?.cancel()
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                    ) {
+                                        Text("Start over", color = accent, style = MaterialTheme.typography.labelLarge)
+                                    }
                                 }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { commitPlay(pending, resume = false) }) {
-                                    Text("Start over")
-                                }
-                            },
-                        )
+                            }
+                        }
                     }
                     // ── Cast route picker (audio output) ───────────────
                     if (castPickerOpen) {
@@ -1177,7 +1214,8 @@ class PlayerActivity : ComponentActivity() {
         subtitleTrackCount = 0
         durationSec = 0f
         title = displayTitle
-        resumePromptMs = null
+        resumedPillMs = null
+        resumePillJob?.cancel()
         pendingPlay = null
         abStartMs = null
         abEndMs = null
@@ -1353,16 +1391,20 @@ class PlayerActivity : ComponentActivity() {
                         gen = gen,
                     )
                     pendingPlay = pending
-                    // Resume behavior (Settings): ask once per open when a
-                    // real resume point exists; otherwise obey the stored
-                    // preference silently.
+                    // Resume behavior: seamlessly auto-resume whenever a saved
+                    // position exists (unless user configured ALWAYS_START_OVER).
+                    // Shows a non-blocking 3.5s bottom pill allowing one-tap restart.
                     val behavior = currentSettings.resumeBehavior
-                    if (behavior == ResumeBehavior.ALWAYS_ASK &&
-                        pending.savedPosMs > 5000L && !pending.finished) {
-                        switching = false
-                        resumePromptMs = pending.savedPosMs
-                    } else {
-                        commitPlay(pending, resume = behavior != ResumeBehavior.ALWAYS_START_OVER)
+                    val hasResume = pending.savedPosMs > 5000L && !pending.finished
+                    val shouldResume = behavior != ResumeBehavior.ALWAYS_START_OVER && hasResume
+                    commitPlay(pending, resume = shouldResume)
+                    if (shouldResume) {
+                        resumePillJob?.cancel()
+                        resumedPillMs = pending.savedPosMs
+                        resumePillJob = lifecycleScope.launch {
+                            delay(3500L)
+                            resumedPillMs = null
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -1397,7 +1439,6 @@ class PlayerActivity : ComponentActivity() {
         if (pending.gen != openGeneration) return
         val app = AnonrodeApp.get(this)
         val engine = app.engine
-        resumePromptMs = null
         pendingAudioTrackIdx = pending.audioTrackIdx
         // Point-of-need: the foreground playback service (and thus its
         // notification) starts inside engine.play() below, so ask for the
@@ -1972,8 +2013,14 @@ class PlayerActivity : ComponentActivity() {
         performSwitch(ep)
     }
 
-    /** Jump to the previous episode (transport skip-back). */
+    /** Jump to previous episode or seek to beginning if past 3 seconds. */
     private fun playPreviousNow() {
+        val app = AnonrodeApp.get(this)
+        val pos = app.engine.player.currentPosition
+        if (pos > 3000L) {
+            app.engine.player.seekTo(0)
+            return
+        }
         val ep = episodeQueue?.previous() ?: return
         performSwitch(ep)
     }

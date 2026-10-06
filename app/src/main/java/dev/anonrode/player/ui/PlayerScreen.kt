@@ -577,8 +577,10 @@ fun PlayerScreen(
             quick.showStyleTray.value ||
             gestures.subStyleMenuOpen.value || hostSheetOpen ||
             ui.threeDotsMenuOpen.value || ui.audioSheetOpen.value ||
-            ui.subStyleSheetOpen.value || ui.equalizerSheetOpen.value,
+            ui.subStyleSheetOpen.value || ui.equalizerSheetOpen.value ||
+            quick.showRibbonCustomise.value,
         autoHideControlsMs = autoHideControlsMs,
+        userInteractionToken = ui.userInteractionKey.longValue,
         onHide = { ui.controlsVisible.value = false },
     )
     BoostHudKeepAliveEffect(ui.boostActive.value, hud, view)

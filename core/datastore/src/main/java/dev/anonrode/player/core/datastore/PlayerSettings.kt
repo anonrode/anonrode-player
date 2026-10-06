@@ -60,7 +60,7 @@ data class PlayerSettings(
     val volumeGesture: Boolean = true,
     val brightnessGesture: Boolean = true,
     val pinchZoom: Boolean = true,
-    val autoHideControlsMs: Long = 3500L,
+    val autoHideControlsMs: Long = 5500L,
     /** Sleep timer in minutes; 0=off, -1=end of episode. */
     val sleepTimerMinutes: Int = 0,
     /** Volume boost percent over system max: 0/50/100/200 → gain 1–3×. */

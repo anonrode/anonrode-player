@@ -144,8 +144,8 @@ internal fun PlayerControlsOverlay(
     onPlayNext: () -> Unit,
     onMore: () -> Unit,
 ) {
-    // The seek bar is ALWAYS visible while unlocked (v0.6.1 behaviour the
-    // user asked for): only the top bar + transport/utility rows fade.
+    // Controls overlay fades completely (top bar + bottom bar + seekbar)
+    // leaving a 100% clean, unblemished video frame in fullscreen immersion.
     Box(Modifier.fillMaxSize()) {
         AnimatedVisibility(
             visible = visible,
@@ -163,7 +163,12 @@ internal fun PlayerControlsOverlay(
                 onMore = onMore,
             )
         }
-        if (showSeekBar) {
+        AnimatedVisibility(
+            visible = visible && showSeekBar,
+            enter = fadeIn(animationSpec = tween(220)),
+            exit = fadeOut(animationSpec = tween(220)),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
             PlayerScreenBottomBar(
                 visible = visible,
                 modifier = Modifier.align(Alignment.BottomCenter),

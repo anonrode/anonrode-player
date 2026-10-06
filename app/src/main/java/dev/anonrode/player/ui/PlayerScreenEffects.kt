@@ -195,9 +195,10 @@ internal fun AutoHideControlsEffect(
     locked: Boolean,
     stayAwake: Boolean,
     autoHideControlsMs: Long,
+    userInteractionToken: Long = 0L,
     onHide: () -> Unit,
 ) {
-    LaunchedEffect(controlsVisible, isPlaying, locked, stayAwake, autoHideControlsMs) {
+    LaunchedEffect(controlsVisible, isPlaying, locked, stayAwake, autoHideControlsMs, userInteractionToken) {
         if (controlsVisible && isPlaying && !locked && !stayAwake) {
             delay(autoHideControlsMs)
             onHide()

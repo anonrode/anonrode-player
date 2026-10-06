@@ -35,6 +35,10 @@ class MediaStateStore(private val dao: MediaStateDao) {
         dao.updatePositionFields(uri, positionMs, durationMs, finished, System.currentTimeMillis())
     }
 
+    suspend fun clearHistory() {
+        dao.clear()
+    }
+
     suspend fun updateAudioTrack(uri: String, index: Int?) {
         dao.ensureRow(uri)
         dao.updateAudioTrackFields(uri, index, System.currentTimeMillis())
