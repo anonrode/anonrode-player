@@ -118,8 +118,9 @@ class SyncFingerprintJob(
             // it forever. A forced "Resync now" re-fits regardless.
             val forced = inputData.getBoolean(KEY_FORCE, false)
             val existing = store.get(videoUri)
-            if (!forced && existing != null && existing.autoSyncCheckedAtMs != 0L) {
-                AppLog.d("SYNC_JOB", "fingerprint verdict already recorded, skipping")
+            val hasValidOffset = existing?.autoSyncOffsetMs != null && existing.autoSyncOffsetMs != 0L
+            if (!forced && existing != null && existing.autoSyncCheckedAtMs != 0L && hasValidOffset) {
+                AppLog.d("SYNC_JOB", "fingerprint verdict already recorded (${existing.autoSyncOffsetMs}ms), skipping")
                 return@withContext Result.success()
             }
 
@@ -264,8 +265,44 @@ class SyncFingerprintJob(
                 }
                 val initialSpanSec = if (resumeFrom <= 0.0) 600.0 else 300.0
 
+                // ── Stage 0: Cue-Guided Anchor Search (fast 90s seek) ──
+                var anchorLock: LockCandidate? = null
+                if (cached == null && starts.size >= 12) {
+                    val firstCueTime = starts.first()
+                    val anchorStart = (firstCueTime - 5.0).coerceAtLeast(0.0)
+                    val anchorSpan = 90.0
+                    AppLog.d("SYNC_JOB", "Stage 0 anchor probe at %.1fs (span %.0fs)".format(anchorStart, anchorSpan))
+                    val anchorPass = extractor.extractSources(
+                        videoPath,
+                        Uri.parse(videoUri),
+                        resumeFromSec = anchorStart,
+                        maxMediaDurationSec = anchorSpan,
+                        includeVad = false,
+                        isCancelled = { !coroutineContext.isActive || isStopped },
+                    )
+                    val anchorStarts = starts.filter { it in anchorStart..(anchorStart + anchorSpan + 60.0) }
+                    if (anchorPass.silencedetect.size >= 8 && anchorStarts.size >= 8) {
+                        val candidate = attemptLock(anchorPass.silencedetect, anchorStarts, "cue-anchor")
+                        if (candidate != null && candidate.recall >= 0.65) {
+                            anchorLock = candidate
+                            sources = anchorPass
+                            extractionComplete = false
+                            lock = candidate
+                            withContext(kotlinx.coroutines.NonCancellable) {
+                                store.updateAutoSync(videoUri, candidate.offsetMs, candidate.speed, candidate.piecewise)
+                            }
+                            AppLog.d(
+                                "SYNC_JOB",
+                                "Stage 0 CUE-ANCHOR FAST LOCKED in <1s: uri=$videoUri offset=${candidate.offsetMs}ms speed=${candidate.speed} recall=${candidate.recall}"
+                            )
+                        }
+                    }
+                }
+
                 // Stage 1: Fast silencedetect pass first (MediaCodec @ 200x realtime, ~2.5s on device)
-                val fastPass = if (cached != null && cached.silencedetect.isNotEmpty()) {
+                val fastPass = if (anchorLock != null) {
+                    sources
+                } else if (cached != null && cached.silencedetect.isNotEmpty()) {
                     cached.asSources()
                 } else {
                     extractor.extractSources(

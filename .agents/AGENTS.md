@@ -39,3 +39,10 @@ _Permanent truth document. Read before touching anything. Never delete or replac
 11. **Every control must be functional.** A button that only flips a flag
     nothing reads, or only shows a toast, is a defect. Wire it to real,
     persisted behaviour.
+12. **Subtitle Synchronization & Native Engine Discipline:**
+    - **No CLI Process Execution on Android:** Never use `ProcessBuilder` or shell `exec()` to run binaries from app storage on Android 10+ (API 29+); SELinux enforces $W \oplus X$ (error=13 Permission Denied). Native signal crunching must run in-process via C++/NDK JNI (`AMediaExtractor`, `AMediaCodec`, NEON SIMD).
+    - **Asymmetric Lock Authority:** A narrow-window (15s) Live Sync pass must NEVER overwrite or clobber a verified full-file background lock with a discrepancy > 1.0s. Periodic dialogue cadences create harmonic aliases; full-file FFT correlation is the senior authority.
+    - **No Deadlock on Unsynced Files:** Never let `alreadyChecked` block background sync if `autoSyncOffsetMs` is null or 0. If a file has no valid lock, background sync MUST run.
+    - **User Resync Is Absolute:** When the user taps "Resync now" or "Calibration", the engine must immediately kick off an explicit forced background pass (`force = true`), not merely rearm the passive live loop.
+    - **Cue-Guided Anchor Windowing:** Never blindly decode 600s of audio from t=0s. Examine subtitle cues first, seek directly to the first dense dialogue cluster, and decode a 60s–90s window to lock in < 1s.
+

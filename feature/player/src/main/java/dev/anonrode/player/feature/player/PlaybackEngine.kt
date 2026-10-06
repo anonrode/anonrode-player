@@ -137,22 +137,13 @@ class PlaybackEngine(
      */
     fun applyPersistedLock(autoOffsetMs: Long, speedFactor: Float) {
         if (autoOffsetMs == persistedAutoMs && speedFactor == persistedSpeed) return
-        if (isLiveLocked) {
-            val currentLiveAutoMs = subtitleOffsetMs - manualDelayMs
-            val diff = abs(autoOffsetMs - currentLiveAutoMs)
-            if (diff >= 1000L) {
-                AppLog.d("SYNC", "guarding active live lock (${currentLiveAutoMs}ms): rejecting divergent persisted lock (${autoOffsetMs}ms)")
-                return
-            }
-        }
         persistedAutoMs = autoOffsetMs
         persistedSpeed = speedFactor
         subtitleOffsetMs = autoOffsetMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
-        if (!isLiveLocked) {
-            syncProcessor.setEnabled(false)
-        }
-        AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor")
+        isLiveLocked = false
+        syncProcessor.setEnabled(false)
+        AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor (supersedes unverified live state)")
     }
 
     /**
@@ -610,18 +601,18 @@ class PlaybackEngine(
     override fun onSyncLocked(offsetSeconds: Float, speedFactor: Float) {
         val autoMs = (offsetSeconds * 1000f).toLong()
         val isResync = isExplicitResync
+        isExplicitResync = false
         val offsetDiff = abs(offsetSeconds * 1000f - persistedAutoMs.toFloat())
-        val isSignificantJump = offsetDiff >= 1000f
-        if (persistedAutoMs != 0L && !isResync && !isSignificantJump) {
-            AppLog.d("SYNC", "ignoring live lock: verified persisted lock already active (${persistedAutoMs}ms x$persistedSpeed)")
+        if (persistedAutoMs != 0L && !isResync && offsetDiff > 1000f) {
+            AppLog.d("SYNC", "ignoring divergent live lock ($autoMs ms): verified background lock active (${persistedAutoMs}ms, diff=${offsetDiff}ms)")
             return
         }
-        isExplicitResync = false
-        AppLog.d("SYNC", "LOCKED offset=" + offsetSeconds + "s speed=" + speedFactor + (if (isSignificantJump) " (offset jump: diff=${offsetDiff}ms)" else ""))
+        AppLog.d("SYNC", "LOCKED offset=${offsetSeconds}s speed=$speedFactor" + (if (persistedAutoMs != 0L) " (fine drift: diff=${offsetDiff}ms)" else ""))
         persistedAutoMs = autoMs
         persistedSpeed = speedFactor
         subtitleOffsetMs = autoMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
+        isLiveLocked = true
         val uri = currentUri
         if (uri != null) {
             scope.launch { onAutoSyncSave(uri, autoMs, speedFactor) }

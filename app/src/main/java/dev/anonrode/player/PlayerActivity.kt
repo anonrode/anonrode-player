@@ -1304,15 +1304,16 @@ class PlayerActivity : ComponentActivity() {
                 // Room collector. play() still applies the stored lock at
                 // open so subs are corrected immediately meanwhile.
                 val userToggleOn = currentSettings.subtitleAutoSyncEnabled
+                val hasValidLock = (state?.autoSyncOffsetMs != null && state.autoSyncOffsetMs != 0L)
                 val alreadyChecked = (state?.autoSyncCheckedAtMs ?: 0L) != 0L
                 val shouldScheduleFingerprint = userToggleOn &&
-                    !alreadyChecked &&
+                    (!alreadyChecked || !hasValidLock) &&
                     choice != "none"
                 if (shouldScheduleFingerprint) {
                     AppLog.d(
                         "PLAY",
                         "scheduling fingerprint: toggleOn=$userToggleOn " +
-                            "checked=$alreadyChecked choice='$choice'",
+                            "checked=$alreadyChecked hasValidLock=$hasValidLock choice='$choice'",
                     )
                     // v0.7.4 P1-2: a background verdict is now genuinely in
                     // flight for this video — arm the collector gate so its
@@ -2521,10 +2522,11 @@ class PlayerActivity : ComponentActivity() {
         app.engine.clearPersistedLock()
         piecewiseSegments = emptyList()
         isSyncLocked = false
-        // Force-enable live re-lock and re-arm budget — "resync now" prioritizes
-        // the lightweight live audio processor over heavy background decoding thrash.
+        // Force-enable live re-lock and trigger immediate forced background evaluation
         app.engine.setSubSyncEnabled(true)
         app.engine.rearmLiveSync()
+        syncAwaitingBackgroundVerdict = true
+        SyncFingerprint.schedule(applicationContext, uri, immediate = true, force = true)
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 app.stateStore.updateAutoSync(uri, 0L, 1f, "")

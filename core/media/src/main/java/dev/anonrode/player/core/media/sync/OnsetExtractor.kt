@@ -137,6 +137,9 @@ class OnsetExtractor(private val context: Context) {
         // first callback below.
         var offsetSec = 0.0
         var offsetSet = false
+        val nativeAvailable = NativeSyncEngine.isAvailable()
+        val nativeOnsetsList = if (nativeAvailable && vad == null) mutableListOf<Double>() else null
+
         decodeAudio(videoPath, videoUri, resumeFromSec, maxMediaDurationSec, isCancelled) { buf, sr, ch, isFloat, ptsUs ->
             if (isCancelled()) return@decodeAudio false
             if (!offsetSet) {
@@ -147,11 +150,21 @@ class OnsetExtractor(private val context: Context) {
                 }
                 offsetSet = true
             }
-            silence.process(buf, sr, ch, isFloat)
+            if (nativeOnsetsList != null && buf.isDirect) {
+                val pts = if (ptsUs > 0L) ptsUs / 1_000_000.0 else offsetSec
+                val nativeOnsets = NativeSyncEngine.extractOnsets(buf, sr, ch, isFloat, pts)
+                if (nativeOnsets != null) {
+                    for (o in nativeOnsets) nativeOnsetsList.add(o)
+                } else {
+                    silence.process(buf, sr, ch, isFloat)
+                }
+            } else {
+                silence.process(buf, sr, ch, isFloat)
+            }
             vad?.processPcm(buf, sr, ch, isFloat)
             !isCancelled()
         }
-        val silOnsets = sil ?: silence.finish()
+        val silOnsets = sil ?: (nativeOnsetsList?.takeIf { it.isNotEmpty() } ?: silence.finish())
         val (vadOnsets, vadEnvelope) = if (vad != null) {
             try {
                 Pair(vad.finish(), vad.getSpeechEnvelope())
@@ -623,20 +636,32 @@ class OnsetExtractor(private val context: Context) {
         fun process(buf: ByteBuffer, rate: Int, ch: Int, isFloat: Boolean) {
             if (sampleRate == 0) configure(rate, ch)
             buf.order(ByteOrder.LITTLE_ENDIAN)
-            val frames = buf.remaining() / (if (isFloat) 4 else 2) / channels
+            val bytesPerSample = if (isFloat) 4 else 2
+            val bytesPerFrame = bytesPerSample * channels
+            val totalBytes = buf.remaining()
+            val totalFrames = totalBytes / bytesPerFrame
+            val basePos = buf.position()
+
+            // Downsample factor: ~16kHz target
+            val step = if (rate >= 44100) 3 else if (rate >= 32000) 2 else 1
+
             if (isFloat) {
-                val fb = buf.asFloatBuffer()
-                for (i in 0 until frames) {
+                for (f in 0 until totalFrames step step) {
                     var sum = 0.0
-                    for (c in 0 until channels) sum += fb.get(i * channels + c).toDouble()
+                    val frameOffset = basePos + (f * bytesPerFrame)
+                    for (c in 0 until channels) {
+                        sum += buf.getFloat(frameOffset + c * 4).toDouble()
+                    }
                     onMonoSample(sum / channels)
                 }
             } else {
-                val sb = buf.asShortBuffer()
-                for (i in 0 until frames) {
+                for (f in 0 until totalFrames step step) {
                     var sum = 0
-                    for (c in 0 until channels) sum += sb.get(i * channels + c)
-                    onMonoSample(sum / channels.toDouble() / 32768.0)
+                    val frameOffset = basePos + (f * bytesPerFrame)
+                    for (c in 0 until channels) {
+                        sum += buf.getShort(frameOffset + c * 2).toInt()
+                    }
+                    onMonoSample((sum.toDouble() / channels) / 32768.0)
                 }
             }
         }
