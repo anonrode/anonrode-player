@@ -17,7 +17,7 @@ static inline float computeRmsNeon(const float* data, size_t count) {
     float32x4_t sumVec = vdupq_n_f32(0.0f);
     for (; i + 4 <= count; i += 4) {
         float32x4_t v = vld1q_f32(data + i);
-        sumVec = vfmaq_f32(sumVec, v, v);
+        sumVec = vmlaq_f32(sumVec, v, v);
     }
     float temp[4];
     vst1q_f32(temp, sumVec);
