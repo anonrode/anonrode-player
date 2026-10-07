@@ -96,24 +96,7 @@ class AudioSyncProcessor(
     @Volatile private var trackingCandidateOffset = Double.NaN
     @Volatile private var trackingCandidateHits = 0
 
-    enum class BarrageState {
-        NORMAL,
-        BARRAGE_ACTIVE,
-        POST_BARRAGE_CALM,
-    }
 
-    @Volatile internal var barrageState = BarrageState.NORMAL
-    @Volatile internal var isHypothesisFrozen = false
-    private var barrageStartIdx = -1
-    private var calmStartIdx = -1
-    private var sustainedBarrageBins = 0
-    private var calmBins = 0
-
-    // Static ring buffer for zero-allocation rolling energy statistics on audio thread
-    private val energyRing = FloatArray(30)
-    private var ringIdx = 0
-    private var ringSum = 0f
-    private var ringCount = 0
 
     // v0.8 pass budget: the scheduler fires SpeechCorrelator.PASS_BINS.size
     // passes as the window grows (see accumulateBin), and feature
@@ -309,12 +292,6 @@ class AudioSyncProcessor(
         trackingCandidateOffset = Double.NaN
         trackingCandidateHits = 0
         trackingBinsSinceLastEval = 0
-        barrageState = BarrageState.NORMAL
-        isHypothesisFrozen = false
-        barrageStartIdx = -1
-        calmStartIdx = -1
-        sustainedBarrageBins = 0
-        calmBins = 0
         driftTracker.reset()
         driftTracker.add(0.0, offsetSeconds.toDouble())
         AppLog.d("SYNC", "initialized live baseline lock to ${offsetSeconds}s (tracking armed)")
@@ -508,16 +485,6 @@ class AudioSyncProcessor(
         trackingBinsSinceLastEval = 0
         trackingCandidateOffset = Double.NaN
         trackingCandidateHits = 0
-        barrageState = BarrageState.NORMAL
-        isHypothesisFrozen = false
-        barrageStartIdx = -1
-        calmStartIdx = -1
-        sustainedBarrageBins = 0
-        calmBins = 0
-        ringIdx = 0
-        ringSum = 0f
-        ringCount = 0
-        java.util.Arrays.fill(energyRing, 0f)
         // P1-4: a fresh window must also drop the drift history. Without
         // this the six points a post-seek / episode-switch lock fits can
         // straddle the boundary; the resulting fake span clears
@@ -644,95 +611,6 @@ class AudioSyncProcessor(
         binCount = max(binCount, rel + 1)
         audioBins[rel] = max(audioBins[rel], speech)
 
-        // Zero-allocation rolling energy statistics on audio render thread
-        val oldVal = energyRing[ringIdx]
-        energyRing[ringIdx] = speech
-        ringSum += speech - oldVal
-        if (ringCount < 30) {
-            ringCount++
-            ringSum += oldVal
-        }
-        ringIdx = (ringIdx + 1) % 30
-
-        val rMean = ringSum / maxOf(1, ringCount)
-        val checkCount = minOf(20, ringCount)
-        var rMin = 1.0f
-        for (k in 0 until checkCount) {
-            val rI = (ringIdx - 1 - k + 30) % 30
-            if (energyRing[rI] < rMin) rMin = energyRing[rI]
-        }
-
-        // Post-Barrage Resumption & Noise Cessation State Machine (PBR-SDA)
-        when (barrageState) {
-            BarrageState.NORMAL -> {
-                isHypothesisFrozen = false
-                if (rMean >= BARRAGE_MEAN_THRESHOLD && rMin >= BARRAGE_MIN_THRESHOLD) {
-                    sustainedBarrageBins++
-                    if (sustainedBarrageBins >= BARRAGE_SUSTAINED_BINS) {
-                        barrageState = BarrageState.BARRAGE_ACTIVE
-                        isHypothesisFrozen = true
-                        barrageStartIdx = idx - BARRAGE_SUSTAINED_BINS
-                        AppLog.d("SYNC", "barrage detected at t=${posMs / 1000}s (mean=$rMean min=$rMin), hypothesis frozen")
-                    }
-                } else {
-                    sustainedBarrageBins = maxOf(0, sustainedBarrageBins - 1)
-                }
-            }
-            BarrageState.BARRAGE_ACTIVE -> {
-                isHypothesisFrozen = true
-                if (speech < CALM_DROP_THRESHOLD) {
-                    calmBins++
-                    if (calmBins >= CALM_MIN_DURATION_BINS) {
-                        barrageState = BarrageState.POST_BARRAGE_CALM
-                        calmStartIdx = idx - CALM_MIN_DURATION_BINS
-                        calmBins = 0
-                        AppLog.d("SYNC", "barrage noise ceased into calm at t=${posMs / 1000}s, calm pocket armed")
-                    }
-                } else {
-                    calmBins = 0
-                }
-            }
-            BarrageState.POST_BARRAGE_CALM -> {
-                if (speech >= RESUMPTION_ATTACK_THRESHOLD) {
-                    val calmDurSec = (idx - calmStartIdx) * 0.1f
-                    AppLog.d("SYNC", "clean dialogue resumption after ${calmDurSec}s calm at t=${posMs / 1000}s (attack=$speech)")
-                    barrageState = BarrageState.NORMAL
-                    isHypothesisFrozen = false
-                    sustainedBarrageBins = 0
-                    calmBins = 0
-
-                    if (!locked) {
-                        // Cold open with theme song / barrage: discard the pre-calm theme noise
-                        // by sliding baseIdx forward to the quiet calm pocket!
-                        val newBase = maxOf(0, calmStartIdx - 20)
-                        if (newBase > baseIdx) {
-                            val shift = newBase - baseIdx
-                            if (shift < audioBins.size) {
-                                System.arraycopy(audioBins, shift, audioBins, 0, audioBins.size - shift)
-                                java.util.Arrays.fill(audioBins, audioBins.size - shift, audioBins.size, 0f)
-                                binCount = maxOf(0, binCount - shift)
-                            } else {
-                                java.util.Arrays.fill(audioBins, 0f)
-                                binCount = 0
-                            }
-                            baseIdx = newBase
-                            passesUsed = 0
-                            generation++
-                            AppLog.d("SYNC", "theme barrage discarded: window re-anchored at t=${baseIdx * 0.1}s, binCount=$binCount")
-                        }
-                    } else if (trackingMode) {
-                        // Continuous playback: immediately evaluate post-barrage speech
-                        trackingBinsSinceLastEval = 0
-                        scheduleEvaluate(posMs)
-                    }
-                } else if ((idx - calmStartIdx) > CALM_TIMEOUT_BINS) {
-                    barrageState = BarrageState.NORMAL
-                    isHypothesisFrozen = false
-                    sustainedBarrageBins = 0
-                    calmBins = 0
-                }
-            }
-        }
 
 
         // If already locked and in tracking mode: schedule periodic drift checks
@@ -819,10 +697,6 @@ class AudioSyncProcessor(
         // mid-evaluation — drop the result instead of publishing a lock the
         // user no longer wants.
         if (!enabled) return
-        if (isHypothesisFrozen && !locked) {
-            AppLog.d("SYNC", "eval pass t=${req.posMs / 1000}s dropped: barrage active, hypothesis frozen")
-            return
-        }
 
         if (locked && trackingMode) {
             evaluateTracking(req)
@@ -906,9 +780,24 @@ class AudioSyncProcessor(
      * to monitor subtitle drift and automatically detect commercial cut jumps.
      */
     private fun evaluateTracking(req: SyncAnalysisWorker.Request) {
-        if (isHypothesisFrozen) {
-            AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s skipped: barrage active, hypothesis frozen")
-            return
+        // Barrage / wall-of-sound check on recent audio (last 20s / 200 bins):
+        // If energy is a continuous wall of sound without natural speech pauses,
+        // freeze tracking to avoid false slew from theme songs or battles!
+        if (req.binCount >= 100) {
+            val checkBins = minOf(200, req.binCount)
+            var sumEnergy = 0.0
+            var minEnergy = 1.0f
+            val startBin = req.binCount - checkBins
+            for (i in startBin until req.binCount) {
+                val v = req.bins[i]
+                sumEnergy += v
+                if (v < minEnergy) minEnergy = v
+            }
+            val meanEnergy = sumEnergy / checkBins
+            if (meanEnergy >= 0.40 && minEnergy >= 0.15) {
+                AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s skipped: continuous barrage / music wall (mean=$meanEnergy min=$minEnergy)")
+                return
+            }
         }
         val outcome = SpeechCorrelator.findOffset(
             req.bins, req.binCount, req.cues,
@@ -941,15 +830,17 @@ class AudioSyncProcessor(
         if (delta <= 0.80) {
             trackingCandidateOffset = Double.NaN
             trackingCandidateHits = 0
-            driftTracker.add(req.posMs / 1000.0, result.offsetSeconds)
-            val (baseOffset, speedF) = driftTracker.getCorrection()
-            activeOffsetSeconds = baseOffset
-            listener.onSyncTrackingUpdate(
-                positionSec = req.posMs / 1000.0,
-                offsetSeconds = baseOffset.toFloat(),
-                speedFactor = speedF,
-                isPiecewiseJump = false,
-            )
+            if (result.containment >= 0.65 && result.margin >= 0.10) {
+                driftTracker.add(req.posMs / 1000.0, result.offsetSeconds)
+                val (baseOffset, speedF) = driftTracker.getCorrection()
+                activeOffsetSeconds = baseOffset
+                listener.onSyncTrackingUpdate(
+                    positionSec = req.posMs / 1000.0,
+                    offsetSeconds = baseOffset.toFloat(),
+                    speedFactor = speedF,
+                    isPiecewiseJump = false,
+                )
+            }
         } else {
             val cand = trackingCandidateOffset
             if (!cand.isNaN() && abs(result.offsetSeconds - cand) <= 0.35 && result.containment >= 0.70) {
@@ -1003,13 +894,5 @@ class AudioSyncProcessor(
         /** Fast re-eval slot to confirm a suspected piecewise cut: 6 seconds of audio. */
         private const val TRACKING_CONFIRM_BINS = 60
 
-        /** Post-Barrage Resumption and Noise Cessation parameters (PBR-SDA) */
-        private const val BARRAGE_MEAN_THRESHOLD = 0.38f
-        private const val BARRAGE_MIN_THRESHOLD = 0.12f
-        private const val BARRAGE_SUSTAINED_BINS = 40 // 4.0 seconds of continuous wall of sound
-        private const val CALM_DROP_THRESHOLD = 0.12f
-        private const val CALM_MIN_DURATION_BINS = 8 // 0.8 seconds of quiet calm pocket
-        private const val RESUMPTION_ATTACK_THRESHOLD = 0.35f
-        private const val CALM_TIMEOUT_BINS = 120 // 12.0 seconds calm timeout
     }
 }
