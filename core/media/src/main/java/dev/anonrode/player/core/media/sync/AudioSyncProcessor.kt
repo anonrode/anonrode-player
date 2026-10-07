@@ -734,10 +734,6 @@ class AudioSyncProcessor(
             }
         }
 
-        // If hypothesis is frozen due to barrage, suppress routine cadence/cold-open burns
-        if (isHypothesisFrozen) {
-            return
-        }
 
         // If already locked and in tracking mode: schedule periodic drift checks
         // at low overhead (cadence of 25s, or 6s to confirm a suspected piecewise cut)
