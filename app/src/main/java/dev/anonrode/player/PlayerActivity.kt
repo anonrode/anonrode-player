@@ -83,6 +83,7 @@ import dev.anonrode.player.feature.player.PlaybackEngine
 import dev.anonrode.player.feature.player.PlayerService
 import dev.anonrode.player.ui.PlayerScreen
 import dev.anonrode.player.ui.SettingsScreen
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToLong
 import kotlinx.coroutines.CancellationException

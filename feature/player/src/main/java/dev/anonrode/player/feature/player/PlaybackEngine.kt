@@ -84,7 +84,8 @@ class PlaybackEngine(
      *  the main thread, read from the sync-eval worker thread. */
     @Volatile var persistedAutoMs: Long = 0L
         private set
-    @Volatile private var persistedSpeed: Float = 1f
+    @Volatile var persistedSpeed: Float = 1f
+        private set
 
     /**
      * Cached media item + start position from the most recent [play] call.
