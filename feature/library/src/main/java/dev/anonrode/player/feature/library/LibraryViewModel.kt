@@ -63,6 +63,8 @@ class LibraryViewModel(
         val video: Video,
         val fraction: Float,
         val label: String,
+        val positionMs: Long = 0L,
+        val durationMs: Long = 0L,
     )
 
     /** One episode row inside a folder drill-down. [Immutable] (see InProgress). */
@@ -290,7 +292,7 @@ class LibraryViewModel(
                 val frac = if (dur > 0) {
                     (st.playbackPositionMs.toFloat() / dur).coerceIn(0f, 1f)
                 } else 0f
-                InProgress(v, frac, "${folderNameOf(v)} · ${fmtMin(st.playbackPositionMs)} / ${fmtMin(dur)}")
+                InProgress(v, frac, "${folderNameOf(v)} · ${fmtMin(st.playbackPositionMs)} / ${fmtMin(dur)}", st.playbackPositionMs, dur)
             }
 
         // Per-folder episode rows (display order + progress) and folder stats.

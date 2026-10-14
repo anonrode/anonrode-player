@@ -147,7 +147,8 @@ class OnsetExtractor(private val context: Context) {
                 }
                 offsetSet = true
             }
-            silence.process(buf, sr, ch, isFloat)
+            val bufOffsetSec = if (ptsUs > 0L) ptsUs / 1_000_000.0 else silence.coveredSec()
+            silence.process(buf, sr, ch, isFloat, bufOffsetSec)
             vad?.processPcm(buf, sr, ch, isFloat)
             !isCancelled()
         }
@@ -177,10 +178,85 @@ class OnsetExtractor(private val context: Context) {
         positionSec: Double,
         activeOffsetSec: Double = 0.0,
         probeDurationSec: Double = 6.0,
-        radiusSec: Double = 60.0,
+        radiusSec: Double = 1.5,
+        pcmBuffer: ByteBuffer? = null,
+        sampleRate: Int = 0,
+        channels: Int = 0,
+        isFloat: Boolean = false,
         isCancelled: () -> Boolean = { false },
     ): Double? {
-        if (cues.isEmpty() || positionSec < 0.0 || (videoPath.isNullOrEmpty() && videoUri == null)) return null
+        if (cues.isEmpty() || positionSec < 0.0 || (videoPath.isNullOrEmpty() && videoUri == null && pcmBuffer == null)) return null
+
+        val effectiveRadius = radiusSec.coerceAtMost(1.5)
+        val startB = activeOffsetSec - effectiveRadius
+        val endB = activeOffsetSec + effectiveRadius
+
+        // Require at least 12 candidate dialogue cues (N >= 12) within the probe window under active hypothesis
+        val minCueSec = positionSec - endB - 1.0
+        val maxCueSec = (positionSec + probeDurationSec) - startB + 1.0
+        val candidateCues = cues.filter { it.start in minCueSec..maxCueSec }
+        if (candidateCues.size < 12) {
+            AppLog.d(
+                "SPOT_SYNC",
+                "spot probe refused at pos=%.1fs: sparse candidate cues (%d < 12 in probe window)".format(
+                    positionSec,
+                    candidateCues.size,
+                ),
+            )
+            return null
+        }
+
+        if (pcmBuffer != null && pcmBuffer.isDirect && NativeSyncEngine.isAvailable() && sampleRate > 0 && channels > 0) {
+            val basePos = pcmBuffer.position()
+            val baseLimit = pcmBuffer.limit()
+            val cueStartsArr = DoubleArray(candidateCues.size) { candidateCues[it].start - positionSec }
+            val cueEndsArr = DoubleArray(candidateCues.size) { candidateCues[it].end - positionSec }
+            try {
+                val nativeRes = NativeSyncEngine.alignPcm(
+                    pcmBuffer = pcmBuffer,
+                    sampleRate = sampleRate,
+                    channels = channels,
+                    isFloat = isFloat,
+                    cueStarts = cueStartsArr,
+                    cueEnds = cueEndsArr,
+                    activeOffsetSec = activeOffsetSec,
+                )
+                if (nativeRes != null) {
+                    if (nativeRes.locked && abs(nativeRes.offsetSec - activeOffsetSec) <= effectiveRadius) {
+                        AppLog.d(
+                            "SPOT_SYNC",
+                            "spot probe locked (pcm): beta=%.3fs hits=%d localCues=%d recall=%.2f prec=%.2f margin=%.2f".format(
+                                nativeRes.offsetSec,
+                                nativeRes.hits,
+                                nativeRes.localCues,
+                                nativeRes.recall,
+                                nativeRes.precision,
+                                nativeRes.margin,
+                            ),
+                        )
+                        return nativeRes.offsetSec
+                    } else {
+                        AppLog.d(
+                            "SPOT_SYNC",
+                            "spot probe refused (pcm) at pos=%.1fs: bestBeta=%.3fs hits=%d/%d recall=%.2f prec=%.2f margin=%.2f".format(
+                                positionSec,
+                                nativeRes.offsetSec,
+                                nativeRes.hits,
+                                nativeRes.localCues,
+                                nativeRes.recall,
+                                nativeRes.precision,
+                                nativeRes.margin,
+                            ),
+                        )
+                        return null
+                    }
+                }
+            } finally {
+                pcmBuffer.position(basePos)
+                pcmBuffer.limit(baseLimit)
+            }
+        }
+
         val sources = extractSources(
             videoPath = videoPath,
             videoUri = videoUri,
@@ -197,18 +273,64 @@ class OnsetExtractor(private val context: Context) {
         val minAudio = audioOnsets.minOrNull() ?: positionSec
         val maxAudio = audioOnsets.maxOrNull() ?: (positionSec + probeDurationSec)
 
-        val startB = activeOffsetSec - radiusSec
-        val endB = activeOffsetSec + radiusSec
-
-        // Filter cues that can match within the probe search range
-        // audio_time = cue.start + beta => cue.start = audio_time - beta
-        val minCue = minAudio - endB - 1.0
-        val maxCue = maxAudio - startB + 1.0
-        val candidateCues = cues.filter { it.start in minCue..maxCue }
-        if (candidateCues.isEmpty()) return null
+        val refinedMinCue = minAudio - endB - 1.0
+        val refinedMaxCue = maxAudio - startB + 1.0
+        val refinedCandidateCues = candidateCues.filter { it.start in refinedMinCue..refinedMaxCue }
+        if (refinedCandidateCues.size < 12) {
+            AppLog.d(
+                "SPOT_SYNC",
+                "spot probe refused at pos=%.1fs: sparse refined cues (%d < 12)".format(
+                    positionSec,
+                    refinedCandidateCues.size,
+                ),
+            )
+            return null
+        }
 
         val sortedOnsets = audioOnsets.sorted()
-        val sortedStarts = candidateCues.map { it.start }.sorted()
+        val sortedStarts = refinedCandidateCues.map { it.start }.sorted()
+
+        if (NativeSyncEngine.isAvailable()) {
+            val audioOnsetsArr = DoubleArray(sortedOnsets.size) { sortedOnsets[it] }
+            val cueStartsArr = DoubleArray(refinedCandidateCues.size) { refinedCandidateCues[it].start }
+            val cueEndsArr = DoubleArray(refinedCandidateCues.size) { refinedCandidateCues[it].end }
+            val nativeResult = NativeSyncEngine.correlate(
+                audioOnsets = audioOnsetsArr,
+                cueStarts = cueStartsArr,
+                cueEnds = cueEndsArr,
+                activeOffsetSec = activeOffsetSec,
+            )
+            if (nativeResult != null) {
+                if (nativeResult.locked && abs(nativeResult.offsetSec - activeOffsetSec) <= effectiveRadius) {
+                    AppLog.d(
+                        "SPOT_SYNC",
+                        "spot probe locked: beta=%.3fs hits=%d localCues=%d recall=%.2f prec=%.2f margin=%.2f".format(
+                            nativeResult.offsetSec,
+                            nativeResult.hits,
+                            nativeResult.localCues,
+                            nativeResult.recall,
+                            nativeResult.precision,
+                            nativeResult.margin,
+                        ),
+                    )
+                    return nativeResult.offsetSec
+                } else {
+                    AppLog.d(
+                        "SPOT_SYNC",
+                        "spot probe refused at pos=%.1fs: bestBeta=%.3fs hits=%d/%d recall=%.2f prec=%.2f margin=%.2f".format(
+                            positionSec,
+                            nativeResult.offsetSec,
+                            nativeResult.hits,
+                            nativeResult.localCues,
+                            nativeResult.recall,
+                            nativeResult.precision,
+                            nativeResult.margin,
+                        ),
+                    )
+                    return null
+                }
+            }
+        }
 
         var bestBeta = activeOffsetSec
         var bestScore = 0.0
@@ -308,8 +430,10 @@ class OnsetExtractor(private val context: Context) {
         val precision = if (sortedOnsets.isNotEmpty()) bestHits.toDouble() / sortedOnsets.size else 0.0
 
         if (bestHits >= 3 && bestLocalCues >= 3 && recall >= 0.60 && precision >= 0.40 && margin >= 0.08) {
-            AppLog.d("SPOT_SYNC", "spot probe locked: beta=%.3fs hits=%d localCues=%d recall=%.2f prec=%.2f margin=%.2f".format(bestBeta, bestHits, bestLocalCues, recall, precision, margin))
-            return bestBeta
+            if (abs(bestBeta - activeOffsetSec) <= effectiveRadius) {
+                AppLog.d("SPOT_SYNC", "spot probe locked: beta=%.3fs hits=%d localCues=%d recall=%.2f prec=%.2f margin=%.2f".format(bestBeta, bestHits, bestLocalCues, recall, precision, margin))
+                return bestBeta
+            }
         }
         AppLog.d("SPOT_SYNC", "spot probe refused at pos=%.1fs: bestBeta=%.3fs hits=%d/%d recall=%.2f prec=%.2f margin=%.2f".format(positionSec, bestBeta, bestHits, bestLocalCues, recall, precision, margin))
         return null
@@ -327,8 +451,9 @@ class OnsetExtractor(private val context: Context) {
             AppLog.d("ONSET", "ffmpeg path failed, falling back to MediaCodec")
         }
         val silence = SilenceState(maxSeconds)
-        decodeAudio(videoPath, null) { buf, sr, ch, isFloat, _ ->
-            silence.process(buf, sr, ch, isFloat)
+        decodeAudio(videoPath, null) { buf, sr, ch, isFloat, ptsUs ->
+            val bufOffsetSec = if (ptsUs > 0L) ptsUs / 1_000_000.0 else silence.coveredSec()
+            silence.process(buf, sr, ch, isFloat, bufOffsetSec)
             !silence.limitReached
         }
         return silence.finish()
@@ -622,14 +747,41 @@ class OnsetExtractor(private val context: Context) {
             windowTarget = effectiveRate / 100 // 10ms windows
         }
 
-        fun process(buf: ByteBuffer, rate: Int, ch: Int, isFloat: Boolean) {
+        fun process(
+            buf: ByteBuffer,
+            rate: Int,
+            ch: Int,
+            isFloat: Boolean,
+            offsetSec: Double = if (sampleRate > 0) onsetOffset + monoSamples.toDouble() / sampleRate else onsetOffset,
+        ) {
             if (sampleRate == 0) configure(rate, ch)
             buf.order(ByteOrder.LITTLE_ENDIAN)
+            val basePos = buf.position()
+            val baseLimit = buf.limit()
+            val currentOffsetSec = if (offsetSec >= 0.0) offsetSec else (if (sampleRate > 0) onsetOffset + monoSamples.toDouble() / sampleRate else onsetOffset)
+
+            if (NativeSyncEngine.isAvailable() && buf.isDirect) {
+                val nativeOnsets = NativeSyncEngine.extractOnsets(buf, rate, ch, isFloat, currentOffsetSec)
+                if (nativeOnsets != null) {
+                    for (t in nativeOnsets) {
+                        onsets.add(t)
+                    }
+                    val bytesPerSample = if (isFloat) 4 else 2
+                    val bytesPerFrame = bytesPerSample * channels
+                    val totalBytes = buf.remaining()
+                    val totalFrames = totalBytes / bytesPerFrame
+                    val step = if (rate >= 44100) 3 else if (rate >= 32000) 2 else 1
+                    monoSamples += (totalFrames / step)
+                    buf.position(basePos)
+                    buf.limit(baseLimit)
+                    return
+                }
+            }
+
             val bytesPerSample = if (isFloat) 4 else 2
             val bytesPerFrame = bytesPerSample * channels
             val totalBytes = buf.remaining()
             val totalFrames = totalBytes / bytesPerFrame
-            val basePos = buf.position()
 
             // Downsample factor: ~16kHz target
             val step = if (rate >= 44100) 3 else if (rate >= 32000) 2 else 1
@@ -653,6 +805,8 @@ class OnsetExtractor(private val context: Context) {
                     onMonoSample((sum.toDouble() / channels) / 32768.0)
                 }
             }
+            buf.position(basePos)
+            buf.limit(baseLimit)
         }
 
         private fun onMonoSample(mono: Double) {

@@ -82,7 +82,7 @@ object SyncOrchestrator {
         val on = onsets.sorted()
         val cs = cueStarts.sorted()
 
-        val intervalResult = if (on.size >= 20 && cs.size >= 10) {
+        val intervalResult = if (on.size >= 12 && cs.size >= 10) {
             IntervalAligner.alignPiecewise(on, cs)
         } else null
 
@@ -120,7 +120,7 @@ object SyncOrchestrator {
         }
 
         val single = envelopeSingle ?: fastIntervalLock ?: (
-            if (on.size >= 20 && cs.size >= 10) {
+            if (on.size >= 12 && cs.size >= 10) {
                 SyncBest.find(on, cs)?.let {
                     Model.Single(
                         alpha = it.alpha, beta = it.beta, recall = it.recall,

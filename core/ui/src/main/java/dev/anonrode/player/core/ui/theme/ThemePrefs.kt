@@ -194,3 +194,55 @@ data class SkinPalette(
 /** Resolve the active palette inside a composition. */
 @Composable
 fun rememberSkinPalette(): SkinPalette = SkinPalette.forSkin(rememberSkin())
+
+/**
+ * Dynamic Semantic Accent Tokens for Player v5 Drawers and Controls.
+ * Resolves Emerald Green on Obsidian (Black) and Light (White),
+ * and native skin accents on Cobalt (#2563EB) and Amber (#D97706).
+ */
+data class PlayerAccentTokens(
+    val primary: Color,
+    val container: Color,
+    val border: Color,
+    val glow: Color,
+    val onAccent: Color,
+)
+
+@Composable
+fun rememberPlayerAccent(): PlayerAccentTokens {
+    val skin = rememberSkin()
+    val skinPalette = rememberSkinPalette()
+
+    return remember(skin, skinPalette) {
+        when (skin) {
+            Skin.OBSIDIAN -> PlayerAccentTokens(
+                primary = Color(0xFF10B981),
+                container = Color(0x2410B981),
+                border = Color(0x5910B981),
+                glow = Color(0x3310B981),
+                onAccent = Color(0xFF090A0D),
+            )
+            Skin.LIGHT -> PlayerAccentTokens(
+                primary = Color(0xFF059669),
+                container = Color(0x1F059669),
+                border = Color(0x4D059669),
+                glow = Color(0x20059669),
+                onAccent = Color.White,
+            )
+            Skin.COBALT -> PlayerAccentTokens(
+                primary = skinPalette.accent,
+                container = skinPalette.accentSoft,
+                border = skinPalette.accentLine,
+                glow = Color(0x332563EB),
+                onAccent = Color.White,
+            )
+            Skin.AMBER -> PlayerAccentTokens(
+                primary = skinPalette.accent,
+                container = skinPalette.accentSoft,
+                border = skinPalette.accentLine,
+                glow = Color(0x33D97706),
+                onAccent = Color.White,
+            )
+        }
+    }
+}

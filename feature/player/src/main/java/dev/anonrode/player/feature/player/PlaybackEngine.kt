@@ -17,6 +17,8 @@ import dev.anonrode.player.core.media.audio.VolumeBoostProcessor
 import dev.anonrode.player.core.media.audio.VoiceClarityProcessor
 import dev.anonrode.player.core.media.log.AppLog
 import dev.anonrode.player.core.media.sync.AudioSyncProcessor
+import dev.anonrode.player.core.media.sync.PlaybackClock
+import android.os.Looper
 import android.net.Uri
 import dev.anonrode.player.core.media.sync.OnsetExtractor
 import dev.anonrode.player.core.media.sync.SyncFingerprint
@@ -74,9 +76,10 @@ class PlaybackEngine(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val appContext: Context = context.applicationContext
+    val clock = PlaybackClock()
     var currentUri: String? = null
         private set
-    private var manualDelayMs: Long = 0L
+    @Volatile private var manualDelayMs: Long = 0L
 
     /** Persisted auto-sync offset (fingerprint lock) applied at [play]. Kept
      *  so [onSyncNoMatch] can fall back to it instead of dropping the lock:
@@ -263,7 +266,7 @@ class PlaybackEngine(
      */
     fun rearmLiveSync() {
         isExplicitResync = true
-        val pos = player?.currentPosition ?: 0L
+        val pos = clock.positionMs
         syncProcessor.rearm(pos)
         if (lastSyncCues.isNotEmpty()) {
             syncProcessor.setCues(lastSyncCues)
@@ -282,6 +285,11 @@ class PlaybackEngine(
         val uriStr = currentUri ?: return
         val cues = lastSyncCues
         if (cues.isEmpty()) return
+        // Protect established locks: do not allow spot probes to overwrite or corrupt an active verified lock
+        if (isLiveLocked || persistedAutoMs != 0L) {
+            AppLog.d("SYNC", "spot probe skipped at pos=${positionMs}ms: preserving verified lock (${persistedAutoMs}ms)")
+            return
+        }
         val uri = Uri.parse(uriStr)
         val path = if (uri.scheme == "file") uri.path else null
 
@@ -296,14 +304,17 @@ class PlaybackEngine(
                 positionSec = posSec,
                 activeOffsetSec = activeOffset,
                 probeDurationSec = 6.0,
-                radiusSec = 60.0,
+                radiusSec = 1.5,
                 isCancelled = { !isActive },
             )
             if (bestOffsetSec != null && isActive) {
+                if (isLiveLocked || persistedAutoMs != 0L) {
+                    AppLog.d("SYNC", "spot probe result rejected: verified lock active (${persistedAutoMs}ms)")
+                    return@launch
+                }
                 val offsetMs = (bestOffsetSec * 1000.0).roundToLong()
                 AppLog.d("SYNC", "spot-sync locked at pos=${positionMs}ms offset=${offsetMs}ms")
                 withContext(Dispatchers.Main) {
-                    isExplicitResync = true
                     onSyncLocked(bestOffsetSec.toFloat(), 1.0f)
                     onResult?.invoke(offsetMs)
                 }
@@ -416,7 +427,7 @@ class PlaybackEngine(
      * "session not ready, retry on next state change".
      */
     val currentAudioSessionId: Int
-        get() = if (player.audioSessionId != C.AUDIO_SESSION_ID_UNSET) player.audioSessionId else 0
+        get() = if (Looper.myLooper() == Looper.getMainLooper() && player.audioSessionId != C.AUDIO_SESSION_ID_UNSET) player.audioSessionId else 0
 
     /** Whether the engine is currently on a device-decoder profile
      *  (anything except the FFmpeg-preferred mode). */
@@ -543,6 +554,7 @@ class PlaybackEngine(
             .build()
             .also {
                 it.setHandleAudioBecomingNoisy(true)
+                it.addListener(clock)
                 // Seek re-anchor: the sync processor's sample-count clock must
                 // be re-set from the MAIN thread on every discontinuity.
                 it.addListener(object : Player.Listener {
@@ -551,6 +563,7 @@ class PlaybackEngine(
                         newPosition: Player.PositionInfo,
                         reason: Int,
                     ) {
+                        clock.positionMs = newPosition.positionMs
                         // v0.8 A-B repeat fix: a BACKWARD jump landing on
                         // the loop's start marker is not a seek to new
                         // content — re-anchoring there used to discard the
@@ -571,6 +584,20 @@ class PlaybackEngine(
                             syncProcessor.setStartPositionQuiet(newPosition.positionMs)
                         } else {
                             syncProcessor.setStartPosition(newPosition.positionMs)
+                        }
+                    }
+                })
+                // Immediate position persistence on pause, stop, or completion
+                it.addListener(object : Player.Listener {
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        if (!isPlaying) {
+                            savePositionNow()
+                        }
+                    }
+
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (playbackState == Player.STATE_ENDED) {
+                            savePositionNow()
                         }
                     }
                 })
@@ -620,7 +647,7 @@ class PlaybackEngine(
         val isResync = isExplicitResync
         isExplicitResync = false
         val offsetDiff = abs(offsetSeconds * 1000f - persistedAutoMs.toFloat())
-        val currentPosMs = player?.currentPosition ?: 0L
+        val currentPosMs = clock.positionMs
         // Protect against HotD EP02 intro theme false locks during cold open (<90s).
         // If deep in playback (t >= 90s), this is a piecewise cut / segment shift!
         if (persistedAutoMs != 0L && !isResync && offsetDiff > 1000f && currentPosMs < 90_000L) {
@@ -636,7 +663,9 @@ class PlaybackEngine(
         if (uri != null) {
             scope.launch { onAutoSyncSave(uri, autoMs, speedFactor, currentPiecewise) }
         }
-        onLiveSyncLocked?.invoke()
+        scope.launch(Dispatchers.Main) {
+            onLiveSyncLocked?.invoke()
+        }
     }
 
     override fun onSyncTrackingUpdate(
@@ -651,14 +680,18 @@ class PlaybackEngine(
             persistedSpeed = speedFactor
             subtitleOffsetMs = autoMs + manualDelayMs
             subtitleSpeedFactor = speedFactor
-            onLiveSyncTrackingRefined?.invoke(offsetSeconds, speedFactor)
+            scope.launch(Dispatchers.Main) {
+                onLiveSyncTrackingRefined?.invoke(offsetSeconds, speedFactor)
+            }
         } else {
             AppLog.d("SYNC", "piecewise jump detected during continuous playback at t=%.1fs -> %+.2fs".format(positionSec, offsetSeconds))
             persistedAutoMs = autoMs
             persistedSpeed = speedFactor
             subtitleOffsetMs = autoMs + manualDelayMs
             subtitleSpeedFactor = speedFactor
-            onLiveSyncPiecewiseCut?.invoke(positionSec, offsetSeconds.toDouble())
+            scope.launch(Dispatchers.Main) {
+                onLiveSyncPiecewiseCut?.invoke(positionSec, offsetSeconds.toDouble())
+            }
         }
     }
 
@@ -669,7 +702,9 @@ class PlaybackEngine(
         // stored lock mid-episode would desync already-correct subtitles.
         subtitleOffsetMs = persistedAutoMs + manualDelayMs
         subtitleSpeedFactor = persistedSpeed
-        onLiveSyncNoMatch?.invoke()
+        scope.launch(Dispatchers.Main) {
+            onLiveSyncNoMatch?.invoke()
+        }
     }
 
     /**
@@ -728,13 +763,11 @@ class PlaybackEngine(
         // at the resume point and the first rendered frame is the resume
         // frame — no frame-0 flash.
         player.setMediaItem(mediaItem)
-        if (saved != null && saved > 0) {
-            player.seekTo(saved)
-            syncProcessor.setStartPosition(saved)
-            startPositionMs = saved
-        } else {
-            startPositionMs = 0L
-        }
+        val startPos = if (saved != null && saved > 0) saved else 0L
+        player.seekTo(startPos)
+        syncProcessor.setStartPosition(startPos)
+        startPositionMs = startPos
+        clock.positionMs = startPos
         player.prepare()
         AppLog.d("ENGINE", "calling play()")
         // Bring up the foreground playback service: media session (lock-screen
@@ -899,10 +932,11 @@ class PlaybackEngine(
      */
     private fun capturePositionSnapshot(): PositionSnapshot? {
         val uri = currentUri ?: return null
-        val pos = player.currentPosition
+        val isOnMain = Looper.myLooper() == Looper.getMainLooper()
+        val pos = if (isOnMain) player.currentPosition else clock.positionMs
         // Null (not 0!) when unknown: storing 0 would clobber a previously
         // persisted good duration for this URI.
-        val dur = player.duration.takeIf { it > 0 && it != C.TIME_UNSET }
+        val dur = if (isOnMain) player.duration.takeIf { it > 0 && it != C.TIME_UNSET } else null
         val finished = dur != null && pos >= dur - 1000
         return PositionSnapshot(uri, pos, dur, finished)
     }

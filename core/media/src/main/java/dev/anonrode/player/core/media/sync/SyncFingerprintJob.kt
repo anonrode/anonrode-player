@@ -63,7 +63,107 @@ class SyncFingerprintJob(
          * Result.retry(), not a blocked worker thread.
          */
         private val DECODE_GATE = java.util.concurrent.Semaphore(1)
+
+        /**
+         * Scans subtitle cues in memory (<0.1ms) to locate a 20-second window containing
+         * at least 12–15 dialogue cues within the first 5–8 minutes of the video,
+         * completely skipping cold opens, silent title cards, and intro themes.
+         * Returns Pair(clusterStartSec, clusterEndSec).
+         */
+        fun findDensestDialogueCluster(
+            cues: List<SubtitleCue>,
+            targetSpanSec: Double = 20.0,
+        ): Pair<Double, Double> {
+            val span = if (targetSpanSec <= 0.0) 20.0 else targetSpanSec
+            if (cues.isEmpty()) return 0.0 to span
+
+            val sortedCues = cues.sortedBy { it.start }
+            val dialogueCues = sortedCues.filter { cue ->
+                val text = cue.lines.joinToString(" ").trim()
+                if (text.isEmpty()) return@filter false
+                if ((text.startsWith("[") && text.endsWith("]")) ||
+                    (text.startsWith("(") && text.endsWith(")")) ||
+                    (text.startsWith("{") && text.endsWith("}"))
+                ) return@filter false
+                if (text.contains("♪") || text.contains("♫") || text.contains("#")) return@filter false
+                val lower = text.lowercase()
+                !(lower.contains("subtitles by") || lower.contains("sync by") ||
+                    lower.contains("addic7ed") || lower.contains("opensubtitles") ||
+                    lower.contains("yify"))
+            }.ifEmpty { sortedCues }
+
+            // Detect intro theme silence/music gap (>= 35s in the first 5 minutes).
+            // Cues before this gap belong to cold opens; main episode dialogue resumes after it.
+            var introEnd = 0.0
+            for (i in 0 until (dialogueCues.size - 1)) {
+                val c1 = dialogueCues[i]
+                val c2 = dialogueCues[i + 1]
+                if (c1.start > 300.0) break
+                val gap = c2.start - c1.end
+                if (gap >= 35.0) {
+                    introEnd = c2.start
+                    break
+                }
+            }
+
+            val minSearchSec = if (introEnd > 0.0) {
+                introEnd
+            } else if (dialogueCues.first().start < 60.0) {
+                60.0 // Skip title cards and studio logos
+            } else {
+                dialogueCues.first().start
+            }
+            val maxSearchSec = 480.0 // Within first 5–8 minutes
+
+            fun scanBest(pool: List<SubtitleCue>): Pair<Double, Int> {
+                if (pool.isEmpty()) return 0.0 to 0
+                var bestStart = pool.first().start
+                var bestCount = 0
+                var right = 0
+                for (left in pool.indices) {
+                    val wStart = pool[left].start
+                    val wEnd = wStart + span
+                    while (right < pool.size && pool[right].start <= wEnd) {
+                        right++
+                    }
+                    val count = right - left
+                    if (count > bestCount) {
+                        bestCount = count
+                        bestStart = wStart
+                    }
+                }
+                return bestStart to bestCount
+            }
+
+            // Primary search: dialogue within [minSearchSec, maxSearchSec]
+            val primaryCandidates = dialogueCues.filter { it.start in minSearchSec..maxSearchSec }
+            val (pStart, pCount) = scanBest(primaryCandidates)
+
+            // If we found a cluster with target density (>= 12 cues), return immediately
+            if (pCount >= 12) {
+                return pStart to (pStart + span)
+            }
+
+            // Secondary search: broaden to any dialogue cues within first 8 minutes
+            val secondaryCandidates = dialogueCues.filter { it.start <= maxSearchSec }
+            val (sStart, sCount) = scanBest(secondaryCandidates)
+
+            val chosenStart = when {
+                pCount >= 6 -> pStart
+                sCount > pCount -> sStart
+                primaryCandidates.isNotEmpty() -> pStart
+                secondaryCandidates.isNotEmpty() -> sStart
+                else -> dialogueCues.first().start
+            }
+
+            return chosenStart to (chosenStart + span)
+        }
     }
+
+    fun findDensestDialogueCluster(
+        cues: List<SubtitleCue>,
+        targetSpanSec: Double = 20.0,
+    ): Pair<Double, Double> = Companion.findDensestDialogueCluster(cues, targetSpanSec)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         // Re-check the live setting on EVERY attempt: a job enqueued while
@@ -266,13 +366,13 @@ class SyncFingerprintJob(
                 }
                 val initialSpanSec = if (resumeFrom <= 0.0) 600.0 else 300.0
 
-                // ── Stage 0: Cue-Guided Anchor Search (fast 90s seek) ──
+                // ── Stage 0: Cue-Guided Anchor Search (20s dense cluster seek) ──
                 var anchorLock: LockCandidate? = null
                 if (cached == null && starts.size >= 12) {
-                    val firstCueTime = starts.first()
-                    val anchorStart = (firstCueTime - 5.0).coerceAtLeast(0.0)
-                    val anchorSpan = 90.0
-                    AppLog.d("SYNC_JOB", "Stage 0 anchor probe at %.1fs (span %.0fs)".format(anchorStart, anchorSpan))
+                    val anchorSpan = 20.0
+                    val (denseStart, _) = findDensestDialogueCluster(cues, anchorSpan)
+                    val anchorStart = (denseStart - 1.0).coerceAtLeast(0.0)
+                    AppLog.d("SYNC_JOB", "Stage 0 dense cluster probe at %.1fs (span %.0fs)".format(anchorStart, anchorSpan))
                     val anchorPass = extractor.extractSources(
                         videoPath,
                         Uri.parse(videoUri),
@@ -281,7 +381,7 @@ class SyncFingerprintJob(
                         includeVad = false,
                         isCancelled = { !coroutineContext.isActive || isStopped },
                     )
-                    val anchorStarts = starts.filter { it in anchorStart..(anchorStart + anchorSpan + 60.0) }
+                    val anchorStarts = starts.filter { it in (anchorStart - 30.0).coerceAtLeast(0.0)..(anchorStart + anchorSpan + 30.0) }
                     if (anchorPass.silencedetect.size >= 8 && anchorStarts.size >= 8) {
                         val candidate = attemptLock(anchorPass.silencedetect, anchorStarts, "cue-anchor")
                         if (candidate != null && candidate.recall >= 0.65) {
@@ -311,7 +411,7 @@ class SyncFingerprintJob(
                             )
                             AppLog.d(
                                 "SYNC_JOB",
-                                "Stage 0 CUE-ANCHOR FAST LOCKED in <1s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall}"
+                                "Stage 0 CUE-ANCHOR FAST LOCKED in <1.5s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall}"
                             )
                             return@withContext Result.success()
                         }

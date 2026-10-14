@@ -67,7 +67,7 @@ object IntervalAligner {
         cueStarts: List<Double>,
         maxOffsetSec: Double = 120.0,
     ): Alignment? {
-        if (onsets.size < 20 || cueStarts.size < 10) return null
+        if (onsets.size < 12 || cueStarts.size < 10) return null
         val t0 = System.currentTimeMillis()
 
         // 1. Try nominal 1.0 ratio first
@@ -129,7 +129,7 @@ object IntervalAligner {
         stepSec: Double = 150.0,
         splitPenalty: Double = 12.0,
     ): Alignment? {
-        if (onsets.size < 20 || cueStarts.size < 10) return null
+        if (onsets.size < 12 || cueStarts.size < 10) return null
         val t0 = System.currentTimeMillis()
 
         // 1. Global alignment first (fallback to nominal if split peaks reduced margin)

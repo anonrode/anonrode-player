@@ -81,7 +81,7 @@ object SyncBest {
     // ====================================================================
 
     fun find(onsets: List<Double>, cueStarts: List<Double>): Result? {
-        if (onsets.size < 20 || cueStarts.size < 10) return null
+        if (onsets.size < 12 || cueStarts.size < 10) return null
         val on = onsets.sorted().toDoubleArray()
         val cs = cueStarts.sorted().toDoubleArray()
 
@@ -250,7 +250,7 @@ object SyncBest {
     // ====================================================================
 
     private fun findSyncV2(on: DoubleArray, cs: DoubleArray): PlainResult? {
-        if (on.size < 20 || cs.size < 10) return null
+        if (on.size < 12 || cs.size < 10) return null
 
         // 1. coarse grid: alpha step 0.001 over [0.95, 1.05], beta step
         //    0.5 s over [-60, +60]; keep the top-10 by recall (>= 0.25).
@@ -498,7 +498,7 @@ object SyncBest {
 
     /** engine_best.find_wide_best: histogram candidates + ratio seed. */
     private fun findWideBest(on: DoubleArray, cs: DoubleArray): PlainResult? {
-        if (on.size < 20 || cs.size < 10) return null
+        if (on.size < 12 || cs.size < 10) return null
         val kept = coarseCandidates(on, cs)
         // length-ratio alpha seed: tried after the histogram candidates,
         // skipped if it duplicates an existing one.
