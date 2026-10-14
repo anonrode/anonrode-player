@@ -88,7 +88,9 @@ import dev.anonrode.player.core.model.Video
 import dev.anonrode.player.core.ui.theme.PlayerAccentTokens
 import dev.anonrode.player.core.ui.theme.rememberPlayerAccent
 import kotlin.math.abs
+import androidx.compose.ui.text.TextStyle
 
+internal val Tnum = TextStyle(fontFeatureSettings = "tnum")
 /* ── Popup surfaces anchored over the player: the sync popover
  * (-0.1 / +0.1 / RE-SYNC / STYLE grid, plus the auto-sync OFF escape)
  * and the subtitle style dropdown opened by long-pressing the cue.
@@ -136,7 +138,7 @@ internal fun SyncPopover(
                     else "Offset " + (if (offsetMs >= 0) "+" else "") + "%.2fs".format(java.util.Locale.US, offsetMs / 1000f),
                     color = if (!syncEnabled) Color(0xFF94A3B8) else Color(0xFF5B6070),
                     style = MaterialTheme.typography.labelSmall,
-                    fontFeatureSettings = "tnum",
+                    style = Tnum,
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -505,7 +507,7 @@ internal fun PlayerPlaylistDrawer(
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         fontFamily = FontFamily.Monospace,
-                                        fontFeatureSettings = "tnum",
+                                        style = Tnum,
                                     )
                                 }
                             }
@@ -782,7 +784,7 @@ internal fun PlayerSubtitleDrawer(
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace,
-                            fontFeatureSettings = "tnum",
+                            style = Tnum,
                         )
                     }
 
@@ -807,7 +809,7 @@ internal fun PlayerSubtitleDrawer(
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 fontFamily = FontFamily.Monospace,
-                                fontFeatureSettings = "tnum",
+                                style = Tnum,
                             )
                         }
 
@@ -827,7 +829,7 @@ internal fun PlayerSubtitleDrawer(
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 fontFamily = FontFamily.Monospace,
-                                fontFeatureSettings = "tnum",
+                                style = Tnum,
                             )
                         }
                     }
@@ -1233,7 +1235,7 @@ internal fun PlayerSettingsDrawer(
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
-                        fontFeatureSettings = "tnum",
+                        style = Tnum,
                     )
                 }
                 Slider(
@@ -1266,7 +1268,7 @@ internal fun PlayerSettingsDrawer(
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
-                        fontFeatureSettings = "tnum",
+                        style = Tnum,
                     )
                 }
                 Slider(
@@ -1393,7 +1395,7 @@ internal fun PrecisionSpeedCard(
                         fontSize = 24.sp,
                         fontWeight = FontWeight.ExtraBold,
                         fontFamily = FontFamily.Monospace,
-                        fontFeatureSettings = "tnum",
+                        style = Tnum,
                     )
                     Text("✎", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
                 }

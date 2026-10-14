@@ -68,11 +68,13 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.util.UnstableApi
 
+internal val Tnum = TextStyle(fontFeatureSettings = "tnum")
 /* ── Bottom chrome of the player overlay ──────────────────────────────────
  *
  *   ┌──────────────────────────────────────────────────────────────────┐
@@ -272,7 +274,7 @@ internal fun SeekBarRow(
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Start,
-            fontFeatureSettings = "tnum",
+            style = Tnum,
             modifier = Modifier
                 .widthIn(min = PlayerDimens.timeLabelMinW)
                 .clickable(
@@ -420,7 +422,7 @@ internal fun SeekBarRow(
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.End,
-            fontFeatureSettings = "tnum",
+            style = Tnum,
             modifier = Modifier
                 .widthIn(min = PlayerDimens.timeLabelMinW)
                 .clickable(
@@ -478,7 +480,7 @@ private fun ScrubBubble(
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    fontFeatureSettings = "tnum",
+                    style = Tnum,
                 )
             }
         }

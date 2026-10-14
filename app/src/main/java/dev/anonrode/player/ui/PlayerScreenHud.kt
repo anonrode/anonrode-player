@@ -65,12 +65,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
+internal val Tnum = TextStyle(fontFeatureSettings = "tnum")
 /* ── Small overlay surfaces: double-tap flash, gesture HUD pill, buffering
  * spinner, lock badge, A-B chip, Up Next pill, auto-advance countdown,
  * calibration banner and the in-overlay transient toast. Each is rendered
@@ -392,7 +394,7 @@ internal fun VerticalGestureHudPill(
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
-                fontFeatureSettings = "tnum",
+                style = Tnum,
             )
         }
     }
@@ -519,7 +521,7 @@ internal fun DiscreteSpeedScrubHud(
                     fontSize = 12.5.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    fontFeatureSettings = "tnum",
+                    style = Tnum,
                 )
             }
         } else {
@@ -633,7 +635,7 @@ internal fun DiscreteSpeedScrubHud(
                         fontSize = 14.sp,
                         fontWeight = FontWeight.ExtraBold,
                         fontFamily = FontFamily.Monospace,
-                        fontFeatureSettings = "tnum",
+                        style = Tnum,
                     )
                     Text(
                         text = "◀ Slide between milestones · Release to restore ▶",
@@ -845,7 +847,7 @@ internal fun SubSyncStatusHud(
                     color = lockedColor,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    fontFeatureSettings = "tnum",
+                    style = Tnum,
                 )
             } else {
                 Icon(

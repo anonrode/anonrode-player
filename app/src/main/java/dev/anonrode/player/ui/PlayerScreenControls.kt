@@ -93,6 +93,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -100,6 +101,7 @@ import androidx.media3.common.util.UnstableApi
 import kotlin.math.abs
 import kotlinx.coroutines.launch
 /* ── Player controls chrome ────────────────────────────────────────────────
+internal val Tnum = TextStyle(fontFeatureSettings = "tnum")
  *
  *   Top bar (auto-hide)   ‹  Title   [HW] [CC] [Playlist] [⋮]
  *   Ribbon (auto-hide)    elastic shortcut sleeve + chevron expand handle
@@ -694,7 +696,7 @@ internal fun RibbonToolItem(
                     fontWeight = if (isSpeedPill) FontWeight.ExtraBold else FontWeight.Bold,
                     fontFamily = if (isSpeedPill) FontFamily.Monospace else FontFamily.Default,
                     letterSpacing = if (isSpeedPill) (-0.5).sp else 0.sp,
-                    fontFeatureSettings = "tnum",
+                    style = Tnum,
                 )
             }
             if (hasActiveDot) {

@@ -850,7 +850,9 @@ fun PlayerScreen(
             equalizerOn = quick.equalizerOn.value,
             repeatModeLabel = ui.repeatMode.value.name,
             decoderModeLabel = decoderModeLabel,
-            currentVolume = gestures.startVol.floatValue.coerceIn(0f, 1f),
+            currentVolume = (gestures.startVol.intValue /
+                audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat())
+                .coerceIn(0f, 1f),
             currentBrightness = gestures.startBri.floatValue.coerceIn(0f, 1f),
             onAbRepeat = { actions.cycleAbRepeat(); onAbRepeatTap() },
             onNightMode = { actions.toggleNightMode() },
@@ -863,7 +865,8 @@ fun PlayerScreen(
             onCycleRepeat = { actions.cycleRepeatLoopMode() },
             onCycleDecoder = { actions.cycleDecoderMode() },
             onVolumeChange = { v ->
-                gestures.startVol.floatValue = v
+                gestures.startVol.intValue = (v * audioManager
+                    .getStreamMaxVolume(AudioManager.STREAM_MUSIC)).toInt()
                 actions.updateVolumeGesture(0f)
             },
             onBrightnessChange = { b ->

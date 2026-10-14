@@ -874,13 +874,10 @@ fun SettingsScreen(
                                             )
                                             Text(
                                                 when (skin) {
-                                                    Skin.CHARCOAL -> "Deep charcoal with amber accent"
-                                                    Skin.MIDNIGHT -> "Pure OLED black with electric blue"
-                                                    Skin.SLATE -> "Cool slate gray with cyan highlight"
-                                                    Skin.LIGHT -> "Clean crisp paper with slate contrast"
-                                                    Skin.FOREST -> "Deep emerald with sage tones"
+                                                    Skin.COBALT -> "Signal blue over deep charcoal — the default"
                                                     Skin.AMBER -> "Warm dusk amber with golden glow"
-                                                    Skin.CRIMSON -> "Rich wine red with crimson accent"
+                                                    Skin.LIGHT -> "Clean crisp paper with slate contrast"
+                                                    Skin.OBSIDIAN -> "Pure OLED black with emerald accent"
                                                 },
                                                 color = palette.textDim,
                                                 style = MaterialTheme.typography.bodySmall,
