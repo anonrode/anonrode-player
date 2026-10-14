@@ -72,7 +72,6 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
-internal val Tnum = TextStyle(fontFeatureSettings = "tnum")
 /* ── Small overlay surfaces: double-tap flash, gesture HUD pill, buffering
  * spinner, lock badge, A-B chip, Up Next pill, auto-advance countdown,
  * calibration banner and the in-overlay transient toast. Each is rendered

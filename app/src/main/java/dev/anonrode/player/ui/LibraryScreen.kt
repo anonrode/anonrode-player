@@ -106,8 +106,6 @@ import dev.anonrode.player.core.ui.theme.SkinPalette
 import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 import java.util.Locale
 
-internal val Tnum = TextStyle(fontFeatureSettings = "tnum")
-
 /** Watch-time pill on history cards: wall-clock HH:mm. */
 private fun fmtMin(ms: Long): String =
     java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))
@@ -1391,7 +1389,7 @@ private fun ContinueCard(palette: SkinPalette, item: InProgressItem, onClick: ()
                             text = fmtMin(item.positionMs),
                             color = Color.White,
                             style = MaterialTheme.typography.labelSmall.copy(
-                                style = Tnum,
+                                fontFeatureSettings = "tnum",
                                 fontWeight = FontWeight.Bold,
                             ),
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -1526,7 +1524,7 @@ private fun SeriesHeroCard(
                         text = "$progressPct%",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
-                            style = Tnum,
+                            fontFeatureSettings = "tnum",
                         ),
                         color = palette.accent,
                     )

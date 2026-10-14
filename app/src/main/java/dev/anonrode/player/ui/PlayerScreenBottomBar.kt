@@ -74,7 +74,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.util.UnstableApi
 
-internal val Tnum = TextStyle(fontFeatureSettings = "tnum")
 /* ── Bottom chrome of the player overlay ──────────────────────────────────
  *
  *   ┌──────────────────────────────────────────────────────────────────┐

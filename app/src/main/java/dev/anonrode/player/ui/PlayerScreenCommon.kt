@@ -3,6 +3,7 @@ package dev.anonrode.player.ui
 import android.view.HapticFeedbackConstants
 import android.view.View
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.media3.ui.AspectRatioFrameLayout
 
 /**
@@ -29,6 +30,9 @@ fun View.haptic(
 // Overlay dark backgrounds and dividers
 internal val OverlayPanelBg = Color(0xFF1C1C24)
 internal val OverlayMenuDivider = Color(0xFF33333B)
+
+/** Tabular-numeral text style for every monospaced readout. */
+internal val Tnum = TextStyle(fontFeatureSettings = "tnum")
 
 /**
  * A-B repeat region marks on the seekbar. Amber on purpose: the played

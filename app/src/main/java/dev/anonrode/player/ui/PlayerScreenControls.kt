@@ -101,7 +101,6 @@ import androidx.media3.common.util.UnstableApi
 import kotlin.math.abs
 import kotlinx.coroutines.launch
 /* ── Player controls chrome ────────────────────────────────────────────────
-internal val Tnum = TextStyle(fontFeatureSettings = "tnum")
  *
  *   Top bar (auto-hide)   ‹  Title   [HW] [CC] [Playlist] [⋮]
  *   Ribbon (auto-hide)    elastic shortcut sleeve + chevron expand handle

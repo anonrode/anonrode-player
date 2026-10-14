@@ -90,7 +90,6 @@ import dev.anonrode.player.core.ui.theme.rememberPlayerAccent
 import kotlin.math.abs
 import androidx.compose.ui.text.TextStyle
 
-internal val Tnum = TextStyle(fontFeatureSettings = "tnum")
 /* ── Popup surfaces anchored over the player: the sync popover
  * (-0.1 / +0.1 / RE-SYNC / STYLE grid, plus the auto-sync OFF escape)
  * and the subtitle style dropdown opened by long-pressing the cue.
@@ -137,8 +136,7 @@ internal fun SyncPopover(
                     text = if (!syncEnabled) "Off"
                     else "Offset " + (if (offsetMs >= 0) "+" else "") + "%.2fs".format(java.util.Locale.US, offsetMs / 1000f),
                     color = if (!syncEnabled) Color(0xFF94A3B8) else Color(0xFF5B6070),
-                    style = MaterialTheme.typography.labelSmall,
-                    style = Tnum,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
