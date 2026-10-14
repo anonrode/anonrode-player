@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
@@ -228,8 +229,10 @@ internal fun AutoHideControlsEffect(
 
 /**
  * Tech sub-line truth source (hub 1.3). Publishes the LIVE video geometry —
- * coded width/height from [Player.getVideoSize], frame rate from
- * [Player.getVideoFormat] — into the states the top bar's tech sub-line
+ * coded width/height from [Player.getVideoSize], frame rate from the
+ * SELECTED video track's format (the Player interface has no direct video
+ * [androidx.media3.common.Format] accessor — [Player.getCurrentTracks] is
+ * the supported path) — into the states the top bar's tech sub-line
  * reads, so the line under the filename states real engine values or
  * nothing at all (rule 11: no fake "1080p · 24fps"). A segment whose source
  * has no signal (size 0, unparsed frame rate) reads 0 and the UI omits it.
@@ -252,9 +255,21 @@ internal fun VideoTechLineEffect(
             val size = player.videoSize
             videoWidth.intValue = size.width
             videoHeight.intValue = size.height
+            // Frame rate comes from the selected video track's format.
             // Format.frameRate is NO_VALUE (-1) when the container does not
             // declare an average frame rate — zero means "omit the segment".
-            val frameRate = player.videoFormat?.frameRate ?: -1f
+            val videoGroup = player.currentTracks.groups.firstOrNull {
+                it.type == C.TRACK_TYPE_VIDEO && it.isSelected
+            }
+            var frameRate = -1f
+            if (videoGroup != null) {
+                for (i in 0 until videoGroup.length) {
+                    if (videoGroup.isTrackSelected(i)) {
+                        frameRate = videoGroup.getTrackFormat(i).frameRate
+                        break
+                    }
+                }
+            }
             videoFps.intValue = if (frameRate > 0f) frameRate.roundToInt() else 0
         }
         publish()
