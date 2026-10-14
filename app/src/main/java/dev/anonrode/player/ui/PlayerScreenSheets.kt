@@ -3,6 +3,9 @@ package dev.anonrode.player.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,7 +44,6 @@ import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FolderOpen
@@ -67,10 +70,15 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -89,6 +97,10 @@ import dev.anonrode.player.core.ui.theme.PlayerAccentTokens
 import dev.anonrode.player.core.ui.theme.rememberPlayerAccent
 import kotlin.math.abs
 import androidx.compose.ui.text.TextStyle
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /* ── Popup surfaces anchored over the player: the sync popover
  * (-0.1 / +0.1 / RE-SYNC / STYLE grid, plus the auto-sync OFF escape)
@@ -139,9 +151,11 @@ internal fun SyncPopover(
                     style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                 )
             }
+            // ±0.1 steppers — same hold-repeat law as the drawer's sync row
+            // (hub 4.1: popover −0.1/+0.1 hold-repeat).
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SyncPopoverButton("-0.1s", false, accent, Modifier.weight(1f)) { onNudge(-100) }
-                SyncPopoverButton("+0.1s", false, accent, Modifier.weight(1f)) { onNudge(100) }
+                SyncPopoverButton("-0.1s", false, accent, Modifier.weight(1f), onStep = { onNudge(-100) })
+                SyncPopoverButton("+0.1s", false, accent, Modifier.weight(1f), onStep = { onNudge(100) })
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SyncPopoverButton("⌖ RE-SYNC", syncEnabled, accent, Modifier.weight(1f)) { onResync() }
@@ -168,20 +182,40 @@ private fun SyncPopoverButton(
     teal: Boolean,
     accent: Color,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit,
+    /** Non-null = the button steps a value; it then follows the shared
+     *  hold-repeat law instead of plain tap (see syncStepHoldRepeat). */
+    onStep: (() -> Unit)? = null,
+    onClick: () -> Unit = {},
 ) {
+    var held by remember { mutableStateOf(false) }
+    val scope = if (onStep != null) rememberCoroutineScope() else null
+
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (teal) accent.copy(alpha = 0.12f) else Color(0xFF171A22)
+                when {
+                    held -> accent.copy(alpha = 0.14f)
+                    teal -> accent.copy(alpha = 0.12f)
+                    else -> Color(0xFF171A22)
+                }
             )
             .border(
                 1.dp,
-                if (teal) accent.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.10f),
+                when {
+                    held -> accent.copy(alpha = 0.55f)
+                    teal -> accent.copy(alpha = 0.55f)
+                    else -> Color.White.copy(alpha = 0.10f)
+                },
                 RoundedCornerShape(12.dp),
             )
-            .clickable(onClick = onClick)
+            .then(
+                if (onStep != null && scope != null) {
+                    Modifier.syncStepHoldRepeat(scope, onStep) { held = it }
+                } else {
+                    Modifier.clickable(onClick = onClick)
+                }
+            )
             .padding(vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -550,9 +584,111 @@ internal fun PlayerPlaylistDrawer(
 
 /**
  * Tier 2: Subtitle Drawer (opened via CC tap).
- * Displays master toggle, current track, Sync Subtitle calibration (first!),
- * open local file, online download, and style tuning.
+ * Displays master toggle, current track, SYNC calibration first
+ * (±0.1s hold-repeat steppers, ±5s slider, reset, forced re-sync),
+ * then Open File and subtitle style tuning.
  */
+
+/* Hold-repeat law for the ±0.1s sync steppers (design hub 6.3 + 4.1, master
+ * spec §5 "Manual: −0.1/+0.1 steppers"): one nudge fires on touch-down;
+ * holding past 400 ms starts repeating the nudge every 150 ms until release
+ * or cancel. */
+private const val SYNC_STEP_HOLD_DELAY_MS = 400L
+private const val SYNC_STEP_REPEAT_MS = 150L
+
+/**
+ * Shared hold-repeat press law for every ±0.1s sync stepper (drawer discs and
+ * popover step buttons): fires [onStep] once per tap; while pressed past
+ * [SYNC_STEP_HOLD_DELAY_MS] it repeats [onStep] every [SYNC_STEP_REPEAT_MS].
+ * The repeat job always dies on pointer up, gesture cancel, or the composable
+ * leaving composition (awaitRelease unwinds → finally cancels).
+ */
+private fun Modifier.syncStepHoldRepeat(
+    scope: CoroutineScope,
+    onStep: () -> Unit,
+    onHeldChange: (Boolean) -> Unit = {},
+): Modifier = pointerInput(Unit) {
+    detectTapGestures(
+        onPress = {
+            onHeldChange(true)
+            onStep()
+            val repeatJob = scope.launch {
+                delay(SYNC_STEP_HOLD_DELAY_MS)
+                while (isActive) {
+                    onStep()
+                    delay(SYNC_STEP_REPEAT_MS)
+                }
+            }
+            try {
+                awaitRelease()
+            } finally {
+                // Stop on pointer up AND on gesture cancel.
+                repeatJob.cancel()
+                onHeldChange(false)
+            }
+        },
+    )
+}
+
+/**
+ * One round ±0.1s sync stepper: a 48dp disc (ribbon disc anatomy) with a
+ * 9sp tnum label underneath, following the shared hold-repeat law.
+ */
+@Composable
+private fun SyncStepDisc(
+    glyph: String,
+    label: String,
+    accentColor: Color,
+    onStep: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var held by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val pressScale by animateFloatAsState(
+        targetValue = if (held) 0.96f else 1f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
+        label = "syncStepPressScale",
+    )
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                // Press law: 0.96 scale spring with slight overshoot.
+                .scale(pressScale)
+                .clip(CircleShape)
+                .background(if (held) accentColor.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.06f))
+                .border(
+                    1.dp,
+                    if (held) accentColor.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.12f),
+                    CircleShape,
+                )
+                .syncStepHoldRepeat(scope, onStep) { held = it },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = glyph,
+                color = Color(0xFFE2E8F0),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = label,
+            color = Color(0xFF94A3B8),
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Medium,
+            fontFamily = FontFamily.Monospace,
+            style = Tnum,
+        )
+    }
+}
+
 @Composable
 internal fun PlayerSubtitleDrawer(
     visible: Boolean,
@@ -565,7 +701,6 @@ internal fun PlayerSubtitleDrawer(
     onResetOffset: () -> Unit,
     onResync: () -> Unit,
     onOpenLocalFile: () -> Unit,
-    onOnlineDownload: () -> Unit,
     onSubtitleStyle: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
@@ -734,16 +869,20 @@ internal fun PlayerSubtitleDrawer(
                 }
             }
 
-            // Section 2: SUBTITLE ACTIONS (Sync Subtitle FIRST)
+            // Section 2: SYNC (the law: sync section comes FIRST, before any
+            // file/open or style actions — design hub 6.2/7.4)
             Text(
-                text = "SUBTITLE ACTIONS",
+                text = "SYNC",
                 color = Color(0xFF64748B),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.8.sp,
             )
 
-            // 1. Sync Subtitle Card (Syncster audio calibration)
+            // Sync Subtitle Card (audio-fingerprint calibration). The live
+            // offset readout is the same host wiring the dock HUD reads
+            // (PlayerScreen passes [offsetMs] from liveOffsetMs) — one
+            // source of truth, never a second one.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -777,7 +916,7 @@ internal fun PlayerSubtitleDrawer(
                         val sign = if (offsetMs > 0L) "+" else if (offsetMs < 0L) "-" else ""
                         val offsetSec = abs(offsetMs) / 1000f
                         Text(
-                            text = "${sign}%.3fs".format(offsetSec),
+                            text = "${sign}%.2fs".format(offsetSec),
                             color = if (offsetMs != 0L) accent.primary else Color(0xFF94A3B8),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
@@ -786,50 +925,26 @@ internal fun PlayerSubtitleDrawer(
                         )
                     }
 
-                    // Steppers [-0.1s] / [+0.1s]
+                    // Round steppers [-0.1s] / [+0.1s] — one nudge per tap,
+                    // hold 400ms then repeat every 150ms until release
+                    // (see SyncStepDisc). Manual offset stays the user's
+                    // absolute authority; the engine itself is untouched.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally),
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(36.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.White.copy(alpha = 0.06f))
-                                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
-                                .clickable { onNudge(-100L) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "− 0.1s",
-                                color = Color(0xFFE2E8F0),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                fontFamily = FontFamily.Monospace,
-                                style = Tnum,
-                            )
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(36.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.White.copy(alpha = 0.06f))
-                                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
-                                .clickable { onNudge(100L) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "+ 0.1s",
-                                color = Color(0xFFE2E8F0),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                fontFamily = FontFamily.Monospace,
-                                style = Tnum,
-                            )
-                        }
+                        SyncStepDisc(
+                            glyph = "−",
+                            label = "−0.1s",
+                            accentColor = accent.primary,
+                            onStep = { onNudge(-100L) },
+                        )
+                        SyncStepDisc(
+                            glyph = "+",
+                            label = "+0.1s",
+                            accentColor = accent.primary,
+                            onStep = { onNudge(100L) },
+                        )
                     }
 
                     // Continuous Slider (-5.0s to +5.0s)
@@ -889,7 +1004,16 @@ internal fun PlayerSubtitleDrawer(
                 }
             }
 
-            // 2. Open Local File
+            // Section 3: OPEN & STYLE (after the SYNC section, per hub 6.2)
+            Text(
+                text = "OPEN & STYLE",
+                color = Color(0xFF64748B),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp,
+            )
+
+            // Open Local File
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -916,34 +1040,7 @@ internal fun PlayerSubtitleDrawer(
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color(0xFF64748B), modifier = Modifier.size(16.dp))
             }
 
-            // 3. Online Download
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.04f))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                    .clickable {
-                        onOnlineDownload()
-                        onDismiss()
-                    }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.CloudDownload, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text("Online Download", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Search OpenSubtitles repository", color = Color(0xFF64748B), fontSize = 10.5.sp)
-                    }
-                }
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color(0xFF64748B), modifier = Modifier.size(16.dp))
-            }
-
-            // 4. Subtitle Style & Font
+            // Subtitle Style & Font
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

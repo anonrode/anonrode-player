@@ -664,7 +664,7 @@ fun SettingsScreen(
                                 palette = palette,
                                 icon = Icons.Filled.Translate,
                                 title = "Subtitle language",
-                                subtitle = "Preferred language for online search",
+                                subtitle = "Preferred language when picking tracks",
                                 trailing = {
                                     ValueText(
                                         palette = palette,

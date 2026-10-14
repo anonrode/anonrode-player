@@ -231,8 +231,8 @@ fun PlayerScreen(
      */
     onSubtitleStyleChanged: (SubtitleStyle) -> Unit = {},
     /**
-     * Open the subtitle source picker (embedded tracks / sidecar files /
-     * downloaded / online search) — Control Center Subtitles section.
+     * Open the subtitle source picker (embedded tracks / sidecar files) —
+     * Control Center Subtitles section.
      */
     onOpenSubtitlePicker: () -> Unit = {},
     /** Label of the active subtitle source choice ("" = none) — renders
@@ -277,7 +277,7 @@ fun PlayerScreen(
      *  making the toggle blink out between cues. */
     hasSubtitleTrack: Boolean = false,
     /** HUD auto-hide delay while playing (ms). */
-    autoHideControlsMs: Long = 3500L,
+    autoHideControlsMs: Long = 5500L,
     /** Sleep timer armed from the settings screen (0=off, -1=end of episode). */
     initialSleepTimerMinutes: Int = 0,
     /** Seeks bigger than this use fast (keyframe) seeking; smaller = exact. */
@@ -407,7 +407,7 @@ fun PlayerScreen(
     // stayed locked out until the screen was left and re-entered.
     val actions = remember(
         livePlayer, engine, ui, hud, sleep, gestures, quick, captureScope,
-        decoderModeLabel, isRebuildingDecoder,
+        decoderModeLabel, isRebuildingDecoder, seekIncrementSec,
     ) {
         PlayerScreenActions(
             context = context,
@@ -833,7 +833,6 @@ fun PlayerScreen(
             onResetOffset = { actions.nudgeSubtitle(-liveOffsetMs) },
             onResync = { actions.resyncNow() },
             onOpenLocalFile = onOpenSubtitlePicker,
-            onOnlineDownload = onOpenSubtitlePicker,
             onSubtitleStyle = { actions.openStyleTray() },
             onDismiss = { actions.closeSubtitleDrawer() },
         )
@@ -904,9 +903,9 @@ fun PlayerScreen(
                 onAbRepeatTap()
             },
             onSkipLengthCycle = {
-                // Same four steps the Settings screen offers. Stays open so
+                // Same ladder as the Settings screen. Stays open so
                 // the pill's value visibly advances.
-                val steps = listOf(5, 10, 15, 30)
+                val steps = listOf(5, 10, 15, 30, 60)
                 val next = steps.firstOrNull { it > seekIncrementSec } ?: steps.first()
                 onSkipLengthChanged(next)
             },

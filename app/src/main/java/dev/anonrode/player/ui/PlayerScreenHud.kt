@@ -745,9 +745,21 @@ internal fun CameraFlashOverlay(
 }
 
 /**
- * Visible live subtitle sync mini-pill HUD requested at 03:40 of screen recording.
- * Non-intrusively shows [ ⟳ Syncing… ] while correlating, and [ ✓ Synced +0.12s ]
- * when locked. Clicking it triggers the sync detail popover.
+ * Visible live subtitle sync mini-pill HUD — the heartbeat status (hub 4.1).
+ * Exactly three honest states, each read straight off the PlayerScreen wiring
+ * (quick.subSyncEnabled / quick.subSyncRunning(=subSyncRunning || isCalibrating)
+ * / quick.isSyncLocked):
+ *   [ ⟳ Syncing… ]          sync on, not locked — correlating (animated)
+ *   [ ✓ Synced +0.12s ]     verified lock, tnum live offset
+ *   [ ✦ Sync Off ]          sync disabled
+ * The old fourth "Sub Sync" idle label was a vague pill and is gone: with sync
+ * enabled and no verified lock the engine's mandate is to be running (AGENTS
+ * rule 12), so that state IS "Syncing…". [isSyncRunning] (=
+ * subSyncRunning || isCalibrating in the wiring) stays in the signature for
+ * the dock's call site but is folded into that unlocked "Syncing…" state —
+ * the lock, not the in-flight flag, is the senior authority. Tap opens the
+ * sync popover; long-press forces a full re-sync pass (same resyncNow the
+ * popover's RE-SYNC row uses).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -820,19 +832,9 @@ internal fun SubSyncStatusHud(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
-            } else if (isSyncRunning) {
-                CircularProgressIndicator(
-                    color = accent,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(12.dp),
-                )
-                Text(
-                    text = "Syncing…",
-                    color = Color.White.copy(alpha = 0.90f),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
             } else if (isSyncLocked) {
+                // Verified lock is the senior authority — it outranks a
+                // concurrent background re-pass (AGENTS rule 12).
                 Icon(
                     imageVector = Icons.Filled.Check,
                     contentDescription = "Synced",
@@ -849,15 +851,15 @@ internal fun SubSyncStatusHud(
                     style = Tnum,
                 )
             } else {
-                Icon(
-                    imageVector = Icons.Filled.AutoAwesome,
-                    contentDescription = "Sub Sync",
-                    tint = accent,
-                    modifier = Modifier.size(13.dp),
+                // Sync on, no lock yet: correlating (animated spinner).
+                CircularProgressIndicator(
+                    color = accent,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(12.dp),
                 )
                 Text(
-                    text = "Sub Sync",
-                    color = accent,
+                    text = "Syncing…",
+                    color = Color.White.copy(alpha = 0.90f),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
