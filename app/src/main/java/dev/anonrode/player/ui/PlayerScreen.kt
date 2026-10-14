@@ -613,6 +613,15 @@ fun PlayerScreen(
     FirstFramePosterEffect(mediaId, context, ui)
     // v0.7.1: throttled frame previews for the scrub bubble.
     ScrubPreviewEffect(mediaId, context, ui, gestures)
+    // ── Tech sub-line live sources (hub 1.3): real video geometry fed to the
+    //    top bar's truth line under the filename. The decoder label flows in
+    //    through actions.decoderModeLabel and the sync offset via the host's
+    //    liveOffsetMs (the same value the dock's sync chip reads); only
+    //    resolution/fps need a listener — see VideoTechLineEffect.
+    val videoLineWidth = remember { mutableIntStateOf(0) }
+    val videoLineHeight = remember { mutableIntStateOf(0) }
+    val videoLineFps = remember { mutableIntStateOf(0) }
+    VideoTechLineEffect(livePlayer, videoLineWidth, videoLineHeight, videoLineFps)
     AbRepeatEffect(
         abStartMs = ui.abStartMs.value,
         abEndMs = ui.abEndMs.value,
@@ -798,7 +807,9 @@ fun PlayerScreen(
             isPlaying = ui.isPlaying.value,
             hasPreviousEpisode = hasPreviousEpisode,
             hasNextEpisode = hasNextEpisode,
-            seekIncrementSec = seekIncrementSec,
+            videoWidth = videoLineWidth.intValue,
+            videoHeight = videoLineHeight.intValue,
+            videoFps = videoLineFps.intValue,
             hasSubtitleTrack = hasSubtitleTrack,
             liveOffsetMs = liveOffsetMs,
             actions = actions,

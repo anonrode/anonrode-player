@@ -1,8 +1,11 @@
 package dev.anonrode.player.ui
 
 import android.content.res.Configuration
+import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -13,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -63,9 +67,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
@@ -80,15 +87,16 @@ import androidx.media3.common.util.UnstableApi
  *   │ [⟳ Synced +0.06s]                sync pill (state-gated)         │
  *   │ 04:12 ━━━━━━●━━━━━━━━━  18:30   seek row (lives with the chrome) │
  *   ├──────────────────────────────────────────────────────────────────┤
- *   │ [🔒]     ⏮   ▶(64)   ⏭     [FIT] [⛶]   transport (auto-hide)   │
+ *   │ [🔒]  ⏮  |◀◀  ▶(64)  ▶▶|  ⏭   [FIT] [⛶]  transport (auto-hide)   │
  *   └──────────────────────────────────────────────────────────────────┘
  *
  * ONE layout at every width and ZERO reordering (was: a 540dp two-branch
  * layout whose narrow branch reordered the controls — muscle memory
  * differing by device width is a UX bug — and whose wide branch overflowed
- * portrait phones in v0.7.1). Left wing: Lock; center: prev / PLAY / next;
- * right wing: aspect (tap cycles, long-press = direct pick) and
- * fullscreen/rotate.
+ * portrait phones in v0.7.1). Left wing: Lock; center: prev / ±step seek
+ * chips (hub 4.6 — the SAME configurable step the double-tap wave uses,
+ * read from ui.seekStepSec) / PLAY / next; right wing: aspect (tap cycles,
+ * long-press = direct pick) and fullscreen/rotate.
  *
  * The seek row lives for the whole chrome, so the scrub bubble + its live
  * frame preview never detach mid-gesture. The sync pill above is
@@ -121,7 +129,6 @@ internal fun PlayerScreenBottomBar(
     isPlaying: Boolean,
     hasPreviousEpisode: Boolean,
     hasNextEpisode: Boolean,
-    seekIncrementSec: Int,
     /** Signed live subtitle offset — kept for signature compatibility. */
     liveOffsetMs: Long = 0L,
     /** Media has subtitle tracks — kept for signature compatibility. */
@@ -216,15 +223,18 @@ internal fun PlayerScreenBottomBar(
                 TransportRow(
                     accent = accent,
                     isPlaying = isPlaying,
-                    seekIncrementSec = seekIncrementSec,
                     hasPreviousEpisode = hasPreviousEpisode,
                     hasNextEpisode = hasNextEpisode,
                     onPlayPrevious = onPlayPrevious,
                     onPlayNext = onPlayNext,
                     actions = actions,
                     onPlayPause = { actions.togglePlayPause() },
-                    onSeekBack = { actions.seekDelta(-seekIncrementSec) },
-                    onSeekForward = { actions.seekDelta(seekIncrementSec) },
+                    // Hub 4.6 single-source seek step: the chips and the
+                    // double-tap wave (PlayerScreenGestures) BOTH call
+                    // actions.seekDelta(±ui.seekStepSec.intValue) — one
+                    // shared, persisted step, never two sources of truth.
+                    onSeekBack = { actions.seekDelta(-actions.ui.seekStepSec.intValue) },
+                    onSeekForward = { actions.seekDelta(actions.ui.seekStepSec.intValue) },
                 )
             }
         }
@@ -304,7 +314,11 @@ internal fun SeekBarRow(
             // ── the three-part painted track, vertically centered in the
             //    same 32dp band the slider occupies. We add 7dp horizontal padding
             //    to match the 14dp slider thumb radius (7dp) so the track start and
-            //    end mathematically align 1:1 with the center of the thumb disc. ──
+            //    end mathematically align 1:1 with the center of the thumb disc.
+            //    Hub 4.2 layer law, in DRAW order: track white 22% → buffered
+            //    white 45% (visible wherever it runs ahead of the played tip —
+            //    it is never coerced up to the played fraction) → played accent.
+            //    3dp heights per the approved mockup. ──
             Box(
                 modifier = Modifier
                     .matchParentSize()
@@ -315,7 +329,7 @@ internal fun SeekBarRow(
                     Modifier
                         .align(Alignment.CenterStart)
                         .fillMaxWidth()
-                        .height(4.dp)
+                        .height(3.dp)
                         .clip(CircleShape)
                         .background(Color.White.copy(alpha = 0.22f))
                 )
@@ -323,7 +337,7 @@ internal fun SeekBarRow(
                     Modifier
                         .align(Alignment.CenterStart)
                         .fillMaxWidth(bufFrac)
-                        .height(4.dp)
+                        .height(3.dp)
                         .clip(CircleShape)
                         .background(Color.White.copy(alpha = 0.45f))
                 )
@@ -331,7 +345,7 @@ internal fun SeekBarRow(
                     Modifier
                         .align(Alignment.CenterStart)
                         .fillMaxWidth(posFrac)
-                        .height(4.dp)
+                        .height(3.dp)
                         .clip(CircleShape)
                         .background(accent)
                 )
@@ -379,13 +393,25 @@ internal fun SeekBarRow(
                 },
                 valueRange = 0f..dur,
                 thumb = {
+                    // Hub 4.2 thumb law: 14dp WHITE knob with a soft accent
+                    // glow — the mockup's
+                    // `box-shadow: 0 0 0 4px accent-dim, 0 1px 4px black`.
                     Box(
-                        modifier = Modifier
-                            .size(14.dp)
-                            .shadow(2.dp, CircleShape)
-                            .background(accent, CircleShape)
-                            .border(1.5.dp, Color.White, CircleShape)
-                    )
+                        modifier = Modifier.size(20.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(20.dp)
+                                .background(accent.copy(alpha = 0.22f), CircleShape)
+                        )
+                        Box(
+                            Modifier
+                                .size(14.dp)
+                                .shadow(2.dp, CircleShape)
+                                .background(Color.White, CircleShape)
+                        )
+                    }
                 },
                 // The painted Boxes above are the visible track; the M3
                 // track goes transparent so only the thumb + drag surface
@@ -486,12 +512,11 @@ private fun ScrubBubble(
     }
 }
 
-/* ── Transport row — faithful reference: [🔒]  [|‹] [▶/⏸] [›|]  [◫] [⤢] ── */
+/* ── Transport row — [🔒]  ⏮  [◀◀ Ns] [▶/⏸ hero] [Ns ▶▶]  ⏭  [◫] [⤢] ── */
 @Composable
 private fun TransportRow(
     accent: Color,
     isPlaying: Boolean,
-    seekIncrementSec: Int,
     hasPreviousEpisode: Boolean,
     hasNextEpisode: Boolean,
     onPlayPrevious: () -> Unit,
@@ -519,10 +544,11 @@ private fun TransportRow(
             )
         }
 
-        // Center cluster: Primary Transport (⏮ Prev, Hero ▶/⏸, ⏭ Next) with comfortable fluid spacing
+        // Center cluster: Primary Transport — ⏮ Prev, ±step seek chips
+        // flanking the hero (hub 4.6), ⏭ Next, on one shared fluid rhythm.
         Row(
             horizontalArrangement = Arrangement.spacedBy(
-                fluid(min = 18.dp, max = 32.dp),
+                fluid(min = 12.dp, max = 24.dp),
                 Alignment.CenterHorizontally,
             ),
             verticalAlignment = Alignment.CenterVertically,
@@ -534,7 +560,21 @@ private fun TransportRow(
                 enabled = hasPreviousEpisode,
                 onClick = onPlayPrevious,
             )
+            SeekChip(
+                icon = Icons.Filled.FastRewind,
+                seconds = actions.ui.seekStepSec.intValue,
+                accent = accent,
+                contentDescription = "Seek back",
+                onClick = onSeekBack,
+            )
             BigPlayPauseButton(isPlaying = isPlaying, accent = accent, onClick = onPlayPause)
+            SeekChip(
+                icon = Icons.Filled.FastForward,
+                seconds = actions.ui.seekStepSec.intValue,
+                accent = accent,
+                contentDescription = "Seek forward",
+                onClick = onSeekForward,
+            )
             ControlChip(
                 icon = Icons.Filled.SkipNext,
                 contentDescription = "Next video",
@@ -601,5 +641,66 @@ private fun TransportRow(
                 onClick = { actions.cycleRotateMode() },
             )
         }
+    }
+}
+
+/* ── ±step seek chip (hub 4.6 / master gap 2) — flanks the hero play
+ *    button. Mockup `.seekchip`: transparent chrome, a replay-style
+ *    fast-rewind/forward glyph over a dim tnum step label ("10s"), 44×48dp
+ *    cell, press scale 0.96 (design-law press, never a toast, no blur box).
+ *    The tap is wired to the SAME actions.seekDelta the double-tap wave
+ *    uses, with the SAME shared ui.seekStepSec value — one action, one
+ *    step, two entry points.
+ * ------------------------------------------------------------------------- */
+@Composable
+private fun SeekChip(
+    icon: ImageVector,
+    seconds: Int,
+    accent: Color,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    val view = LocalView.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.96f else 1f,
+        animationSpec = spring(
+            dampingRatio = 0.55f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "seekChipPress",
+    )
+    Column(
+        modifier = Modifier
+            .size(width = 44.dp, height = 48.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(bounded = false, color = accent),
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    onClick()
+                },
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = Color.White,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.height(1.dp))
+        Text(
+            text = "${seconds}s",
+            color = Color.White.copy(alpha = 0.60f),
+            fontSize = 9.sp,
+            style = Tnum,
+        )
     }
 }

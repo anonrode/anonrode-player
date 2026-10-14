@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -21,10 +22,12 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import dev.anonrode.player.PlayerPrefs
 import dev.anonrode.player.audio.SubtitlePosition
 import dev.anonrode.player.core.media.log.AppLog
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -219,6 +222,58 @@ internal fun AutoHideControlsEffect(
             while (extraStayAwake()) delay(100)
             delay(autoHideControlsMs)
             onHide()
+        }
+    }
+}
+
+/**
+ * Tech sub-line truth source (hub 1.3). Publishes the LIVE video geometry —
+ * coded width/height from [Player.getVideoSize], frame rate from
+ * [Player.getVideoFormat] — into the states the top bar's tech sub-line
+ * reads, so the line under the filename states real engine values or
+ * nothing at all (rule 11: no fake "1080p · 24fps"). A segment whose source
+ * has no signal (size 0, unparsed frame rate) reads 0 and the UI omits it.
+ *
+ * Published once on attach, on every [Player.Listener.onVideoSizeChanged]
+ * (mid-stream size/crop changes) and on every READY transition (a fresh
+ * media item / episode switch fills the track format there). Keyed on the
+ * player, so a decoder swap re-seeds automatically.
+ */
+@UnstableApi
+@Composable
+internal fun VideoTechLineEffect(
+    player: Player,
+    videoWidth: MutableIntState,
+    videoHeight: MutableIntState,
+    videoFps: MutableIntState,
+) {
+    DisposableEffect(player) {
+        fun publish() {
+            val size = player.videoSize
+            videoWidth.intValue = size.width
+            videoHeight.intValue = size.height
+            // Format.frameRate is NO_VALUE (-1) when the container does not
+            // declare an average frame rate — zero means "omit the segment".
+            val frameRate = player.videoFormat?.frameRate ?: -1f
+            videoFps.intValue = if (frameRate > 0f) frameRate.roundToInt() else 0
+        }
+        publish()
+        val l = object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                publish()
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) publish()
+            }
+        }
+        player.addListener(l)
+        onDispose {
+            try {
+                player.removeListener(l)
+            } catch (_: Throwable) {
+                // Player already released — nothing left to detach.
+            }
         }
     }
 }

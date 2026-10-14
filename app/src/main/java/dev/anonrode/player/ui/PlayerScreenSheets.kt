@@ -1,6 +1,7 @@
 package dev.anonrode.player.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.Spring
@@ -80,8 +81,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -286,6 +290,24 @@ private fun formatDuration(durationMs: Long): String {
 }
 
 /**
+ * Drawer swipe-dismiss law (hub 7.1, master gap 1 / drawer-motion spec):
+ * the panel follows a rightward drag with the finger, and the release
+ * dismisses when displacement exceeds [DRAWER_DISMISS_DISPLACEMENT_DP]
+ * (72dp) OR release velocity exceeds [DRAWER_DISMISS_VELOCITY_DPS] (800dp/s);
+ * anything gentler springs back (0.85 damping ≈ the specified slight
+ * overshoot, StiffnessMediumLow ≈ the 400ms feel). The scrim stays under
+ * the panel for the whole gesture; scrim tap-out and the header close
+ * button keep dismissing exactly as before.
+ */
+private const val DRAWER_DISMISS_DISPLACEMENT_DP = 72f
+
+/** Release velocity (dp/s) above which the swipe counts as a dismiss. */
+private const val DRAWER_DISMISS_VELOCITY_DPS = 800f
+
+/** Max panel width — dragging past it guarantees a full off-screen exit. */
+private const val DRAWER_PANEL_MAX_WIDTH_DP = 380f
+
+/**
  * Common Right Slide-In Drawer Shell with buttery cubic-bezier physics,
  * velocity-aware drag dismissal, scrim backdrop, and zero-blur cinema glass.
  */
@@ -304,7 +326,7 @@ internal fun PlayerSlideInDrawer(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // Scrim backdrop
+        // Scrim backdrop — never moves during drag; tap-out dismisses.
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -335,35 +357,95 @@ internal fun PlayerSlideInDrawer(
             ) + fadeOut(animationSpec = tween(140)),
             modifier = Modifier.align(Alignment.CenterEnd)
         ) {
+            // ── Drawer chassis (hub 7.1): velocity-aware swipe dismissal.
+            //    The drawer slides from the right edge, so dismissal runs in
+            //    the +x direction — the same direction its slide-IN uses
+            //    (slideInHorizontally { it }), i.e. the motion is consistent
+            //    with the existing container (which is not RTL-mirrored).
+            val density = LocalDensity.current
+            val scope = rememberCoroutineScope()
+            val dragX = remember { Animatable(0f) }
+            val velocityTracker = remember { VelocityTracker() }
+            val springBackSpec = spring<Float>(
+                dampingRatio = 0.85f,
+                stiffness = Spring.StiffnessMediumLow,
+            )
+            val dismissThresholdPx = with(density) { DRAWER_DISMISS_DISPLACEMENT_DP.dp.toPx() }
+            val dismissVelocityPx = with(density) { DRAWER_DISMISS_VELOCITY_DPS.dp.toPx() }
+            val panelFullOutPx = with(density) { DRAWER_PANEL_MAX_WIDTH_DP.dp.toPx() }
+
             Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .widthIn(min = 320.dp, max = 380.dp)
-                    .clip(RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
-                    .background(Color(0xFF0C1017).copy(alpha = 0.98f))
-                    .border(
-                        1.dp,
-                        Color.White.copy(alpha = 0.10f),
-                        RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp)
-                    )
-                    .pointerInput(Unit) {
-                        detectHorizontalDragGestures { change, dragAmount ->
-                            if (dragAmount > 20f) {
+                modifier = Modifier.graphicsLayer { translationX = dragX.value }
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .widthIn(min = 320.dp, max = 380.dp)
+                        .clip(RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
+                        .background(Color(0xFF0C1017).copy(alpha = 0.98f))
+                        .border(
+                            1.dp,
+                            Color.White.copy(alpha = 0.10f),
+                            RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp)
+                        )
+                        .pointerInput(Unit) {
+                            detectHorizontalDragGestures(
+                                onDragStart = { velocityTracker.resetTracking() },
+                                onDragEnd = {
+                                    val velocity = velocityTracker.calculateVelocity().x
+                                    velocityTracker.resetTracking()
+                                    val displacement = dragX.value
+                                    if (displacement > dismissThresholdPx ||
+                                        velocity > dismissVelocityPx
+                                    ) {
+                                        // Dismiss: follow the gesture fully
+                                        // off-screen, THEN hand over to the
+                                        // (instant, off-stage) exit so the
+                                        // chrome never double-animates.
+                                        scope.launch {
+                                            dragX.animateTo(
+                                                targetValue = maxOf(panelFullOutPx, displacement + 1f),
+                                                animationSpec = tween(
+                                                    durationMillis = 160,
+                                                    easing = CubicBezierEasing(0.16f, 1.0f, 0.3f, 1.0f),
+                                                ),
+                                            )
+                                            onDismiss()
+                                        }
+                                    } else {
+                                        // Spring back — 0.85 damping (slight
+                                        // overshoot), 400ms stiffness feel.
+                                        scope.launch {
+                                            dragX.animateTo(0f, animationSpec = springBackSpec)
+                                        }
+                                    }
+                                },
+                                onDragCancel = {
+                                    scope.launch {
+                                        dragX.animateTo(0f, animationSpec = springBackSpec)
+                                    }
+                                },
+                            ) { change, dragAmount ->
                                 change.consume()
-                                onDismiss()
+                                velocityTracker.addPosition(change.uptimeMillis, change.position)
+                                // Track dx to the RIGHT only (+x closes this
+                                // drawer); leftward drags clamp at rest.
+                                val next = (dragX.value + dragAmount).coerceAtLeast(0f)
+                                if (next != dragX.value) {
+                                    scope.launch { dragX.snapTo(next) }
+                                }
                             }
                         }
-                    }
-                    .padding(horizontal = 16.dp, vertical = 18.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {} // Consume tap inside
-                    )
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxSize()
+                        .padding(horizontal = 16.dp, vertical = 18.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {} // Consume tap inside
+                        )
                 ) {
+                    Column(
+                        modifier = Modifier.fillMaxSize()
+                    ) {
                     // Header Row
                     Row(
                         modifier = Modifier
@@ -418,9 +500,10 @@ internal fun PlayerSlideInDrawer(
                     Box(modifier = Modifier.weight(1f)) {
                         content()
                     }
-                }
-            }
-        }
+                    } // Column
+                } // panel Box (drag gestures + glass)
+            } // drag-translation Box
+        } // AnimatedVisibility content
     }
 }
 

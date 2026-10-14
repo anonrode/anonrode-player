@@ -91,10 +91,13 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.util.UnstableApi
@@ -144,7 +147,11 @@ internal fun PlayerControlsOverlay(
     isPlaying: Boolean,
     hasPreviousEpisode: Boolean,
     hasNextEpisode: Boolean,
-    seekIncrementSec: Int,
+    /** Coded video geometry for the title's tech sub-line (hub 1.3).
+     *  0 = no live signal — the segment is omitted, never faked. */
+    videoWidth: Int = 0,
+    videoHeight: Int = 0,
+    videoFps: Int = 0,
     hasSubtitleTrack: Boolean,
     liveOffsetMs: Long,
     actions: PlayerScreenActions,
@@ -166,6 +173,9 @@ internal fun PlayerControlsOverlay(
                 title = title,
                 accent = accent,
                 actions = actions,
+                videoWidth = videoWidth,
+                videoHeight = videoHeight,
+                videoFps = videoFps,
                 hasSubtitleTrack = hasSubtitleTrack,
                 liveOffsetMs = liveOffsetMs,
                 onBack = onBack,
@@ -189,7 +199,6 @@ internal fun PlayerControlsOverlay(
                 isPlaying = isPlaying,
                 hasPreviousEpisode = hasPreviousEpisode,
                 hasNextEpisode = hasNextEpisode,
-                seekIncrementSec = seekIncrementSec,
                 hasSubtitleTrack = hasSubtitleTrack,
                 liveOffsetMs = liveOffsetMs,
                 onPlayPrevious = onPlayPrevious,
@@ -200,7 +209,7 @@ internal fun PlayerControlsOverlay(
     }
 }
 
-/** Top bar — Row 1: back · title · audio · CC · HW/SW · ⋮; Row 2: collapsible scrollable tools ribbon. */
+/** Top bar — Row 1: back · title(+tech sub-line) · HW · CC · Playlist · ⋮ on ONE 48dp centerline; Row 2: collapsible scrollable tools ribbon. */
 @UnstableApi
 @Composable
 internal fun PlayerScreenTopBar(
@@ -208,6 +217,10 @@ internal fun PlayerScreenTopBar(
     title: String,
     accent: Color,
     actions: PlayerScreenActions,
+    /** Live coded video geometry — 0 means "no signal", segment omitted. */
+    videoWidth: Int = 0,
+    videoHeight: Int = 0,
+    videoFps: Int = 0,
     hasSubtitleTrack: Boolean,
     liveOffsetMs: Long,
     onBack: () -> Unit,
@@ -251,17 +264,53 @@ internal fun PlayerScreenTopBar(
                     modifier = Modifier.size(22.dp),
                 )
             }
-            Text(
-                text = title,
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            Column(
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 6.dp),
-            )
+            ) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // ── Tech sub-line (hub 1.3): ONE dim 10sp tnum line under the
+                //    filename, composed ONLY from live engine values —
+                //    resolution + fps come from the player's video track
+                //    (VideoTechLineEffect), the decoder label from the running
+                //    engine, the sync offset from the same host state the
+                //    dock's sync chip reads. A segment with no live source is
+                //    omitted, never faked (AGENTS rule 11).
+                val offsetLocked = actions.quick.isSyncLocked.value
+                val syncedLabel = "synced " + (if (liveOffsetMs >= 0) "+" else "") +
+                    String.format(java.util.Locale.US, "%.2f", liveOffsetMs / 1000.0) + "s"
+                Text(
+                    text = buildAnnotatedString {
+                        if (videoWidth > 0 && videoHeight > 0) {
+                            // "1080p" convention: the shorter coded side names
+                            // the line count, correct for rotated videos too.
+                            append("${minOf(videoWidth, videoHeight)}p · ")
+                        }
+                        if (videoFps > 0) {
+                            append("${videoFps}fps · ")
+                        }
+                        append(actions.decoderModeLabel)
+                        if (offsetLocked) {
+                            withStyle(SpanStyle(color = accent)) { append(" · $syncedLabel") }
+                        }
+                    },
+                    color = Color.White.copy(alpha = 0.65f),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    style = Tnum,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 1.dp),
+                )
+            }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs),
@@ -495,6 +544,9 @@ private fun RibbonToolSlot(
             },
             accent = accent,
             selected = ui.abStartMs.value != null,
+            // Amber active dot is the A-B status hue (hub 2.3: dot ONLY for
+            // A-B) — every other tool states its state via ring + label.
+            hasActiveDot = ui.abStartMs.value != null,
             onClick = { actions.cycleAbRepeat() },
         )
 
@@ -503,7 +555,6 @@ private fun RibbonToolSlot(
             label = "Effect",
             accent = accent,
             selected = ui.audioEffectOn.value,
-            hasActiveDot = ui.audioEffectOn.value,
             onClick = { actions.toggleAudioEffect() },
         )
 
@@ -639,6 +690,12 @@ internal fun RibbonToolItem(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
+        // ══ Disc (hub 2.3 active-state law) ══
+        // cinema disc always keeps its petrol-slate gradient — the ACTIVE
+        // state is the accent RING, a 12%-alpha accent halo
+        // (`.disc.on .dn { border-color; box-shadow: 0 0 0 3px accent-dim }`
+        // in the approved mockup), and the accent-tinted label/icon.
+        // Never color-only: ring + label state together.
         val cinemaGradient = Brush.verticalGradient(
             listOf(
                 Color(0xFF242D3D),
@@ -654,7 +711,6 @@ internal fun RibbonToolItem(
 
         val discModifier = when {
             isSpeedPill -> Modifier.background(brush = speedGradient, shape = CircleShape)
-            selected -> Modifier.background(color = accent.copy(alpha = 0.35f), shape = CircleShape)
             else -> Modifier.background(brush = cinemaGradient, shape = CircleShape)
         }
         val borderColor = when {
@@ -664,49 +720,66 @@ internal fun RibbonToolItem(
         }
         val borderWidth = if (isSpeedPill || selected) 1.5.dp else 1.dp
 
+        // 44dp disc + 3dp halo band = 50dp stack, so the glow reads OUTSIDE
+        // the ring like the mockup's halo; the wrapper keeps every cell's
+        // geometry identical whether or not it is lit.
         Box(
-            modifier = Modifier
-                .size(44.dp)
-                .graphicsLayer {
-                    scaleX = pressScale
-                    scaleY = pressScale
-                }
-                .clip(CircleShape)
-                .then(discModifier)
-                .border(
-                    width = borderWidth,
-                    color = borderColor,
-                    shape = CircleShape,
-                ),
+            modifier = Modifier.size(50.dp),
             contentAlignment = Alignment.Center,
         ) {
-            if (icon != null) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = label,
-                    tint = if (selected) accent else Color(0xFFE2E8F0),
-                    modifier = Modifier.size(22.dp),
-                )
-            } else if (badgeText != null) {
-                Text(
-                    text = badgeText,
-                    color = if (isSpeedPill) Color.White else if (selected) accent else Color(0xFFE2E8F0),
-                    fontSize = if (isSpeedPill) 13.sp else 11.5.sp,
-                    fontWeight = if (isSpeedPill) FontWeight.ExtraBold else FontWeight.Bold,
-                    fontFamily = if (isSpeedPill) FontFamily.Monospace else FontFamily.Default,
-                    letterSpacing = if (isSpeedPill) (-0.5).sp else 0.sp,
-                    style = Tnum,
+            if (selected) {
+                Box(
+                    Modifier
+                        .size(50.dp)
+                        .background(accent.copy(alpha = 0.12f), CircleShape)
                 )
             }
-            if (hasActiveDot) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .align(Alignment.TopEnd)
-                        .offset(x = (-2).dp, y = 2.dp)
-                        .background(Color(0xFFFF3B30), CircleShape)
-                        .border(1.dp, Color.Black.copy(alpha = 0.6f), CircleShape)
-                )
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .graphicsLayer {
+                        scaleX = pressScale
+                        scaleY = pressScale
+                    }
+                    .clip(CircleShape)
+                    .then(discModifier)
+                    .border(
+                        width = borderWidth,
+                        color = borderColor,
+                        shape = CircleShape,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (icon != null) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = label,
+                        tint = if (selected) accent else Color(0xFFE2E8F0),
+                        modifier = Modifier.size(22.dp),
+                    )
+                } else if (badgeText != null) {
+                    Text(
+                        text = badgeText,
+                        color = if (isSpeedPill) Color.White else if (selected) accent else Color(0xFFE2E8F0),
+                        fontSize = if (isSpeedPill) 13.sp else 11.5.sp,
+                        fontWeight = if (isSpeedPill) FontWeight.ExtraBold else FontWeight.Bold,
+                        fontFamily = if (isSpeedPill) FontFamily.Monospace else FontFamily.Default,
+                        letterSpacing = if (isSpeedPill) (-0.5).sp else 0.sp,
+                        style = Tnum,
+                    )
+                }
+                if (hasActiveDot) {
+                    // Amber status hue reserved for A-B (AbMarkAmber is the
+                    // same amber the scrubber's A/B pins wear).
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .align(Alignment.TopEnd)
+                            .offset(x = (-2).dp, y = 2.dp)
+                            .background(AbMarkAmber, CircleShape)
+                            .border(1.dp, Color.Black.copy(alpha = 0.6f), CircleShape)
+                    )
+                }
             }
         }
         Spacer(Modifier.height(4.dp))
