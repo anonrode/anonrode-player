@@ -52,7 +52,9 @@ import org.robolectric.annotation.GraphicsMode
 @UnstableApi
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [34], qualifiers = "w392dp-h850dp")
+// application = bare Application: the real app class bootstraps Coil/native
+// machinery that must not run under JVM instrumentation (startup crash).
+@Config(sdk = [34], qualifiers = "w392dp-h850dp", application = android.app.Application::class)
 class PlayerScreenRenderTest {
 
     @get:Rule
@@ -278,7 +280,7 @@ class PlayerScreenRenderTest {
     }
 
     @Test
-    @Config(sdk = [34], qualifiers = "w850dp-h392dp")
+    @Config(sdk = [34], qualifiers = "w850dp-h392dp", application = android.app.Application::class)
     fun landscape_chrome_on() {
         val actions = fixtureActions()
         compose.setContent { Stage(true) { Chrome(actions, visible = true) } }
