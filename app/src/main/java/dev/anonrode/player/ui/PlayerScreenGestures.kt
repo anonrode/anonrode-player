@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -112,10 +113,10 @@ internal fun Modifier.playerGestureLayer(
                     val x = off.x
                     when {
                         x < w * 0.35f -> {
-                            if (doubleTapSeekEnabled) actions.seekDelta(-actions.seekIncrementSec)
+                            if (doubleTapSeekEnabled) actions.seekDelta(-ui.seekStepSec.intValue)
                         }
                         x > w * 0.65f -> {
-                            if (doubleTapSeekEnabled) actions.seekDelta(actions.seekIncrementSec)
+                            if (doubleTapSeekEnabled) actions.seekDelta(ui.seekStepSec.intValue)
                         }
                         else -> {
                             actions.togglePlayPause()
@@ -264,17 +265,29 @@ internal fun Modifier.playerGestureLayer(
                 if (ui.locked.value || isPipMode || ui.boostActive.value || !ui.isPlaying.value) {
                     return@awaitEachGesture
                 }
+                // Touch-only arming (hub 3.3): the hold-to-speed detector may
+                // engage for touch pointers only. A stray mouse press (e.g. a
+                // trackpad click while playback runs) has no hold-and-slide
+                // semantics, and an armed mouse press was one of the paths in
+                // the phantom-2× family; a stylus press must not engage the
+                // boost either.
+                if (down.type != PointerType.Touch) return@awaitEachGesture
                 // Survive the long-press timeout with the finger down,
                 // alone, and within touch slop: lifting early falls
                 // through to the tap path, moving hands the pointer to
-                // the drag detector, a second finger aborts.
+                // the drag detector, a second finger aborts. Pointer
+                // CANCEL needs no separate branch: a cancelled pointer is
+                // delivered with pressed = false, so a cancel ends the
+                // hold exactly like a lift and nothing engages.
                 val activated = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
                     var ok = true
                     while (ok) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         val pressed = event.changes.filter { it.pressed }
                         ok = when {
-                            pressed.isEmpty() -> false // lifted early → tap
+                            // Lifted early — or pointer CANCEL, which arrives
+                            // as pressed = false → fall through to tap.
+                            pressed.isEmpty() -> false
                             pressed.size > 1 -> false  // second finger → abort
                             else -> {
                                 // Same pointer must survive: a lift+new

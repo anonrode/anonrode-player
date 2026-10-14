@@ -10,6 +10,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.view.HapticFeedbackConstants
 import android.view.PixelCopy
 import android.view.SurfaceView
 import android.view.View
@@ -65,7 +66,13 @@ internal class PlayerScreenActions(
     val quick: QuickRowUiState,
     val speedIdx: MutableIntState,
     val speeds: List<Float>,
-    val seekIncrementSec: Int,
+    /**
+     * Persisted seek step (seconds) from PlayerSettings.seekIncrementSec.
+     * Seeding-only input — the value lives on [PlayerUiState.seekStepSec],
+     * which this constructor seeds so the double-tap wave and the dock's
+     * ±N s chips read one shared state (hub 3.2/4.6, single source).
+     */
+    seekIncrementSec: Int,
     private val fastSeekThresholdSec: Long,
     private val isRebuildingDecoder: Boolean,
     private val title: String,
@@ -123,6 +130,16 @@ internal class PlayerScreenActions(
     private val persistUri: () -> String? = { null },
     private val onOpenSubtitlePicker: () -> Unit = {},
 ) {
+
+    init {
+        // Seek-step single source of truth (hub 3.2/4.6): the persisted
+        // step the host passes in seeds [PlayerUiState.seekStepSec], the
+        // one state field the double-tap wave and the dock's ±N s chips
+        // read. It re-seeds on every actions rebuild (decoder swap, new
+        // player, screen re-entry), so the shared value can never drift
+        // from the store the Control Center pill reflects.
+        ui.seekStepSec.intValue = seekIncrementSec
+    }
 
     fun openSubtitlePicker() {
         onOpenSubtitlePicker()
@@ -768,6 +785,18 @@ internal class PlayerScreenActions(
         val currentV = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         if (nv != currentV) {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nv, 0)
+        }
+        // Haptics law (master spec §2/§3): a double-tick when the vertical
+        // volume drag arrives exactly at a rail end (0% or 100%). Fired only
+        // on ENTERING the end (value actually changed), so dragging along a
+        // clamped rail doesn't machine-gun the motor — same feel family as
+        // the hold-to-speed milestone tick.
+        if (nv != currentV && (nv == 0 || nv == maxV)) {
+            view.haptic(HapticFeedbackConstants.CLOCK_TICK)
+            view.postDelayed(
+                { view.haptic(HapticFeedbackConstants.CLOCK_TICK) },
+                VOLUME_EDGE_TICK_GAP_MS,
+            )
         }
         val progress = nv.toFloat() / maxV.toFloat()
         val pctText = "${(progress * 100).roundToInt()}%"

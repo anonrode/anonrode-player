@@ -137,6 +137,17 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
     val seekRippleSide = mutableIntStateOf(0)
     val seekRippleSeconds = mutableIntStateOf(10)
 
+    /**
+     * The configured seek step in seconds (default 10; options 5/10/15/30).
+     * The ONE value every seek-family control reads: the double-tap L/R
+     * seek wave (PlayerScreenGestures) and the dock's ±N s seek chips. It
+     * is seeded from the persisted [dev.anonrode.player.core.datastore.PlayerSettings.seekIncrementSec]
+     * — the same store the host feeds the whole screen with — in
+     * PlayerScreenActions' construction, so the gesture layer, the chips
+     * and the Control Center pill can never read two different steps.
+     */
+    val seekStepSec = mutableIntStateOf(10)
+
     /** True while the temporary speed gesture (hold-scrub) is engaged. */
     val boostActive = mutableStateOf(false)
 

@@ -55,6 +55,12 @@ internal const val NEXT_BUTTON_WINDOW_SEC = 30f
 /** Playback rate applied while the hold-to-boost speed gesture is engaged. */
 internal const val BOOST_SPEED = 2f
 
+/**
+ * Gap between the two ticks of the volume-rail edge haptic (master spec
+ * §2/§3 haptics law: double-tick at exactly 0% and 100%).
+ */
+internal const val VOLUME_EDGE_TICK_GAP_MS = 70L
+
 internal fun fmtTime(ms: Long): String {
     val s = ms / 1000
     val h = s / 3600
