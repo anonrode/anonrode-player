@@ -56,11 +56,16 @@ internal fun PlayerVideoSurface(
                         useController = false
                         setShutterBackgroundColor(android.graphics.Color.BLACK)
                         resizeMode = zoomMode.resizeMode
+                        // Suppress PlayerView's internal SubtitleView so all subtitle tracks
+                        // (embedded MKV/AAC as well as external sidecars) render uniformly through
+                        // Compose PlayerSubtitleOverlay without ugly solid black background boxes.
+                        subtitleView?.visibility = android.view.View.GONE
                     }.also { onPlayerView(it) }
                 },
                 update = { pv ->
                     if (pv.player !== player) pv.player = player
                     pv.resizeMode = zoomMode.resizeMode
+                    pv.subtitleView?.visibility = android.view.View.GONE
                 }
             )
         }

@@ -13,8 +13,7 @@ package dev.anonrode.player.ui
  *
  * Writers:
  *   - QuickRowUiState.rotateMode (PlayerScreenState.kt) holds the value
- *   - PlayerScreenActions.cycleRotateMode / setRotateMode /
- *     applyRotateMode flip it
+ *   - PlayerScreenActions.cycleRotateMode / applyRotateMode flip it
  *
  * Readers:
  *   - RotationLockEffect (PlayerScreenEffects.kt) mirrors it onto the

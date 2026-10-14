@@ -18,9 +18,9 @@ import androidx.compose.ui.unit.dp
  * object is consumed. The converse is deliberately NOT claimed — geometry
  * that is intrinsic to a single component stays beside that component
  * rather than becoming a token with exactly one user. Those live with
- * their component today: the status strip's 26dp pill, the style tray's
- * 16dp radius / 13×12dp padding / 34dp option height, the ribbon cell's
- * 34dp circle + 18dp glyph, and the Control Center tile's 88dp/32dp.
+ * their component today: the style tray's 16dp radius / 13×12dp padding /
+ * 34dp option height, the ribbon disc's 44dp circle + 22dp glyph, and the
+ * Control Center tile's 88dp/32dp.
  *
  * Spacing rhythm (4/8dp grid):
  *   gapXs 4 · gapSm 8 · gapMd 12 · gapLg 16
@@ -35,13 +35,9 @@ import androidx.compose.ui.unit.dp
  * Glyphs:
  *   glyphMd 22dp — every ControlChip icon · glyphPlay 32dp in the BIG play
  *
- * Text/pill row parts:
- *   skipW/skipH 48×44 — the ±N s pills (label carries the REAL configured
- *   step — the v0.7.2 audit's "pill says 10 while the setting says 30" lie
- *   is structurally impossible now: the pill renders seekIncrementSec)
+ * Seek-row parts:
  *   timeLabelMinW 52 — seek-row timestamps (reserve width so the slider
  *   doesn't jitter when the value flips to −remaining)
- *   pillH 40 — height of a labelled text pill (sync chip, speed, aspect)
  */
 internal object PlayerDimens {
     val gapXs: Dp = 4.dp
@@ -57,8 +53,5 @@ internal object PlayerDimens {
     val glyphMd: Dp = 22.dp
     val glyphPlay: Dp = 32.dp
 
-    val skipW: Dp = 48.dp
-    val skipH: Dp = 44.dp
-    val pillH: Dp = 40.dp
     val timeLabelMinW: Dp = 52.dp
 }

@@ -25,7 +25,7 @@ interface MediaStateDao {
 
     /** Continue-watching feed, most recently played first. */
     @Query(
-        "SELECT * FROM media_state WHERE finished = 0 AND playback_position_ms > 5000 " +
+        "SELECT * FROM media_state WHERE finished = 0 AND playback_position_ms > 1000 " +
             "AND last_played_time_ms IS NOT NULL ORDER BY last_played_time_ms DESC"
     )
     fun getInProgress(): Flow<List<MediaStateEntity>>

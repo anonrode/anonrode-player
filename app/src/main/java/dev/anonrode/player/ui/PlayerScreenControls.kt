@@ -5,6 +5,9 @@ import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -16,6 +19,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -38,6 +42,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bedtime
@@ -79,12 +84,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,27 +99,26 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.util.UnstableApi
 import kotlin.math.abs
 import kotlinx.coroutines.launch
-/* ── Player controls chrome (v0.7.3 curated dock) ─────────────────────────
+/* ── Player controls chrome ────────────────────────────────────────────────
  *
- *   Top bar (auto-hide)   ‹  Title                    ⧉  🔒  ⋮
- *   Right-edge rail       GONE — its five slots moved into the dock's
- *                         utility row / the sheet. The overflow control has
- *                         one home: the top bar's ⋮, and nothing else opens
- *                         the Control Center.
+ *   Top bar (auto-hide)   ‹  Title   [HW] [CC] [Playlist] [⋮]
+ *   Ribbon (auto-hide)    elastic shortcut sleeve + chevron expand handle
+ *   Bottom block          sync pill / seek row / transport (see BottomBar)
+ *
  *   Ribbon vs. sheet      the ribbon is a user-curated SHORTCUT strip (its
- *                         order and hidden set are persisted); the Control
- *                         Center is the full inventory. A-B repeat, sleep
- *                         timer, equalizer and capture frame therefore
- *                         appear in both on purpose — a tool hidden from
- *                         the ribbon must not become unreachable.
- *   Bottom block          seek (ALWAYS) / transport / utility
+ *                         order, hidden set and scroll offset are
+ *                         persisted); the Control Center is the full
+ *                         inventory. A-B repeat, sleep timer, equalizer and
+ *                         capture frame therefore appear in both on
+ *                         purpose — a tool hidden from the ribbon must not
+ *                         become unreachable.
+ *   Single overflow       the top bar's ⋮ is the ONLY home of the Control
+ *                         Center.
  *
- * Refactor (v0.7.3):
- *   • The top bar carries only chrome-level actions: back, PiP, the
- *     controls-lock, and the single ⋮ "more" (the rail's duplicate is
- *     deleted with the rail). Lock/PiP moved here FROM the transport row,
- *     which let the dock rows shrink below portrait widths.
- *   • Insets are real now (statusBarsPadding / navigationBarsPadding /
+ *   • The top bar carries chrome-level actions only: back, the HW/SW
+ *     decoder pill, the CC subtitle chip, the playlist drawer chip and
+ *     the single ⋮ "more". Lock lives in the dock's transport row.
+ *   • Insets are real (statusBarsPadding / navigationBarsPadding /
  *     displayCutoutPadding) — the build is edge-to-edge on targetSdk 37
  *     and the chrome previously sat under the status bar / nav bar /
  *     landscape cutout with hand-tuned dp offsets everywhere.
@@ -259,29 +265,35 @@ internal fun PlayerScreenTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs),
             ) {
-                ControlChip(
-                    icon = Icons.Filled.MusicNote,
-                    contentDescription = "Audio track",
-                    accent = accent,
-                    onClick = { actions.openAudioSheet() },
-                )
-                ControlChip(
-                    icon = Icons.Filled.ClosedCaption,
-                    contentDescription = if (actions.ui.showCC.value) "Subtitles on" else "Subtitles off",
-                    accent = accent,
-                    selected = actions.ui.showCC.value,
-                    onClick = { actions.toggleShowCC() },
-                    onLongClick = { actions.openSubtitlePicker() },
-                )
+                // 1. [ HD / HW ]
                 DecoderPill(
                     isHw = actions.ui.isHwDecoder.value,
                     accent = accent,
                     onClick = { actions.toggleDecoder() },
                 )
+                // 2. [ CC ]
+                ControlChip(
+                    icon = Icons.Filled.ClosedCaption,
+                    contentDescription = if (actions.ui.showCC.value) "Subtitles on" else "Subtitles off",
+                    accent = accent,
+                    selected = actions.ui.subtitleDrawerOpen.value || actions.ui.showCC.value,
+                    onClick = { actions.toggleSubtitleDrawer() },
+                    onLongClick = { actions.openSubtitlePicker() },
+                )
+                // 3. [ Playlist ]
+                ControlChip(
+                    icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+                    contentDescription = "Playlist / Folder episodes",
+                    accent = accent,
+                    selected = actions.ui.playlistDrawerOpen.value,
+                    onClick = { actions.togglePlaylistDrawer() },
+                )
+                // 4. [ ⋮ ]
                 ControlChip(
                     icon = Icons.Filled.MoreVert,
-                    contentDescription = "More options",
+                    contentDescription = "Player Settings",
                     accent = accent,
+                    selected = actions.ui.threeDotsMenuOpen.value,
                     onClick = onMore,
                 )
             }
@@ -291,22 +303,21 @@ internal fun PlayerScreenTopBar(
         //
         // Floating elastic drawer sleeve:
         // - Zero container background or dark borders.
-        // - Resting width: exactly 3 tools visible in Portrait (Night, Speed, Mute),
-        //   4 tools in Landscape (Night, Speed, Mute, Loop).
+        // - Resting width: exactly 4 tools visible in portrait, 6 in
+        //   landscape — the head of the PERSISTED order, so a customised
+        //   arrangement decides which tools rest visible.
         // - Tool discs: petrol-slate cinema disc gradient.
-        // - Chevron handle sits directly adjacent to the sleeve edge (zero overlap on tool 4 or tool 5).
-        // - 3-Zone Drag Physics:
-        //   * Pull < 35%: snaps back to resting width.
-        //   * Pull 35%..65%: HOLDS at the exact position dragged to.
-        //   * Push back by >= 15% (or drop < 35%): snaps back to resting width.
-        //   * Pull >= 65%: snaps open to max screen limit.
-        //   * When open to screen limit: horizontal scrolling enabled through all 13 tools.
-        //   * When controls auto-hide, reset drawer back to resting width and scroll offset 0.
+        // - Chevron handle sits directly adjacent to the sleeve edge:
+        //   tap toggles between resting width and the max available
+        //   width (where horizontal scrolling reaches all 13 tools),
+        //   scrolling back to offset 0 on collapse.
+        // - When the controls auto-hide, the drawer resets to resting
+        //   width and scroll offset 0.
         val ribbonOrder = actions.quick.ribbonOrder
         val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val restingToolCount = if (isLandscape) 4 else 3
+        val restingToolCount = if (isLandscape) 6 else 4
         val toolCellWidth = RIBBON_CELL_MIN_WIDTH_DP.dp
-        val toolSpacing = PlayerDimens.gapXs
+        val toolSpacing = 6.dp
         val restingWidthDp = (restingToolCount * toolCellWidth.value + (restingToolCount - 1) * toolSpacing.value).dp
 
         BoxWithConstraints(
@@ -317,12 +328,12 @@ internal fun PlayerScreenTopBar(
             val density = LocalDensity.current
             val coroutineScope = rememberCoroutineScope()
             val view = LocalView.current
-            val handleWidth = 28.dp
-            val maxAvailableWidthDp = (maxWidth - handleWidth - 4.dp).coerceAtLeast(restingWidthDp)
+            val handleWidth = 32.dp
+            val maxAvailableWidthDp = (maxWidth - handleWidth - 8.dp).coerceAtLeast(restingWidthDp)
             val restingWidthPx = with(density) { restingWidthDp.toPx() }
             val maxWidthPx = with(density) { maxAvailableWidthDp.toPx() }
 
-            var isExpanded by rememberSaveable { mutableStateOf(false) }
+            val isExpanded = actions.quick.ribbonExpanded.value
             val drawerWidthAnim = remember { Animatable(restingWidthPx) }
 
             // Sync anim with isExpanded
@@ -337,7 +348,7 @@ internal fun PlayerScreenTopBar(
             // Auto-hide reset: when controls fade, automatically collapse drawer and reset scroll
             LaunchedEffect(actions.ui.controlsVisible.value) {
                 if (!actions.ui.controlsVisible.value) {
-                    isExpanded = false
+                    actions.quick.ribbonExpanded.value = false
                     drawerWidthAnim.snapTo(restingWidthPx)
                     actions.quick.ribbonScroll.scrollTo(0)
                 }
@@ -350,22 +361,12 @@ internal fun PlayerScreenTopBar(
                 Box(
                     modifier = Modifier
                         .width(with(density) { drawerWidthAnim.value.toDp() })
-                        .clipToBounds()
-                        .pointerInput(isExpanded) {
-                            if (!isExpanded) {
-                                detectHorizontalDragGestures { change, dragAmount ->
-                                    if (dragAmount > 6f || dragAmount < -6f) {
-                                        change.consume()
-                                        isExpanded = true
-                                    }
-                                }
-                            }
-                        },
+                        .clipToBounds(),
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(actions.quick.ribbonScroll, enabled = isExpanded),
+                            .horizontalScroll(actions.quick.ribbonScroll, enabled = true),
                         horizontalArrangement = Arrangement.spacedBy(toolSpacing),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -380,17 +381,25 @@ internal fun PlayerScreenTopBar(
                 // Chevron handle: sits directly adjacent to sleeve edge
                 Box(
                     modifier = Modifier
-                        .size(width = handleWidth, height = 48.dp)
-                        .clip(RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp))
+                        .padding(start = 4.dp)
+                        .size(width = handleWidth, height = 44.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .border(
+                            width = 1.dp,
+                            color = Color.White.copy(alpha = 0.16f),
+                            shape = RoundedCornerShape(12.dp),
+                        )
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
-                            indication = ripple(bounded = false, radius = 20.dp, color = accent),
+                            indication = ripple(bounded = true, color = accent),
                             onClick = {
                                 view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                                isExpanded = !isExpanded
-                                if (!isExpanded) {
+                                val willExpand = !actions.quick.ribbonExpanded.value
+                                actions.quick.ribbonExpanded.value = willExpand
+                                if (!willExpand) {
                                     coroutineScope.launch {
-                                        actions.quick.ribbonScroll.scrollTo(0)
+                                        actions.quick.ribbonScroll.animateScrollTo(0)
                                     }
                                 }
                             }
@@ -400,8 +409,8 @@ internal fun PlayerScreenTopBar(
                     Icon(
                         imageVector = if (isExpanded) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight,
                         contentDescription = if (isExpanded) "Collapse tools ribbon" else "Expand tools ribbon",
-                        tint = Color.White.copy(alpha = 0.70f),
-                        modifier = Modifier.size(20.dp),
+                        tint = accent,
+                        modifier = Modifier.size(18.dp),
                     )
                 }
             }
@@ -425,7 +434,7 @@ private fun RibbonToolSlot(
     when (tool) {
         RibbonTool.NIGHT_MODE -> RibbonToolItem(
             icon = Icons.Filled.Bedtime,
-            label = "Night Mode",
+            label = "Night",
             accent = accent,
             selected = ui.nightMode.value,
             onClick = { actions.toggleNightMode() },
@@ -469,7 +478,7 @@ private fun RibbonToolSlot(
             val mins = ui.sleepMinutes.intValue
             RibbonToolItem(
                 icon = Icons.Filled.Timer,
-                label = if (mins > 0) "${mins}m Timer" else "Sleep Timer",
+                label = if (mins > 0) "${mins}m" else "Timer",
                 accent = accent,
                 selected = mins > 0 || actions.sleep.active,
                 onClick = { actions.cycleSleepTimer() },
@@ -479,9 +488,9 @@ private fun RibbonToolSlot(
         RibbonTool.AB_REPEAT -> RibbonToolItem(
             badgeText = "A⮂B",
             label = when {
-                ui.abStartMs.value != null && ui.abEndMs.value != null -> "Looping A-B"
-                ui.abStartMs.value != null -> "Point A Set"
-                else -> "A - B Repeat"
+                ui.abStartMs.value != null && ui.abEndMs.value != null -> "Loop A-B"
+                ui.abStartMs.value != null -> "Point A"
+                else -> "A - B"
             },
             accent = accent,
             selected = ui.abStartMs.value != null,
@@ -490,7 +499,7 @@ private fun RibbonToolSlot(
 
         RibbonTool.AUDIO_EFFECT -> RibbonToolItem(
             icon = Icons.Filled.GraphicEq,
-            label = "Audio Effect",
+            label = "Effect",
             accent = accent,
             selected = ui.audioEffectOn.value,
             hasActiveDot = ui.audioEffectOn.value,
@@ -506,14 +515,16 @@ private fun RibbonToolSlot(
         )
 
         RibbonTool.SPEED -> {
-            val curSpeed = actions.speeds[actions.speedIdx.intValue]
+            val curSpeed = actions.ui.currentPlaybackSpeed.floatValue
+            val labelText = if (curSpeed % 1f == 0f) "${curSpeed.toInt()}.0X" else String.format(java.util.Locale.US, "%.2fX", curSpeed)
             RibbonToolItem(
-                badgeText = speedLabel(curSpeed),
+                badgeText = labelText,
                 label = "Speed",
                 accent = accent,
                 selected = abs(curSpeed - 1f) > 0.05f,
-                onClick = { actions.cycleSpeed() },
-                onLongClick = { actions.resetSpeed() },
+                isSpeedPill = true,
+                onClick = { actions.toggleSpeedCard() },
+                onLongClick = { actions.resetSpeedToDefault() },
             )
         }
 
@@ -546,24 +557,24 @@ private fun RibbonToolSlot(
 /**
  * Minimum width of one Quick Access Ribbon cell, in dp.
  *
- * This is a deliberate overflow budget, not a tidy number. The catalogue is 13
- * tools; each cell is this width plus 2dp padding per side, and the Row adds
- * `Dimens.gapXs` (4dp) between neighbours:
+ * The catalogue is 13 tools; each cell is this width (plus ~2dp padding per
+ * side) with a 6dp gap between neighbours:
  *
- *     13 * (64 + 4) + 12 * 4 = 932dp of track
+ *     13 * 60 + 12 * 6 = 852dp of track
  *
- * A landscape phone viewport is about 873dp before the top bar's own padding,
- * so the full catalogue always overflows and the ribbon is genuinely
- * scrollable there. At the previous 56dp minimum the track was only 828dp —
- * it FIT, which meant `horizontalScroll` had nothing to scroll, `maxValue`
- * stayed 0, and the whole restore-and-persist path (the reason the scroll
- * state is hoisted at all) never ran. Persistence cannot work on a track that
- * cannot scroll.
+ * That overflows the usable width of common landscape phones (~780dp or
+ * less before the top bar's own padding), so the full ribbon genuinely
+ * scrolls and the persist path runs there. On larger windows — big tablets,
+ * desktop mode — the track can FIT: `ScrollState.maxValue` stays 0 and the
+ * scroll offset simply never gets restored or persisted, which
+ * [QuickRowUiState.tryRestoreRibbonScroll] already treats as the normal
+ * no-op case. Persistence cannot work on a track that cannot scroll;
+ * nothing here pretends otherwise.
  *
- * 64dp is also well clear of the 48dp minimum touch target, so the wider
- * pitch costs nothing ergonomically.
+ * 56dp is also clear of the 48dp minimum touch target, so the pitch costs
+ * nothing ergonomically.
  */
-private const val RIBBON_CELL_MIN_WIDTH_DP = 60
+private const val RIBBON_CELL_MIN_WIDTH_DP = 56
 
 /** Individual circular tool in the Quick Access Ribbon with text label underneath. */
 @OptIn(ExperimentalFoundationApi::class)
@@ -576,19 +587,32 @@ internal fun RibbonToolItem(
     accent: Color,
     selected: Boolean = false,
     hasActiveDot: Boolean = false,
+    isSpeedPill: Boolean = false,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
     val view = LocalView.current
+    // Press feel: the tool disc springs down while held (visual only — the
+    // cell keeps its full 56dp+ touch footprint for the whole gesture).
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.90f else 1f,
+        animationSpec = spring(
+            dampingRatio = 0.55f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "ribbonPress",
+    )
     Column(
         modifier = modifier
             .widthIn(min = RIBBON_CELL_MIN_WIDTH_DP.dp)
             .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(10.dp))
             .then(
                 if (onLongClick == null) {
                     Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
+                        interactionSource = interactionSource,
                         indication = ripple(bounded = false, radius = 24.dp, color = accent),
                         onClick = {
                             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -597,7 +621,7 @@ internal fun RibbonToolItem(
                     )
                 } else {
                     Modifier.combinedClickable(
-                        interactionSource = remember { MutableInteractionSource() },
+                        interactionSource = interactionSource,
                         indication = ripple(bounded = false, radius = 24.dp, color = accent),
                         onClick = {
                             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -616,25 +640,42 @@ internal fun RibbonToolItem(
     ) {
         val cinemaGradient = Brush.verticalGradient(
             listOf(
-                Color(0xFF2A3647),
-                Color(0xFF1A2330),
-                Color(0xFF111722),
+                Color(0xFF242D3D),
+                Color(0xFF151D28),
             )
         )
-        val boxModifier = if (selected) {
-            Modifier.background(color = accent.copy(alpha = 0.35f), shape = CircleShape)
-        } else {
-            Modifier.background(brush = cinemaGradient, shape = CircleShape)
+        val speedGradient = Brush.verticalGradient(
+            listOf(
+                Color(0xE6252C38),
+                Color(0xE6141822),
+            )
+        )
+
+        val discModifier = when {
+            isSpeedPill -> Modifier.background(brush = speedGradient, shape = CircleShape)
+            selected -> Modifier.background(color = accent.copy(alpha = 0.35f), shape = CircleShape)
+            else -> Modifier.background(brush = cinemaGradient, shape = CircleShape)
         }
+        val borderColor = when {
+            isSpeedPill -> Color.White.copy(alpha = 0.35f)
+            selected -> accent
+            else -> Color.White.copy(alpha = 0.15f)
+        }
+        val borderWidth = if (isSpeedPill || selected) 1.5.dp else 1.dp
+
         Box(
             modifier = Modifier
-                .size(34.dp)
+                .size(44.dp)
+                .graphicsLayer {
+                    scaleX = pressScale
+                    scaleY = pressScale
+                }
                 .clip(CircleShape)
-                .then(boxModifier)
+                .then(discModifier)
                 .border(
-                    width = 1.dp,
-                    color = if (selected) accent else Color.White.copy(alpha = 0.18f),
-                    shape = CircleShape
+                    width = borderWidth,
+                    color = borderColor,
+                    shape = CircleShape,
                 ),
             contentAlignment = Alignment.Center,
         ) {
@@ -642,15 +683,18 @@ internal fun RibbonToolItem(
                 Icon(
                     imageVector = icon,
                     contentDescription = label,
-                    tint = if (selected) accent else Color.White,
-                    modifier = Modifier.size(18.dp),
+                    tint = if (selected) accent else Color(0xFFE2E8F0),
+                    modifier = Modifier.size(22.dp),
                 )
             } else if (badgeText != null) {
                 Text(
                     text = badgeText,
-                    color = if (selected) accent else Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
+                    color = if (isSpeedPill) Color.White else if (selected) accent else Color(0xFFE2E8F0),
+                    fontSize = if (isSpeedPill) 13.sp else 11.5.sp,
+                    fontWeight = if (isSpeedPill) FontWeight.ExtraBold else FontWeight.Bold,
+                    fontFamily = if (isSpeedPill) FontFamily.Monospace else FontFamily.Default,
+                    letterSpacing = if (isSpeedPill) (-0.5).sp else 0.sp,
+                    fontFeatureSettings = "tnum",
                 )
             }
             if (hasActiveDot) {
@@ -664,12 +708,12 @@ internal fun RibbonToolItem(
                 )
             }
         }
-        Spacer(Modifier.height(3.dp))
+        Spacer(Modifier.height(4.dp))
         Text(
             text = label,
-            color = if (selected) accent else Color.White.copy(alpha = 0.85f),
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Medium,
+            color = if (selected) accent else Color(0xFFCBD5E1),
+            fontSize = 10.5.sp,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -691,7 +735,7 @@ internal fun DecoderPill(
     val view = LocalView.current
     Box(
         modifier = modifier
-            .sizeIn(minWidth = 44.dp, minHeight = 48.dp)
+            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -704,9 +748,9 @@ internal fun DecoderPill(
             .padding(horizontal = 4.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
-        val pillBg = if (isHw) Color.White.copy(alpha = 0.12f) else Color(0xFFF59E0B).copy(alpha = 0.25f)
-        val pillBorder = if (isHw) Color.White.copy(alpha = 0.20f) else Color(0xFFF59E0B).copy(alpha = 0.50f)
-        val textColor = if (isHw) Color(0xFFCBD5E1) else Color(0xFFFCD34D)
+        val pillBg = if (isHw) accent.copy(alpha = 0.15f) else Color(0xFFF59E0B).copy(alpha = 0.20f)
+        val pillBorder = if (isHw) accent.copy(alpha = 0.35f) else Color(0xFFF59E0B).copy(alpha = 0.45f)
+        val textColor = if (isHw) accent else Color(0xFFFCD34D)
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))

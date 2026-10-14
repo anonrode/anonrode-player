@@ -17,6 +17,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -131,6 +132,10 @@ internal fun PlayerEventListenerEffect(
                     ui.posterBitmap.value = null
                 }
                 // "End of episode" sleep timer fires when playback finishes.
+                // This MUST gate on STATE_ENDED directly: it is mutually
+                // exclusive with STATE_READY, so nesting it inside the READY
+                // branch above made the whole end-of-episode sleep option
+                // unreachable (and let auto-advance ignore the sleep timer).
                 if (playbackState == Player.STATE_ENDED && sleep.atEpisodeEnd.value) {
                     player.pause()
                     sleep.atEpisodeEnd.value = false
@@ -138,6 +143,10 @@ internal fun PlayerEventListenerEffect(
                     // Tell the activity to hold auto-advance for this finish.
                     onHoldAutoAdvance()
                 }
+            }
+
+            override fun onRenderedFirstFrame() {
+                ui.posterBitmap.value = null
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -196,10 +205,18 @@ internal fun AutoHideControlsEffect(
     stayAwake: Boolean,
     autoHideControlsMs: Long,
     userInteractionToken: Long = 0L,
+    /** Polled INSIDE the effect (never read in composition, so the screen
+     *  body doesn't recompose on drag ticks): true while a gesture — e.g. a
+     *  slow swipe-seek whose scrub bubble lives in the chrome — must keep
+     *  the chrome visible regardless of how long the gesture runs. */
+    extraStayAwake: () -> Boolean = { false },
     onHide: () -> Unit,
 ) {
     LaunchedEffect(controlsVisible, isPlaying, locked, stayAwake, autoHideControlsMs, userInteractionToken) {
         if (controlsVisible && isPlaying && !locked && !stayAwake) {
+            // Hold for the whole gesture, then run the hide window fresh
+            // from gesture end.
+            while (extraStayAwake()) delay(100)
             delay(autoHideControlsMs)
             onHide()
         }
@@ -412,7 +429,14 @@ internal fun ScrubPreviewEffect(
 
 /**
  * A-B repeat playback loop: when both A and B timestamps are set and B > A,
- * loops playback automatically when current position reaches or exceeds B.
+ * playback loops back to A when the position reaches or exceeds B.
+ *
+ * ONE effect for the whole life of the region — keyed on the region and the
+ * player, never on the live position (a position key relaunched this effect
+ * every 10Hz tick). Seeks BEFORE A are respected (no yank forward); the
+ * seek guard absorbs the position ticks that still report the pre-seek
+ * value in the ~100ms before the player acknowledges the seek, so one
+ * user-visible loop is exactly one seekTo.
  */
 @Composable
 internal fun AbRepeatEffect(
@@ -421,12 +445,18 @@ internal fun AbRepeatEffect(
     player: Player,
     positionSec: State<Float>,
 ) {
-    if (abStartMs != null && abEndMs != null && abEndMs > abStartMs) {
-        val currentMs = (positionSec.value * 1000f).toLong()
-        LaunchedEffect(currentMs) {
-            if (currentMs >= abEndMs || currentMs < abStartMs) {
-                player.seekTo(abStartMs)
+    val active = abStartMs != null && abEndMs != null && abEndMs > abStartMs
+    val startMs = abStartMs ?: 0L
+    val endMs = abEndMs ?: 0L
+    LaunchedEffect(player, active, startMs, endMs) {
+        if (!active) return@LaunchedEffect
+        var seekGuardUntil = 0L
+        snapshotFlow { (positionSec.value * 1000f).toLong() }
+            .collect { currentMs ->
+                if (currentMs >= endMs && System.currentTimeMillis() >= seekGuardUntil) {
+                    seekGuardUntil = System.currentTimeMillis() + 800L
+                    player.seekTo(startMs)
+                }
             }
-        }
     }
 }

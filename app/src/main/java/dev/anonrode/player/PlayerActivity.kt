@@ -159,6 +159,7 @@ class PlayerActivity : ComponentActivity() {
 
     private var title by mutableStateOf("")
     private var cueText by mutableStateOf<String?>(null)
+    private var embeddedCueText by mutableStateOf<String?>(null)
     // Backing states exposed AS State to PlayerScreen (v0.7.1 perf pass):
     // the delegate `positionSec` stays for imperative reads in this class.
     private val positionState = mutableFloatStateOf(0f)
@@ -212,6 +213,10 @@ class PlayerActivity : ComponentActivity() {
 
     @Volatile
     private var switching = false
+
+    /** Remembered series parent directory where user confirmed auto-advance for this session. */
+    @Volatile
+    private var seriesAutoAdvanceConfirmedParentPath: String? = null
 
     /** One-shot set by the End-of-Episode sleep timer to stop auto-advance. */
     @Volatile
@@ -521,6 +526,13 @@ class PlayerActivity : ComponentActivity() {
             }
         }
 
+        override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
+            val text = cueGroup.cues.mapNotNull { it.text?.toString() }
+                .filter { it.isNotBlank() }
+                .joinToString("\n")
+            embeddedCueText = if (text.isNotBlank()) text else null
+        }
+
         override fun onPositionDiscontinuity(
             oldPosition: Player.PositionInfo,
             newPosition: Player.PositionInfo,
@@ -546,9 +558,14 @@ class PlayerActivity : ComponentActivity() {
             val offsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
                 ?: (app.engine.subtitleOffsetMs / 1000.0)
             AppLog.d("SYNC", "seek to ${newPosMs}ms (%.1fs): pre-mapped snap to %+.2fs (piecewise=%b, isSyncLocked=%b)".format(tRaw, offsetSec, piecewiseSegments.isNotEmpty(), isSyncLocked))
+        } else if (isSyncLocked || app.engine.isLiveLocked || app.engine.persistedAutoMs != 0L) {
+            // Established lock is active: protect verified global lock from unverified single-shot spot guesses
+            val offsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
+                ?: (app.engine.subtitleOffsetMs / 1000.0)
+            AppLog.d("SYNC", "seek to ${newPosMs}ms (%.1fs): preserving verified lock (%+.2fs) without spot probe".format(tRaw, offsetSec))
         } else {
-            // Deep scrub into unmapped territory: use best current hypothesis immediately,
-            // while quietly validating / discovering any local commercial cut via background spot-sync
+            // Deep scrub into unmapped territory with no active lock: use best current hypothesis immediately,
+            // while quietly validating / discovering any local cut via background spot-sync
             val offsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
                 ?: (app.engine.subtitleOffsetMs / 1000.0)
             AppLog.d("SYNC", "seek landing at ${newPosMs}ms (%.1fs) is far from known anchors (hyp=%+.2fs), triggering background spot-sync".format(tRaw, offsetSec))
@@ -560,6 +577,24 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        PlayerPrefs.savedScreenBrightness(this)?.let { bri ->
+            window?.let { w ->
+                val attr = w.attributes
+                attr.screenBrightness = bri
+                w.attributes = attr
+            }
+        }
+
+        PlayerPrefs.savedVolume(this)?.let { vol ->
+            try {
+                val am = getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
+                val maxV = am?.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) ?: 15
+                am?.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, vol.coerceIn(0, maxV), 0)
+            } catch (e: Exception) {
+                AppLog.e("PLAYER", "failed to restore volume", e)
+            }
+        }
 
         // Bug-17 fix: after a config-change destroy (uiMode, density, locale
         // — not intercepted by the manifest's configChanges), the recreated
@@ -583,7 +618,12 @@ class PlayerActivity : ComponentActivity() {
         // Callback fires on the sync-eval worker thread — post to main.
         engine.onLiveSyncLocked = {
             handler.post {
-                val currentPosSec = (engine.player?.currentPosition ?: 0L) / 1000.0
+                if (!currentSettings.subtitleAutoSyncEnabled) {
+                    isSyncLocked = false
+                    subSyncRunning = false
+                    return@post
+                }
+                val currentPosSec = engine.clock.positionMs / 1000.0
                 val liveOffsetSec = engine.subtitleOffsetMs / 1000.0
                 val updated = piecewiseSegments.toMutableList()
                 if (updated.isNotEmpty()) {
@@ -791,7 +831,7 @@ class PlayerActivity : ComponentActivity() {
                             engine = engine,
                             title = title,
                             mediaId = currentUriStr ?: "",
-                            cueText = cueText,
+                            cueText = cueText ?: embeddedCueText,
                             // v0.7.1 perf pass: pass the backing STATE objects
                             // (activity fields are mutableFloatStateOf) so a
                             // 10Hz tick recomposes only the seek bar, not the
@@ -799,16 +839,26 @@ class PlayerActivity : ComponentActivity() {
                             positionSec = positionState,
                             durationSec = durationState,
                             bufferedSec = bufferedState,
-                            onBack = { finish() },
+                            onBack = {
+                                AnonrodeApp.get(this@PlayerActivity).engine.savePositionNow()
+                                finish()
+                            },
                             initialSpeed = restoredSpeed,
                             onSpeedChanged = { speed ->
                                 sessionSpeed = speed
                                 PlayerPrefs.saveGlobalSpeed(this@PlayerActivity, speed)
                                 val targetUri = currentUriStr
+                                val vPath = currentVideoPath
                                 lifecycleScope.launch(Dispatchers.IO) {
                                     if (targetUri != null) {
                                         app.stateStore.updatePlaybackSpeed(targetUri, speed)
                                         AppLog.d("SPEED", "persisted $speed for $targetUri")
+                                    }
+                                    if (!vPath.isNullOrBlank()) {
+                                        val parent = java.io.File(vPath).parent.orEmpty()
+                                        if (parent.isNotBlank()) {
+                                            PlayerPrefs.saveSeriesSpeed(this@PlayerActivity, parent, speed)
+                                        }
                                     }
                                     try {
                                         app.playerSettingsDataStore.updateData { it.copy(defaultPlaybackSpeed = speed) }
@@ -828,6 +878,8 @@ class PlayerActivity : ComponentActivity() {
                             // no path) — stripping here would truncate
                             // titles with internal dots ("Mr. Robot").
                             upNextTitle = episodeQueue?.next()?.title,
+                            episodeQueue = episodeQueue,
+                            onSelectEpisode = { v -> openVideo(v.uri, v.title) },
                             onOpenSettings = { settingsOpen = true },
                             liveOffsetMs = liveOffsetMs,
                             isCalibrating = isCalibrating,
@@ -919,11 +971,18 @@ class PlayerActivity : ComponentActivity() {
                             onZoomChanged = { idx ->
                                 savedZoomIdx = idx
                                 val uri = currentUriStr
+                                val vPath = currentVideoPath
                                 if (uri != null) {
                                     lifecycleScope.launch(Dispatchers.IO) {
                                         // Convention: stored value = idx + 1
                                         // (entity default 1.0 means "unset" = FIT).
                                         app.stateStore.updateZoom(uri, (idx + 1).toFloat())
+                                        if (!vPath.isNullOrBlank()) {
+                                            val parent = java.io.File(vPath).parent.orEmpty()
+                                            if (parent.isNotBlank()) {
+                                                PlayerPrefs.saveSeriesZoom(this@PlayerActivity, parent, idx)
+                                            }
+                                        }
                                     }
                                 }
                             },
@@ -1184,7 +1243,15 @@ class PlayerActivity : ComponentActivity() {
                     }
                     return@collect
                 }
-                if (!currentSettings.subtitleAutoSyncEnabled) return@collect
+                if (!currentSettings.subtitleAutoSyncEnabled) {
+                    withContext(Dispatchers.Main) {
+                        if (uri == currentUriStr) {
+                            isSyncLocked = false
+                            subSyncRunning = false
+                        }
+                    }
+                    return@collect
+                }
                 syncAwaitingBackgroundVerdict = false
                 withContext(Dispatchers.Main) {
                     if (uri != currentUriStr) return@withContext
@@ -1249,6 +1316,7 @@ class PlayerActivity : ComponentActivity() {
         if (prevUri != null && prevUri != uriStr) {
             SyncFingerprint.cancel(applicationContext, prevUri)
             AppLog.d("PLAY", "cancelled fingerprint for abandoned video")
+            engine.player.seekTo(0L)
         }
         startStateStoreCollector(uriStr)
         syncAwaitingBackgroundVerdict = false
@@ -1259,6 +1327,7 @@ class PlayerActivity : ComponentActivity() {
         // Fresh UI state for the new media item.
         lastCues = emptyList()
         cueText = null
+        embeddedCueText = null
         positionSec = 0f
         // v0.7.3: the new media's onTracksChanged repopulates this; zero it
         // at open so the CC chip doesn't inherit the previous file's
@@ -1280,21 +1349,27 @@ class PlayerActivity : ComponentActivity() {
                 // Clamp to the PlayerScreen ZoomModes range (FIT, CROP, STR,
                 // 16:9, 4:3 → indices 0..4) so a stale/large value can't
                 // index out of bounds.
-                val zoomIdx = ((state?.videoScale ?: 1f) - 1f).toInt().coerceIn(0, 4)
-                // Per-video playlist mode. Clamped against the enum's real
-                // size so a row written by a future version (or a hand-edit)
-                // can never index out of bounds on the restore side.
+                val storedZoom = ((state?.videoScale ?: 1f) - 1f).toInt().coerceIn(0, 4)
+                val videoPath = resolveVideoPath(uriStr)
+                if (gen != openGeneration) return@launch
+                currentVideoPath = videoPath
+                val parentPath = videoPath?.let { java.io.File(it).parent }.orEmpty()
+                val seriesZoom = if (storedZoom == 0 && parentPath.isNotBlank()) {
+                    PlayerPrefs.seriesZoom(this@PlayerActivity, parentPath) ?: 0
+                } else {
+                    storedZoom
+                }
+                val zoomIdx = seriesZoom
                 val shuffleOn = state?.shuffleEnabled ?: false
                 val repeatOrdinal = (state?.repeatMode ?: 0)
                     .coerceIn(0, dev.anonrode.player.ui.RepeatLoopMode.entries.lastIndex)
-                // Subtitle source: the picker's persisted choice wins;
-                // empty choice = MKV embedded fast-path, else auto-pick.
-                val choice = state?.subtitleChoice.orEmpty()
-                val videoPath = resolveVideoPath(uriStr)
-                // resolveVideoPath blocks (not cancellable) — a newer open
-                // may have landed while it ran; don't publish stale state.
-                if (gen != openGeneration) return@launch
-                currentVideoPath = videoPath
+                val storedChoice = state?.subtitleChoice.orEmpty()
+                val seriesChoice = if (storedChoice.isEmpty() && parentPath.isNotBlank()) {
+                    PlayerPrefs.seriesSubtitleChoice(this@PlayerActivity, parentPath) ?: ""
+                } else {
+                    storedChoice
+                }
+                val choice = seriesChoice
                 // v0.6.2 SUB-SYNC UX PASS — DEFERRED SIDECAR PARSE.
                 // The sidecar parse used to block openVideo on Dispatchers.IO
                 // before commit, so a multi-MB sub file delayed first-frame.
@@ -1336,7 +1411,7 @@ class PlayerActivity : ComponentActivity() {
                 // Generation guard: a newer openVideo supersedes this one.
                 if (gen != openGeneration) return@launch
                 piecewiseSegments = parsePiecewise(state?.autoSyncPiecewise ?: "")
-                isSyncLocked = auto != 0L || (state?.autoSyncCheckedAtMs ?: 0L) != 0L
+                isSyncLocked = currentSettings.subtitleAutoSyncEnabled && (auto != 0L || (state?.autoSyncCheckedAtMs ?: 0L) != 0L)
 
                 // Policy A (v0.6.2, revised v0.7.1, trust rule v0.8): gate
                 // the background fingerprint on TWO signals.
@@ -1388,6 +1463,7 @@ class PlayerActivity : ComponentActivity() {
                 // last-used play_speed preference, then the session speed.
                 // (this@PlayerActivity: inside launch{} `this` is the scope)
                 val speed = app.stateStore.savedPlaybackSpeed(uriStr)
+                    ?: (if (parentPath.isNotBlank()) PlayerPrefs.seriesSpeed(this@PlayerActivity, parentPath) else null)
                     ?: PlayerPrefs.globalSpeed(this@PlayerActivity)
                     ?: sessionSpeed
                     ?: currentSettings.defaultPlaybackSpeed.takeIf { it > 0f }
@@ -1657,7 +1733,7 @@ class PlayerActivity : ComponentActivity() {
      * region instead of creating an unplayably tight loop.
      */
     private fun advanceAbRepeat() {
-        val posMs = AnonrodeApp.get(this).engine.player.currentPosition
+        val posMs = AnonrodeApp.get(this).engine.clock.positionMs
         when {
             abStartMs == null -> {
                 abStartMs = posMs
@@ -1986,8 +2062,14 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        AnonrodeApp.get(this).engine.savePositionNow()
+    }
+
     override fun onStop() {
         super.onStop()
+        AnonrodeApp.get(this).engine.savePositionNow()
         // Pause the render loop while the activity is invisible — except
         // in PiP, where subtitles keep rendering in the floating window.
         if (!pipMode) {
@@ -2033,6 +2115,12 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun beginNextCountdown(ep: Video) {
+        val approved = seriesAutoAdvanceConfirmedParentPath
+        if (approved != null && approved == ep.parentPath && ep.parentPath.isNotBlank()) {
+            AppLog.d("NEXT", "series auto-advance already approved for $approved; advancing without modal popup: ${ep.title}")
+            performSwitch(ep)
+            return
+        }
         pendingNext = ep
         nextCountdownSec = NEXT_COUNTDOWN_SEC
         handler.removeCallbacks(countdownTick)
@@ -2047,6 +2135,9 @@ class PlayerActivity : ComponentActivity() {
             }
             val n = nextCountdownSec - 1
             if (n <= 0) {
+                if (ep.parentPath.isNotBlank()) {
+                    seriesAutoAdvanceConfirmedParentPath = ep.parentPath
+                }
                 performSwitch(ep)
             } else {
                 nextCountdownSec = n
@@ -2056,6 +2147,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun cancelNextCountdown() {
+        seriesAutoAdvanceConfirmedParentPath = null
         pendingNext = null
         nextCountdownSec = -1
         handler.removeCallbacks(countdownTick)
@@ -2064,13 +2156,16 @@ class PlayerActivity : ComponentActivity() {
     /** Jump straight to the next episode (Up Next pill or "Play now"). */
     private fun playNextNow() {
         val ep = pendingNext ?: episodeQueue?.next() ?: return
+        if (ep.parentPath.isNotBlank()) {
+            seriesAutoAdvanceConfirmedParentPath = ep.parentPath
+        }
         performSwitch(ep)
     }
 
     /** Jump to previous episode or seek to beginning if past 3 seconds. */
     private fun playPreviousNow() {
         val app = AnonrodeApp.get(this)
-        val pos = app.engine.player.currentPosition
+        val pos = app.engine.clock.positionMs
         if (pos > 3000L) {
             app.engine.player.seekTo(0)
             return
@@ -2091,7 +2186,9 @@ class PlayerActivity : ComponentActivity() {
         handler.removeCallbacks(countdownTick)
         switching = true
         // Capture + persist current progress before currentUriStr moves on.
-        AnonrodeApp.get(this).engine.savePositionNow()
+        val app = AnonrodeApp.get(this)
+        app.engine.savePositionNow()
+        app.engine.player.seekTo(0L)
         openVideo(ep.uri, ep.title)
     }
 
@@ -2130,7 +2227,8 @@ class PlayerActivity : ComponentActivity() {
             override fun run() {
                 val engine = AnonrodeApp.get(this@PlayerActivity).engine
                 val p = engine.player
-                positionSec = p.currentPosition / 1000f
+                val posMs = engine.clock.positionMs
+                positionSec = posMs / 1000f
                 durationSec = (p.duration.takeIf { it > 0 } ?: 0L) / 1000f
                 // v0.7.3 buffered track: read every tick, published only
                 // when it actually moved (equal float writes are snapshot
@@ -2140,10 +2238,10 @@ class PlayerActivity : ComponentActivity() {
                 // boundary scheduling below also treats B as a wake point,
                 // so overshoot stays within one short tick.
                 val abEnd = abEndMs
-                if (abEnd != null && p.currentPosition >= abEnd) {
+                if (abEnd != null && posMs >= abEnd) {
                     p.seekTo(abStartMs ?: 0L)
                 }
-                val tRaw = p.currentPosition / 1000.0
+                val tRaw = posMs / 1000.0
                 val spd = engine.subtitleSpeedFactor.coerceAtLeast(0.5f)
                 // Piecewise cut lock: the offset depends on position (each
                 // segment carries its own beta). Scalar lock: one offset.
@@ -2245,6 +2343,10 @@ class PlayerActivity : ComponentActivity() {
         subtitlePickerOpen = false
         val uri = currentUriStr ?: return
         if (choice == subtitleChoice) return
+        val pPath = currentVideoPath?.let { java.io.File(it).parent }.orEmpty()
+        if (pPath.isNotBlank()) {
+            PlayerPrefs.saveSeriesSubtitleChoice(this@PlayerActivity, pPath, choice)
+        }
         lifecycleScope.launch(Dispatchers.IO) {
             val app = AnonrodeApp.get(this@PlayerActivity)
             app.stateStore.updateSubtitleChoice(uri, choice)
@@ -2438,6 +2540,12 @@ class PlayerActivity : ComponentActivity() {
             // one lands from the background job) clears this via the Room
             // collector + onLiveSyncLocked.
             scheduleSyncNowIfCuesMissing()
+        } else {
+            isSyncLocked = false
+            appliedOffsetSec = Double.NaN
+            liveOffsetMs = 0L
+            subSyncRunning = false
+            currentUriStr?.let { SyncFingerprint.cancel(applicationContext, it) }
         }
         lifecycleScope.launch {
             try {
@@ -2445,9 +2553,6 @@ class PlayerActivity : ComponentActivity() {
             } catch (e: Exception) {
                 AppLog.e("SUB", "sub-sync toggle persist failed", e)
             }
-        }
-        if (!enabled) {
-            currentUriStr?.let { SyncFingerprint.cancel(applicationContext, it) }
         }
     }
 
@@ -2518,6 +2623,8 @@ class PlayerActivity : ComponentActivity() {
                             engine.applyPersistedLock(st!!.autoSyncOffsetMs, st.autoSyncSpeedFactor, st.autoSyncPiecewise)
                             piecewiseSegments = parsePiecewise(st.autoSyncPiecewise)
                             isSyncLocked = st.autoSyncOffsetMs != 0L || (st.autoSyncCheckedAtMs != 0L)
+                        } else if (!currentSettings.subtitleAutoSyncEnabled && uri == currentUriStr) {
+                            isSyncLocked = false
                         }
                         subSyncRunning = false
                     }

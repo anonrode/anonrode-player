@@ -97,6 +97,8 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.video.videoFrameMillis
+import coil3.video.videoFramePercent
 import dev.anonrode.player.PlayerActivity
 import dev.anonrode.player.core.model.Series
 import dev.anonrode.player.core.model.Video
@@ -506,9 +508,9 @@ fun LibraryScreen(
                     }
                 }
 
-                // Continue watching (Home dashboard only — Series is a dedicated folders view)
-                if (state.inProgress.isNotEmpty() && startDestination != LibraryStartDestination.Series) {
-                    item(key = "header-continue") {
+                // ── SERIES DESTINATION (EPISODIC SPECIALIST) ───────────────────
+                if (startDestination == LibraryStartDestination.Series) {
+                    item(key = "series-header") {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -517,54 +519,93 @@ fun LibraryScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                "CONTINUE WATCHING",
-                                color = palette.textDim,
-                                style = MaterialTheme.typography.labelMedium,
+                                "SERIES HUB",
+                                color = palette.text,
+                                style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 1.sp,
                             )
-                            TextButton(
-                                onClick = { showHistorySheet = true },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            Text(
+                                "${state.series.size} Shows",
+                                color = palette.accent,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+
+                    items(state.series, key = { "series-hero-" + it.folderPath }) { s ->
+                        val eps = state.episodesByFolder[s.folderPath] ?: emptyList()
+                        SeriesHeroCard(
+                            palette = palette,
+                            series = s,
+                            episodes = eps,
+                            onClick = { openFolderPath = s.folderPath },
+                            onPlayNext = { onOpenVideo(it) },
+                        )
+                    }
+                } else {
+                    // ── HOME DESTINATION (UNIVERSAL MEDIA DASHBOARD) ─────────
+                    // Continue watching
+                    if (state.inProgress.isNotEmpty()) {
+                        item(key = "header-continue") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = Dimens.gapLg, end = Dimens.gapLg, top = Dimens.gapMd, bottom = Dimens.gapXs),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    "View all",
-                                    color = palette.accent,
+                                    "CONTINUE WATCHING",
+                                    color = palette.textDim,
                                     style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp,
                                 )
+                                TextButton(
+                                    onClick = { showHistorySheet = true },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                ) {
+                                    Text(
+                                        "View all",
+                                        color = palette.accent,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
+                        }
+                        item(key = "continue-row") {
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = Dimens.gapLg),
+                                horizontalArrangement = Arrangement.spacedBy(Dimens.gapMd),
+                            ) {
+                                items(state.inProgress, key = { it.video.uri }) { item ->
+                                    ContinueCard(palette, item, onClick = { onOpenVideo(item.video) })
+                                }
                             }
                         }
                     }
-                    item(key = "continue-row") {
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = Dimens.gapLg),
-                            horizontalArrangement = Arrangement.spacedBy(Dimens.gapMd),
-                        ) {
-                            items(state.inProgress, key = { it.video.uri }) { item ->
-                                ContinueCard(palette, item, onClick = { onOpenVideo(item.video) })
-                            }
-                        }
-                    }
-                }
 
-                // Folders
-                if (state.series.isNotEmpty()) {
-                    item(key = "folders-header") {
-                        FolderSectionHeader(
-                            palette = palette,
-                            count = state.series.size,
-                            sort = state.sort,
-                            onSortSelected = { vm.setSort(it) },
-                        )
-                    }
-                    items(state.series, key = { "folder-" + it.folderPath }) { s ->
-                        FolderRow(
-                            palette = palette,
-                            s = s,
-                            onClick = { openFolderPath = s.folderPath },
-                            onPlayAll = { playAllFolder(s) },
-                        )
+                    // All Folders across the entire device
+                    if (state.series.isNotEmpty()) {
+                        item(key = "folders-header") {
+                            FolderSectionHeader(
+                                palette = palette,
+                                count = state.series.size,
+                                sort = state.sort,
+                                onSortSelected = { vm.setSort(it) },
+                            )
+                        }
+                        items(state.series, key = { "folder-" + it.folderPath }) { s ->
+                            FolderRow(
+                                palette = palette,
+                                s = s,
+                                onClick = { openFolderPath = s.folderPath },
+                                onPlayAll = { playAllFolder(s) },
+                            )
+                        }
                     }
                 }
 
@@ -769,10 +810,10 @@ fun AppBottomNav(
                 label = { Text(tab.label) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = palette.accent,
-                    selectedTextColor = BrandTextPrimary,
+                    selectedTextColor = palette.accent,
                     indicatorColor = palette.accent.copy(alpha = 0.18f),
-                    unselectedIconColor = BrandTextSecondary,
-                    unselectedTextColor = BrandTextSecondary,
+                    unselectedIconColor = palette.textDim,
+                    unselectedTextColor = palette.textDim,
                 ),
             )
         }
@@ -1215,6 +1256,8 @@ fun PosterArt(
     cornerRadius: Dp = 14.dp,
     letterStyle: TextStyle? = null,
     videoUri: String? = null,
+    playbackPositionMs: Long? = null,
+    durationMs: Long? = null,
 ) {
     val hue = remember(title) { posterHue(title) }
     val brush = remember(hue) {
@@ -1234,11 +1277,20 @@ fun PosterArt(
         )
         if (videoUri != null) {
             val context = LocalContext.current
-            val imageRequest = remember(videoUri) {
+            val imageRequest = remember(videoUri, playbackPositionMs, durationMs) {
                 ImageRequest.Builder(context)
                     .data(videoUri)
-                    .size(240, 135)
+                    .size(480, 270)
                     .crossfade(true)
+                    .apply {
+                        if (playbackPositionMs != null && playbackPositionMs > 0L) {
+                            videoFrameMillis(playbackPositionMs)
+                        } else if (durationMs != null && durationMs > 10_000L) {
+                            videoFrameMillis((durationMs * 0.15).toLong())
+                        } else {
+                            videoFramePercent(0.15)
+                        }
+                    }
                     .build()
             }
             AsyncImage(
@@ -1277,42 +1329,260 @@ private fun ContinueCard(palette: SkinPalette, item: InProgressItem, onClick: ()
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = palette.surface),
-        modifier = Modifier.width(150.dp),
+        modifier = Modifier.width(216.dp),
     ) {
-        Box {
-            PosterArt(item.video.title, modifier = Modifier.fillMaxWidth().height(88.dp), cornerRadius = 0.dp, videoUri = item.video.uri)
+        Column {
             Box(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(34.dp)
-                    .background(Color.Black.copy(alpha = 0.55f), CircleShape),
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .height(118.dp)
             ) {
-                Icon(
-                    Icons.Filled.PlayArrow,
-                    contentDescription = "Play",
-                    tint = Color.White,
-                    modifier = Modifier.size(22.dp),
+                PosterArt(
+                    title = item.video.title,
+                    modifier = Modifier.fillMaxSize(),
+                    cornerRadius = 0.dp,
+                    videoUri = item.video.uri,
+                    playbackPositionMs = item.positionMs,
+                    durationMs = item.durationMs,
+                )
+                // Dark vignette overlay so badge and play icon pop
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.Black.copy(alpha = 0.6f),
+                                )
+                            )
+                        )
+                )
+                // Centered play badge
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(36.dp)
+                        .background(Color.Black.copy(alpha = 0.55f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.PlayArrow,
+                        contentDescription = "Play",
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                // Time position pill in top-right
+                if (item.positionMs > 0L) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp),
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color.Black.copy(alpha = 0.75f),
+                    ) {
+                        Text(
+                            text = fmtMin(item.positionMs),
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFeatureSettings = "tnum",
+                                fontWeight = FontWeight.Bold,
+                            ),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+                // Progress bar along bottom of thumbnail
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                ) {
+                    ProgressBar(palette, item.fraction)
+                }
+            }
+            Column(modifier = Modifier.padding(horizontal = Dimens.gapMd, vertical = Dimens.gapSm)) {
+                Text(
+                    item.video.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = palette.text,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    item.label,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                    color = palette.textDim,
                 )
             }
         }
-        Column(modifier = Modifier.padding(Dimens.gapMd)) {
-            Text(
-                item.video.title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = palette.text,
-            )
-            Text(
-                item.label,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.labelSmall,
-                color = palette.textDim,
-            )
-            ProgressBar(palette, item.fraction, modifier = Modifier.padding(top = Dimens.gapSm))
+    }
+}
+
+/** Cinematic Show Hero Card with 1-Tap Up Next resume action chip. */
+@Composable
+private fun SeriesHeroCard(
+    palette: SkinPalette,
+    series: Series,
+    episodes: List<EpisodeItem>,
+    onClick: () -> Unit,
+    onPlayNext: (Video) -> Unit,
+) {
+    val nextEp = episodes.firstOrNull { !it.finished } ?: episodes.firstOrNull()
+    val progressPct = if (series.totalEpisodes > 0) (series.totalWatched * 100 / series.totalEpisodes) else 0
+
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = palette.surface),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapXs),
+    ) {
+        Column {
+            // 2:1 Cinematic Backdrop Hero
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(136.dp)
+            ) {
+                PosterArt(
+                    title = series.name,
+                    modifier = Modifier.fillMaxSize(),
+                    cornerRadius = 0.dp,
+                    videoUri = nextEp?.video?.uri ?: series.videos.firstOrNull()?.uri,
+                    playbackPositionMs = 0L,
+                    durationMs = nextEp?.video?.durationMs,
+                )
+                // 180° Cinematic Vignette overlay for 100% text contrast
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Black.copy(alpha = 0.25f),
+                                    Color.Black.copy(alpha = 0.85f),
+                                )
+                            )
+                        )
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color.Black.copy(alpha = 0.65f),
+                    ) {
+                        Text(
+                            text = if (series.totalEpisodes > 1) "SERIES · ${series.totalEpisodes} EPISODES" else "SERIES",
+                            color = palette.accent,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                    Text(
+                        text = series.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            // Body: Progress tracking & 1-Tap Up Next
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(Dimens.gapMd),
+                verticalArrangement = Arrangement.spacedBy(Dimens.gapSm),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Watched: ${series.totalWatched} / ${series.totalEpisodes} Episodes",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textDim,
+                    )
+                    Text(
+                        text = "$progressPct%",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontFeatureSettings = "tnum",
+                        ),
+                        color = palette.accent,
+                    )
+                }
+
+                val frac = if (series.totalEpisodes > 0) series.totalWatched.toFloat() / series.totalEpisodes else 0f
+                ProgressBar(palette = palette, fraction = frac)
+
+                // 1-Tap Up Next Button Chip
+                if (nextEp != null) {
+                    Surface(
+                        onClick = { onPlayNext(nextEp.video) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = palette.rowBg,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, palette.accent.copy(alpha = 0.35f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = "UP NEXT · 1-TAP RESUME",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        letterSpacing = 0.6.sp,
+                                    ),
+                                    color = palette.accent,
+                                )
+                                Text(
+                                    text = nextEp.video.title,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    color = palette.text,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(palette.accent, CircleShape),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Filled.PlayArrow,
+                                    contentDescription = "Play Next",
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

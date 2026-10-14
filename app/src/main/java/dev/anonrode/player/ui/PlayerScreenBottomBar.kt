@@ -73,28 +73,26 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.util.UnstableApi
 
-/* ── Bottom chrome of the player overlay (v0.7.3 curated dock) ────────────
+/* ── Bottom chrome of the player overlay ──────────────────────────────────
  *
- *   ┌──────────────────────────────────────────────────────────────┐
- *   │ 04:12 ━━━━━━●━━━━━━━━━  18:30            seek — ALWAYS shown │
- *   ├──────────────────────────────────────────────────────────────┤
- *   │      ‹10  ⏮   ▶(64)   ⏭  10›              transport (auto-hide)
- *   │   [✨Sync] [1.0×] [CC] [♫] [FIT] [↻]      utility  (auto-hide)
- *   └──────────────────────────────────────────────────────────────┘
+ *   ┌──────────────────────────────────────────────────────────────────┐
+ *   │ [⟳ Synced +0.06s]                sync pill (state-gated)         │
+ *   │ 04:12 ━━━━━━●━━━━━━━━━  18:30   seek row (lives with the chrome) │
+ *   ├──────────────────────────────────────────────────────────────────┤
+ *   │ [🔒]     ⏮   ▶(64)   ⏭     [FIT] [⛶]   transport (auto-hide)   │
+ *   └──────────────────────────────────────────────────────────────────┘
  *
- * ONE layout at every width (was: a 540dp two-branch layout whose narrow
- * branch REORDERED the controls — muscle memory differing by device width
- * is a UX bug; the wide branch is what overflowed a portrait phone and hid
- * the sync toggle in v0.7.1). The rows no longer compete for a single
- * width: transport is 5 fixed items (≈300dp), utility is a pill row whose
- * LABELS collapse (sync → short form, aspect → icon-only, audio track →
- * hidden into the sheet) via BoxWithConstraints when the measured width
- * runs out. Worst case utility ≈320dp, transport ≈304dp — both fit a
- * 320dp-wide screen; no control is ever laid out past an edge again.
+ * ONE layout at every width and ZERO reordering (was: a 540dp two-branch
+ * layout whose narrow branch reordered the controls — muscle memory
+ * differing by device width is a UX bug — and whose wide branch overflowed
+ * portrait phones in v0.7.1). Left wing: Lock; center: prev / PLAY / next;
+ * right wing: aspect (tap cycles, long-press = direct pick) and
+ * fullscreen/rotate.
  *
- * Lock + PiP moved to the TOP bar (a "chrome utility", not transport), so
- * the transport row is exactly what the thumb wants: jump-back, prev,
- * PLAY, next, jump-forward. The right-edge rail is gone entirely.
+ * The seek row lives for the whole chrome, so the scrub bubble + its live
+ * frame preview never detach mid-gesture. The sync pill above is
+ * state-gated (running / locked / track present), opens the sync popover
+ * on tap, resyncs on long-press.
  *
  * Insets: the block paints its scrim to the screen edge (background is
  * applied BEFORE navigationBarsPadding/displayCutoutPadding in the chain)
@@ -102,9 +100,9 @@ import androidx.media3.common.util.UnstableApi
  * — the edge-to-edge targetSdk-37 build had zero inset handling before.
  *
  * The measured height of this block (INCLUDING its inset padding) is
- * published to PlayerUiState.bottomBarHeightPx; the Up-Next pill and the
- * sync popover anchor off it instead of the old hand-tuned `bottom = 140 /
- * 210dp` magic numbers that broke whenever the chrome changed shape.
+ * published to PlayerUiState.bottomBarHeightPx; Up Next, the sync popover
+ * and the style tray anchor off it instead of the old hand-tuned
+ * `bottom = 140 / 210dp` magic numbers.
  * ------------------------------------------------------------------------- */
 
 @UnstableApi
@@ -164,7 +162,7 @@ internal fun PlayerScreenBottomBar(
     ) {
         // ── Subtitle Sync Status Pill (Directly Above Scrubber Timeline) ──
         androidx.compose.animation.AnimatedVisibility(
-            visible = visible && (actions.quick.subSyncRunning.value || actions.quick.isSyncLocked.value),
+            visible = visible && (actions.quick.subSyncRunning.value || actions.quick.isSyncLocked.value || hasSubtitleTrack),
             enter = fadeIn(animationSpec = tween(180)),
             exit = fadeOut(animationSpec = tween(180)),
         ) {
@@ -179,6 +177,7 @@ internal fun PlayerScreenBottomBar(
                     visible = true,
                     isSyncRunning = actions.quick.subSyncRunning.value,
                     isSyncLocked = actions.quick.isSyncLocked.value,
+                    syncEnabled = actions.quick.subSyncEnabled.value,
                     liveOffsetMs = liveOffsetMs,
                     accent = accent,
                     onClick = { actions.openSyncPopover() },
@@ -273,11 +272,12 @@ internal fun SeekBarRow(
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Start,
+            fontFeatureSettings = "tnum",
             modifier = Modifier
                 .widthIn(min = PlayerDimens.timeLabelMinW)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
-                    indication = ripple(bounded = false, radius = 24.dp, color = Color(0xFF38BDF8)),
+                    indication = ripple(bounded = false, radius = 24.dp, color = accent),
                 ) { showRemainingOnLeft = !showRemainingOnLeft }
         )
         Box(Modifier.weight(1f).padding(horizontal = fluid(min = 6.dp, max = 12.dp))) {
@@ -301,11 +301,14 @@ internal fun SeekBarRow(
             // shows no buffer ahead.
             val bufFrac = (bufferedSec.value / dur).coerceIn(0f, 1f)
             // ── the three-part painted track, vertically centered in the
-            //    same 32dp band the slider occupies ──
+            //    same 32dp band the slider occupies. We add 7dp horizontal padding
+            //    to match the 14dp slider thumb radius (7dp) so the track start and
+            //    end mathematically align 1:1 with the center of the thumb disc. ──
             Box(
                 modifier = Modifier
                     .matchParentSize()
                     .align(Alignment.Center)
+                    .padding(horizontal = 7.dp)
             ) {
                 Box(
                     Modifier
@@ -329,7 +332,7 @@ internal fun SeekBarRow(
                         .fillMaxWidth(posFrac)
                         .height(4.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF38BDF8))
+                        .background(accent)
                 )
                 if (abStartMs != null) {
                     val aFrac = (abStartMs.toFloat() / (dur * 1000f)).coerceIn(0f, 1f)
@@ -343,7 +346,7 @@ internal fun SeekBarRow(
                                 .align(Alignment.CenterEnd)
                                 .size(width = 3.dp, height = 14.dp)
                                 .clip(RoundedCornerShape(1.dp))
-                                .background(Color(0xFFFBBF24))
+                                .background(AbMarkAmber)
                         )
                     }
                 }
@@ -359,7 +362,7 @@ internal fun SeekBarRow(
                                 .align(Alignment.CenterEnd)
                                 .size(width = 3.dp, height = 14.dp)
                                 .clip(RoundedCornerShape(1.dp))
-                                .background(Color(0xFFFBBF24))
+                                .background(AbMarkAmber)
                         )
                     }
                 }
@@ -379,7 +382,7 @@ internal fun SeekBarRow(
                         modifier = Modifier
                             .size(14.dp)
                             .shadow(2.dp, CircleShape)
-                            .background(Color(0xFF38BDF8), CircleShape)
+                            .background(accent, CircleShape)
                             .border(1.5.dp, Color.White, CircleShape)
                     )
                 },
@@ -387,7 +390,7 @@ internal fun SeekBarRow(
                 // track goes transparent so only the thumb + drag surface
                 // of the real Slider remain in play.
                 colors = SliderDefaults.colors(
-                    thumbColor = Color(0xFF38BDF8),
+                    thumbColor = accent,
                     activeTrackColor = Color.Transparent,
                     inactiveTrackColor = Color.Transparent,
                 ),
@@ -417,11 +420,12 @@ internal fun SeekBarRow(
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.End,
+            fontFeatureSettings = "tnum",
             modifier = Modifier
                 .widthIn(min = PlayerDimens.timeLabelMinW)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
-                    indication = ripple(bounded = false, radius = 24.dp, color = Color(0xFF38BDF8)),
+                    indication = ripple(bounded = false, radius = 24.dp, color = accent),
                 ) { showCurrentOnRight = !showCurrentOnRight }
         )
     }
@@ -474,6 +478,7 @@ private fun ScrubBubble(
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
+                    fontFeatureSettings = "tnum",
                 )
             }
         }
@@ -513,20 +518,14 @@ private fun TransportRow(
             )
         }
 
-        // Center cluster: Transport (Rewind 10s, |‹ Prev, Hero ▶/⏸, Next ›|, FastForward 10s) with fluid responsive spacing
+        // Center cluster: Primary Transport (⏮ Prev, Hero ▶/⏸, ⏭ Next) with comfortable fluid spacing
         Row(
             horizontalArrangement = Arrangement.spacedBy(
-                fluid(min = 10.dp, max = 20.dp),
+                fluid(min = 18.dp, max = 32.dp),
                 Alignment.CenterHorizontally,
             ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ControlChip(
-                icon = Icons.Filled.FastRewind,
-                contentDescription = "Rewind ${seekIncrementSec}s",
-                accent = accent,
-                onClick = onSeekBack,
-            )
             ControlChip(
                 icon = Icons.Filled.SkipPrevious,
                 contentDescription = "Previous video",
@@ -541,12 +540,6 @@ private fun TransportRow(
                 accent = accent,
                 enabled = hasNextEpisode,
                 onClick = onPlayNext,
-            )
-            ControlChip(
-                icon = Icons.Filled.FastForward,
-                contentDescription = "Forward ${seekIncrementSec}s",
-                accent = accent,
-                onClick = onSeekForward,
             )
         }
 

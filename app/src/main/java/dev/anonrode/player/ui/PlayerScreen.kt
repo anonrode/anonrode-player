@@ -35,6 +35,9 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import dev.anonrode.player.PlayerPrefs
 import dev.anonrode.player.audio.SubtitleStyle
+import dev.anonrode.player.EpisodeQueue
+import dev.anonrode.player.core.model.Video
+import dev.anonrode.player.core.ui.theme.rememberPlayerAccent
 import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 import dev.anonrode.player.feature.player.PlaybackEngine
 import kotlin.math.abs
@@ -49,13 +52,14 @@ import kotlin.math.abs
 private const val RIBBON_SCROLL_PERSIST_DEBOUNCE_MS = 400L
 
 /**
- * Full-bleed video player — v0.7.3 curated-dock chrome.
+ * Full-bleed video player — curated chrome.
  *
- *   Top bar (auto-hide)   ‹  Title                     ⧉   🔒   ⋮
- *   Seek row (ALWAYS)     04:12 ━━━━━●━━━━━━━━ 18:30   (buffered shown,
- *                                                     tap time to flip)
- *   Transport (auto-hide)      ‹N  ⏮  ▶(64)  ⏭  N›
- *   Utility  (auto-hide)  [✨ sync]  [speed]  CC  ♫  [aspect]  ↻
+ *   Top bar (auto-hide)   ‹  Title             [HW] [CC] [Playlist] [⋮]
+ *   Ribbon (auto-hide)    [speed][shot][rot]…  ›   (elastic shortcut
+ *                                                    sleeve + chevron)
+ *   Bottom block          [sync pill] 04:12 ━━●━━ 18:30 (tap time to flip,
+ *                                                    scrub w/ frame preview)
+ *   Transport (auto-hide) [🔒]    ⏮   ▶(64)   ⏭    [FIT] [⛶]
  *
  * Layout principles enforced by this redesign (each was a real defect in
  * v0.7.2's chrome — see the round's audit):
@@ -125,6 +129,10 @@ fun PlayerScreen(
     onHoldAutoAdvance: () -> Unit = {},
     /** Clean display name of the next episode, for the Up Next surfaces. */
     upNextTitle: String? = null,
+    /** Series/Folder sibling episode queue for playlist drawer. */
+    episodeQueue: EpisodeQueue? = null,
+    /** Callback when user selects an episode from the playlist drawer. */
+    onSelectEpisode: (Video) -> Unit = {},
     /** Stable per-video id (content uri) for per-video preferences. */
     mediaId: String = "",
     /** Open the global settings screen. */
@@ -563,7 +571,13 @@ fun PlayerScreen(
         player = livePlayer,
         ui = ui,
         sleep = sleep,
-        readySpeed = { if (ui.boostActive.value) BOOST_SPEED else speeds[speedIdx.intValue] },
+        readySpeed = {
+            if (ui.boostActive.value) {
+                if (ui.speedScrubHudVisible.value) ui.currentScrubSpeed.floatValue else BOOST_SPEED
+            } else {
+                ui.currentPlaybackSpeed.floatValue
+            }
+        },
         onHoldAutoAdvance = onHoldAutoAdvance,
     )
     InitialSleepTimerEffect(initialSleepTimerMinutes, sleep)
@@ -577,11 +591,20 @@ fun PlayerScreen(
         stayAwake = overflowOpen.value || quick.showSyncPopover.value ||
             quick.showStyleTray.value ||
             gestures.subStyleMenuOpen.value || hostSheetOpen ||
-            ui.threeDotsMenuOpen.value || ui.audioSheetOpen.value ||
-            ui.subStyleSheetOpen.value || ui.equalizerSheetOpen.value ||
-            quick.showRibbonCustomise.value,
+            ui.threeDotsMenuOpen.value || ui.playlistDrawerOpen.value || ui.subtitleDrawerOpen.value ||
+            ui.equalizerSheetOpen.value ||
+            ui.speedCardOpen.value ||
+            quick.showRibbonCustomise.value ||
+            quick.ribbonExpanded.value || quick.ribbonScroll.isScrollInProgress,
         autoHideControlsMs = autoHideControlsMs,
         userInteractionToken = ui.userInteractionKey.longValue,
+        // A slow swipe-seek keeps its target pill + scrub bubble inside the
+        // chrome: hold it for the whole gesture. Both holders are read HERE,
+        // inside the effect's lambda — so the screen body never recomposes
+        // on drag ticks.
+        extraStayAwake = {
+            ui.localSeek.floatValue >= 0f || gestures.pendingSeekMs.floatValue >= 0f
+        },
         onHide = { ui.controlsVisible.value = false },
     )
     BoostHudKeepAliveEffect(ui.boostActive.value, hud, view)
@@ -643,6 +666,7 @@ fun PlayerScreen(
         if (ui.aspectBadge.value != null && !isPipMode) {
             AspectBadgeOverlay(
                 badgeText = ui.aspectBadge.value ?: "",
+                accent = accent,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .statusBarsPadding()
@@ -651,17 +675,18 @@ fun PlayerScreen(
             )
         }
 
-        // ── subtitle: high-contrast outline, draggable ──
-        if (ui.showCC.value && !isPipMode) {
+        // ── subtitle: high-contrast outline, draggable (visible in both normal and PiP modes) ──
+        if (ui.showCC.value) {
             cueText?.let { txt ->
                 PlayerSubtitleOverlay(
-                    modifier = Modifier.align(Alignment.Center),
+                    modifier = Modifier.align(if (isPipMode) Alignment.BottomCenter else Alignment.Center),
                     text = txt,
                     style = subtitleStyle,
                     accent = accent,
                     showCC = ui.showCC.value,
                     gestures = gestures,
                     mediaId = mediaId,
+                    isPipMode = isPipMode,
                     bottomBarHeightPx = if (ui.controlsVisible.value) ui.bottomBarHeightPx.intValue.toFloat() else 0f,
                     onStyleChanged = onSubtitleStyleChanged,
                 )
@@ -714,10 +739,13 @@ fun PlayerScreen(
             )
         }
 
-        // ── speed banner HUD (hold-to-2x top-center) ──
-        if (ui.speedBannerVisible.value && !isPipMode) {
-            SpeedBannerHud(
-                speedText = ui.speedBannerText.value,
+        // ── discrete speed scrub HUD (hold-to-boost & horizontal discrete slide) ──
+        if (ui.speedScrubHudVisible.value && !isPipMode) {
+            DiscreteSpeedScrubHud(
+                visible = ui.speedScrubHudVisible.value,
+                isSliding = ui.speedScrubExpanded.value,
+                stepIndex = ui.discreteScrubIndex.intValue,
+                milestones = actions.discreteMilestones,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
@@ -739,6 +767,7 @@ fun PlayerScreen(
         // ── lock scrim overlay ──
         if (ui.locked.value && ui.lockScrimVisible.value && !isPipMode) {
             LockScrimOverlay(
+                accent = accent,
                 onUnlock = { actions.unlockControls() },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -779,64 +808,71 @@ fun PlayerScreen(
             onMore = { actions.toggleThreeDotsMenu() },
         )
 
-        // ── Tier 2: Three Dots Floating Card ──
-        if (ui.threeDotsMenuOpen.value && !isPipMode) {
-            ThreeDotsMenuCard(
-                visible = ui.threeDotsMenuOpen.value,
-                accent = accent,
-                isSyncLocked = quick.isSyncLocked.value,
-                isSyncRunning = quick.subSyncRunning.value,
-                syncEnabled = quick.subSyncEnabled.value,
-                decoderModeLabel = decoderModeLabel,
-                onSubtitleSyncClick = {
-                    actions.closeThreeDotsMenu()
-                    actions.openSyncPopover()
-                },
-                onSubtitleTracksClick = {
-                    actions.closeThreeDotsMenu()
-                    actions.openSubtitlePicker()
-                },
-                onSubtitleStyleClick = {
-                    actions.closeThreeDotsMenu()
-                    actions.openStyleTray()
-                },
-                onDecoderPipelineClick = {
-                    actions.cycleDecoderMode()
-                },
-                onResumeBehaviorClick = {
-                    actions.closeThreeDotsMenu()
-                    actions.showTransientToast("Resume behavior: from last position")
-                },
-                onOpenSettingsClick = {
-                    actions.closeThreeDotsMenu()
-                    overflowOpen.value = true
-                },
-                onShareSyncLog = {
-                    actions.closeThreeDotsMenu()
-                    onShareSyncLog()
-                },
-                onDismiss = { actions.closeThreeDotsMenu() },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .displayCutoutPadding()
-                    .padding(top = topAnchor, end = 16.dp),
-            )
-        }
+        // ── Tier 2: Slide-in Right Drawers (v5) ──
+        val playerAccent = rememberPlayerAccent()
 
-        // ── Tier 3: Audio Track Picker Sheet ──
-        if (ui.audioSheetOpen.value && !isPipMode) {
-            AudioTrackPickerSheet(
-                visible = ui.audioSheetOpen.value,
-                accent = accent,
-                onDismiss = { actions.closeAudioSheet() },
-                onSelectTrack = { trackName ->
-                    actions.closeAudioSheet()
-                    actions.showTransientToast("Audio Track: $trackName")
-                },
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
-        }
+        // 1. Folder Sibling / Playlist Drawer
+        PlayerPlaylistDrawer(
+            visible = ui.playlistDrawerOpen.value && !isPipMode,
+            queue = episodeQueue,
+            currentMediaUri = mediaId,
+            accent = playerAccent,
+            onSelectEpisode = { video -> onSelectEpisode(video) },
+            onDismiss = { actions.closePlaylistDrawer() },
+        )
+
+        // 2. Subtitle Drawer
+        PlayerSubtitleDrawer(
+            visible = ui.subtitleDrawerOpen.value && !isPipMode,
+            showCC = ui.showCC.value,
+            currentChoiceLabel = subtitleChoiceLabel,
+            offsetMs = liveOffsetMs,
+            accent = playerAccent,
+            onToggleShowCC = { actions.toggleShowCC() },
+            onNudge = { deltaMs -> actions.nudgeSubtitle(deltaMs) },
+            onResetOffset = { actions.nudgeSubtitle(-liveOffsetMs) },
+            onResync = { actions.resyncNow() },
+            onOpenLocalFile = onOpenSubtitlePicker,
+            onOnlineDownload = onOpenSubtitlePicker,
+            onSubtitleStyle = { actions.openStyleTray() },
+            onDismiss = { actions.closeSubtitleDrawer() },
+        )
+
+        // 3. Three-Dots Settings Drawer
+        PlayerSettingsDrawer(
+            visible = ui.threeDotsMenuOpen.value && !isPipMode,
+            accent = playerAccent,
+            abActive = (abStartMs ?: ui.abStartMs.value) != null,
+            nightMode = ui.nightMode.value,
+            backgroundPlay = ui.backgroundPlayOn.value,
+            volumeBoost = volumeBoostPct,
+            sleepMinutes = ui.sleepMinutes.intValue,
+            equalizerOn = quick.equalizerOn.value,
+            repeatModeLabel = ui.repeatMode.value.name,
+            decoderModeLabel = decoderModeLabel,
+            currentVolume = gestures.startVol.floatValue.coerceIn(0f, 1f),
+            currentBrightness = gestures.startBri.floatValue.coerceIn(0f, 1f),
+            onAbRepeat = { actions.cycleAbRepeat(); onAbRepeatTap() },
+            onNightMode = { actions.toggleNightMode() },
+            onBackgroundPlay = { actions.toggleBackgroundPlay() },
+            onVolumeBoost = onVolumeBoostCycle,
+            onLockScreen = { actions.lockControls() },
+            onSleepTimer = { actions.selectSleep(SleepOptions.first { it.minutes == 30 }) },
+            onScreenshot = { actions.captureFrame() },
+            onEqualizer = { actions.toggleEqualizer() },
+            onCycleRepeat = { actions.cycleRepeatLoopMode() },
+            onCycleDecoder = { actions.cycleDecoderMode() },
+            onVolumeChange = { v ->
+                gestures.startVol.floatValue = v
+                actions.updateVolumeGesture(0f)
+            },
+            onBrightnessChange = { b ->
+                gestures.startBri.floatValue = b
+                actions.updateBrightnessGesture(0f)
+            },
+            onOpenFullSettings = onOpenSettings,
+            onDismiss = { actions.closeThreeDotsMenu() },
+        )
 
         // ── Control Center (was the flat overflow sheet; v0.7.3 sectioned
         //    hub with live values + the wired dead ends). Single "more"
@@ -936,6 +972,7 @@ fun PlayerScreen(
             NextCountdownOverlay(
                 modifier = Modifier.align(Alignment.Center),
                 countdownSec = nextCountdownSec,
+                accent = accent,
                 onCancel = onCancelNext,
                 onPlayNow = onPlayNext,
             )
@@ -975,20 +1012,38 @@ fun PlayerScreen(
                     .padding(horizontal = PlayerDimens.gapLg),
                 offsetMs = liveOffsetMs,
                 accent = accent,
+                syncEnabled = quick.subSyncEnabled.value,
                 onNudge = { actions.nudgeSubtitle(it) },
                 onResync = {
                     actions.closeSyncPopover()
-                    onStartCalibration()
+                    actions.resyncNow()
                 },
                 onStyle = {
                     actions.closeSyncPopover()
                     actions.openStyleTray()
                 },
-                onDisable = {
+                onToggleSync = { enabled ->
                     actions.closeSyncPopover()
-                    actions.setSubSyncEnabled(false)
+                    actions.setSubSyncEnabled(enabled)
                 },
                 onDismiss = { actions.closeSyncPopover() },
+            )
+        }
+
+        // ── precision speed control card (tap speed pill in ribbon) ──
+        if (ui.speedCardOpen.value && !isPipMode) {
+            PrecisionSpeedCard(
+                visible = ui.speedCardOpen.value,
+                currentSpeed = ui.currentPlaybackSpeed.floatValue,
+                onStep = { actions.stepSpeed(it) },
+                onSetSpeed = { actions.setArbitrarySpeed(it) },
+                onReset = { actions.resetSpeedToDefault() },
+                onDismiss = { actions.closeSpeedCard() },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = bottomAnchor + PlayerDimens.gapMd)
+                    .widthIn(max = 380.dp)
+                    .padding(horizontal = PlayerDimens.gapLg),
             )
         }
 

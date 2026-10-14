@@ -4,6 +4,7 @@ import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -49,52 +50,78 @@ internal fun PlayerSubtitleOverlay(
     showCC: Boolean,
     gestures: GestureUiState,
     mediaId: String,
+    isPipMode: Boolean = false,
     bottomBarHeightPx: Float = 0f,
     onStyleChanged: (SubtitleStyle) -> Unit,
 ) {
     val view = LocalView.current
     val context = LocalContext.current
+    val dragModifier = if (!isPipMode) {
+        Modifier.pointerInput(showCC) {
+            detectDragGestures(
+                onDragStart = {
+                    view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+                    gestures.subDragging.value = true
+                },
+                onDrag = { change, amount ->
+                    change.consume()
+                    gestures.subX.floatValue = SUB_DEFAULT_X
+                    val scrH = gestures.scrH.floatValue.takeIf { it > 0f } ?: 1000f
+                    gestures.subY.floatValue = (gestures.subY.floatValue + amount.y / scrH).coerceIn(SUB_Y_MIN, SUB_Y_MAX)
+                },
+                onDragEnd = {
+                    gestures.subDragging.value = false
+                    PlayerPrefs.saveSubtitlePosition(context, mediaId, SUB_DEFAULT_X, gestures.subY.floatValue)
+                },
+                onDragCancel = { gestures.subDragging.value = false },
+            )
+        }
+    } else Modifier
+
+    // Long-press opens the in-place style dropdown (size / position / color
+    // / reset). It mutates the same host-owned style the style tray tunes
+    // and writes back through onStyleChanged — but sits right ON the cue,
+    // so a quick tweak never covers the frame.
+    val longPressModifier = if (!isPipMode && showCC) {
+        Modifier.pointerInput(showCC) {
+            detectTapGestures(
+                onLongPress = {
+                    view.haptic(HapticFeedbackConstants.LONG_PRESS)
+                    gestures.subStyleMenuOpen.value = true
+                },
+            )
+        }
+    } else Modifier
+
     Box(
         modifier = modifier
             .offset {
-                // Direct percentage-based Y position, decoupled from chrome height.
-                // Horizontally locked to 0 for exact optical and mathematical screen centering.
-                val effectiveY = gestures.subY.floatValue * gestures.scrH.floatValue
-                IntOffset(
-                    0,
-                    (effectiveY - gestures.scrH.floatValue / 2f).roundToInt(),
-                )
+                if (isPipMode) {
+                    IntOffset(0, 0)
+                } else {
+                    // Direct percentage-based Y position, decoupled from chrome height.
+                    // Horizontally locked to 0 for exact optical and mathematical screen centering.
+                    val effectiveY = gestures.subY.floatValue * gestures.scrH.floatValue
+                    IntOffset(
+                        0,
+                        (effectiveY - gestures.scrH.floatValue / 2f).roundToInt(),
+                    )
+                }
             }
             .graphicsLayer {
-                val s = if (gestures.subDragging.value) 1.04f else 1f
+                val s = if (gestures.subDragging.value && !isPipMode) 1.04f else 1f
                 scaleX = s
                 scaleY = s
-                alpha = if (gestures.subDragging.value) 0.95f else 1f
+                alpha = if (gestures.subDragging.value && !isPipMode) 0.95f else 1f
             }
-            .pointerInput(showCC) {
-                detectDragGestures(
-                    onDragStart = {
-                        view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                        gestures.subDragging.value = true
-                    },
-                    onDrag = { change, amount ->
-                        change.consume()
-                        gestures.subX.floatValue = SUB_DEFAULT_X
-                        val scrH = gestures.scrH.floatValue.takeIf { it > 0f } ?: 1000f
-                        gestures.subY.floatValue = (gestures.subY.floatValue + amount.y / scrH).coerceIn(SUB_Y_MIN, SUB_Y_MAX)
-                    },
-                    onDragEnd = {
-                        gestures.subDragging.value = false
-                        PlayerPrefs.saveSubtitlePosition(context, mediaId, SUB_DEFAULT_X, gestures.subY.floatValue)
-                    },
-                    onDragCancel = { gestures.subDragging.value = false },
-                )
-            }
-            .padding(horizontal = 24.dp),
+            .then(dragModifier)
+            .then(longPressModifier)
+            .padding(horizontal = if (isPipMode) 8.dp else 24.dp)
+            .then(if (isPipMode) Modifier.padding(bottom = 6.dp) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        OutlinedSubtitleText(text, style = style)
-        if (gestures.subStyleMenuOpen.value) {
+        OutlinedSubtitleText(text, style = style, isPipMode = isPipMode)
+        if (gestures.subStyleMenuOpen.value && !isPipMode) {
             SubtitleStyleDropdown(
                 style = style,
                 onStyle = {
@@ -124,28 +151,21 @@ internal fun OutlinedSubtitleText(
     text: String,
     modifier: Modifier = Modifier,
     style: SubtitleStyle = SubtitleStyle(),
+    isPipMode: Boolean = false,
 ) {
-    val sizeSp = style.size.fontSp
-    val lineSp = (sizeSp.value * 1.4f).sp
-    val subtitleYellow = Color(0xFFFEF08A)
-    val fillColor = if (style.color == dev.anonrode.player.audio.SubtitleColor.WHITE ||
-        style.color == dev.anonrode.player.audio.SubtitleColor.YELLOW) {
-        subtitleYellow
-    } else {
-        style.color.value
-    }
+    val sizeSp = if (isPipMode) 10.5.sp else style.size.fontSp
+    val lineSp = (sizeSp.value * 1.35f).sp
+    val fillColor = style.color.value
     val weight = if (style.bold) FontWeight.Bold else FontWeight.Medium
     Box(
         modifier = modifier
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-            .background(Color.Black.copy(alpha = 0.85f))
-            .padding(horizontal = 14.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center,
     ) {
         SubtitleOutlineOffsets.forEach { (dx, dy) ->
             Text(
                 text = text,
-                color = Color.Black.copy(alpha = 0.85f),
+                color = Color.Black.copy(alpha = 0.95f),
                 fontWeight = weight,
                 fontSize = sizeSp,
                 lineHeight = lineSp,

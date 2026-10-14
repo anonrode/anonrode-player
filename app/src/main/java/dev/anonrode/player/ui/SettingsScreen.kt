@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -70,6 +71,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -137,6 +139,44 @@ private const val DLG_BOOST = "boost"
 private const val DLG_THEME = "theme"
 private const val DLG_CLEAR = "clear"
 
+/** Top-level directory folders for organizing settings into focused categories. */
+enum class SettingsFolder(
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector,
+) {
+    PLAYBACK(
+        title = "Playback & Engine",
+        subtitle = "Resume behavior, default speed, autoplay & decoder",
+        icon = Icons.Filled.PlayCircle,
+    ),
+    AUDIO(
+        title = "Audio & Sound",
+        subtitle = "Audio effects, dialogue lift & volume boost",
+        icon = Icons.Filled.Headphones,
+    ),
+    SUBTITLES(
+        title = "Subtitles & Sync",
+        subtitle = "Speech-sync, font styling & folder access",
+        icon = Icons.Filled.AutoAwesome,
+    ),
+    GESTURES(
+        title = "Controls & Gestures",
+        subtitle = "Double-tap, swipe scrubbing & gestures",
+        icon = Icons.Filled.TouchApp,
+    ),
+    APPEARANCE(
+        title = "Appearance & Themes",
+        subtitle = "Theme skins & visual styling",
+        icon = Icons.Filled.Palette,
+    ),
+    LIBRARY(
+        title = "Library & Data",
+        subtitle = "MediaStore scanner, playback history & logs",
+        icon = Icons.Filled.FolderOpen,
+    ),
+}
+
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
@@ -149,6 +189,14 @@ fun SettingsScreen(
     val coroutineScope = rememberCoroutineScope()
     val dataStore = context.playerSettingsDataStore
     val settings by dataStore.data.collectAsState(initial = PlayerSettings())
+
+    // Active folder directory level: null = Directory Hub; non-null = Category sub-page
+    var activeFolder by rememberSaveable { mutableStateOf<SettingsFolder?>(null) }
+
+    // Intercept hardware/system back while inside a category folder to return to the Hub
+    BackHandler(enabled = activeFolder != null) {
+        activeFolder = null
+    }
 
     // Only one dialog at a time; null = none.
     var openDialog by remember { mutableStateOf<String?>(null) }
@@ -193,604 +241,723 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = Dimens.gapXxl),
         ) {
-            // ── header ───────────────────────────────────────────
-            item("header") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = Dimens.gapSm, end = Dimens.gapLg, top = Dimens.gapMd, bottom = Dimens.gapSm),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    SettingsBackButton(palette = palette, onClick = onBack)
-                    Spacer(Modifier.width(Dimens.gapXs))
-                    Text(
-                        "Settings",
-                        color = palette.text,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
+            if (activeFolder == null) {
+                // ── Directory Hub Header ──────────────────────────
+                item("hub-header") {
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .padding(start = Dimens.gapSm),
-                    )
-                    Text(
-                        activeSkin.displayName,
-                        color = palette.accent,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-            }
-
-            // ══ GENERAL ══════════════════════════════════════════
-            item("sec-general") { SectionHeader(palette, "General") }
-
-            item("theme") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Palette,
-                    title = "Theme",
-                    subtitle = "Skin for the library, player & settings",
-                    trailing = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            ValueText(palette = palette, text = activeSkin.displayName)
-                            Spacer(Modifier.width(Dimens.gapSm))
+                            .fillMaxWidth()
+                            .padding(start = Dimens.gapSm, end = Dimens.gapLg, top = Dimens.gapMd, bottom = Dimens.gapSm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SettingsBackButton(palette = palette, onClick = onBack)
+                        Spacer(Modifier.width(Dimens.gapXs))
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = Dimens.gapSm)
+                        ) {
+                            Text(
+                                "Settings",
+                                color = palette.text,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                "Preferences & engine controls",
+                                color = palette.textDim,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        // Theme Quick-Selector Chip
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(palette.rowBg)
+                                .border(1.dp, palette.rowLine, RoundedCornerShape(999.dp))
+                                .clickable { openDialog = DLG_THEME }
+                                .padding(horizontal = Dimens.gapMd, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
                             Box(
                                 modifier = Modifier
-                                    .size(10.dp)
+                                    .size(8.dp)
                                     .clip(CircleShape)
                                     .background(palette.accent)
                             )
-                        }
-                    },
-                    onClick = { openDialog = DLG_THEME },
-                )
-            }
-
-            item("rescan") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Refresh,
-                    title = "Rescan library",
-                    subtitle = "Rebuild the video list from MediaStore now",
-                    trailing = {
-                        if (rescanning) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                color = palette.accent,
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            ValueText(palette = palette, text = "RUN")
-                        }
-                    },
-                    onClick = {
-                        if (!rescanning) {
-                            rescanning = true
-                            coroutineScope.launch {
-                                val count = withContext(Dispatchers.IO) {
-                                    try {
-                                        AnonrodeApp.get(context).scanner.scan(force = true).videos.size
-                                    } catch (t: Throwable) {
-                                        -1
-                                    }
-                                }
-                                rescanning = false
-                                toast(
-                                    if (count >= 0) "Library refreshed · $count videos"
-                                    else "Rescan failed — try again",
-                                )
-                            }
-                        }
-                    },
-                )
-            }
-
-            item("clearProgress") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.DeleteSweep,
-                    title = "Clear playback progress",
-                    subtitle = "Reset positions, speeds & sync locks for all videos",
-                    trailing = { ValueText(palette = palette, text = "CLEAR") },
-                    onClick = { openDialog = DLG_CLEAR },
-                )
-            }
-
-            item("sharelogs") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Share,
-                    title = "Share app logs",
-                    subtitle = "The sync decision trail — what locked, what refused, and why",
-                    trailing = {},
-                    onClick = {
-                        coroutineScope.launch { SyncLogShare.shareSyncLog(context) }
-                    },
-                )
-            }
-
-            // ══ PLAYER & VIDEO ═══════════════════════════════════
-            item("sec-playback") { SectionHeader(palette, "Player & Video") }
-
-            item("resume") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.History,
-                    title = "Resume position",
-                    subtitle = "What to do with a saved position",
-                    trailing = {
-                        ValueText(
-                            palette = palette,
-                            text = when (settings.resumeBehavior) {
-                                ResumeBehavior.ALWAYS_RESUME -> "Resume"
-                                ResumeBehavior.ALWAYS_START_OVER -> "Start over"
-                                else -> "Ask"
-                            },
-                        )
-                    },
-                    onClick = { openDialog = DLG_RESUME },
-                )
-            }
-
-            item("speed") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Speed,
-                    title = "Default playback speed",
-                    subtitle = "Used until a video has its own speed",
-                    trailing = {
-                        ValueText(palette = palette, text = "${settings.defaultPlaybackSpeed}×")
-                    },
-                    onClick = { openDialog = DLG_SPEED },
-                )
-            }
-
-            item("autoplay") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.PlayCircle,
-                    title = "Autoplay next episode",
-                    subtitle = "Auto-advance with countdown",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = settings.autoAdvance,
-                            onToggle = { persist { it.copy(autoAdvance = !it.autoAdvance) } },
-                        )
-                    },
-                )
-            }
-
-            item("sleep") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Timer,
-                    title = "Sleep timer",
-                    subtitle = "Stop playback automatically",
-                    trailing = {
-                        ValueText(
-                            palette = palette,
-                            text = sleepLabel(settings.sleepTimerMinutes),
-                        )
-                    },
-                    onClick = { openDialog = DLG_SLEEP },
-                )
-            }
-
-            item("keepScreenOn") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.StayCurrentPortrait,
-                    title = "Keep screen on",
-                    subtitle = "Prevent the display sleeping during playback",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = settings.keepScreenOn,
-                            onToggle = { persist { it.copy(keepScreenOn = !it.keepScreenOn) } },
-                        )
-                    },
-                )
-            }
-
-            item("backgroundPlayback") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Headphones,
-                    title = "Background playback",
-                    subtitle = "Keep playing when the app is hidden",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = settings.backgroundPlayback,
-                            onToggle = { persist { it.copy(backgroundPlayback = !it.backgroundPlayback) } },
-                        )
-                    },
-                )
-            }
-
-            item("decoder") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Memory,
-                    title = "Decoder priority",
-                    subtitle = "Which video decoder to prefer",
-                    trailing = {
-                        ValueText(
-                            palette = palette,
-                            text = when (settings.decoderPriority) {
-                                DecoderPriority.PREFER_APP -> "App SW"
-                                DecoderPriority.DEVICE_ONLY -> "HW only"
-                                else -> "HW + SW"
-                            },
-                        )
-                    },
-                    onClick = { openDialog = DLG_DECODER },
-                )
-            }
-
-            // ══ SUBTITLES ════════════════════════════════════════
-            item("sec-subs") { SectionHeader(palette, "Subtitles") }
-
-            item("autosync") {
-                val current = settings.subtitleAutoSyncEnabled
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.AutoAwesome,
-                    title = "Subtitle auto-sync",
-                    subtitle = "Speech-match · drift-aware",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = current,
-                            onToggle = {
-                                val next = !current
-                                PlayerPrefs.saveAutoSyncEnabled(context, next)
-                                persist { it.copy(subtitleAutoSyncEnabled = next, autoSyncEnabled = next) }
-                            },
-                        )
-                    },
-                )
-            }
-
-            item("subtree") {
-                val tree = subTreeUri
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.FolderOpen,
-                    title = "Subtitles folder access",
-                    subtitle = if (tree == null) {
-                        "Android 13+ hides .srt files from apps — grant the folder holding your subtitles"
-                    } else {
-                        "Sidecar search also scans: ${subtitleTreeLabel(tree)}"
-                    },
-                    trailing = {
-                        ValueText(
-                            palette = palette,
-                            text = if (tree == null) "Set" else "Change",
-                        )
-                    },
-                    onClick = { subTreePicker.launch(null) },
-                )
-            }
-
-            item("subsize") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.FormatSize,
-                    title = "Subtitle size",
-                    subtitle = "Font size of rendered subtitles",
-                    trailing = {
-                        ValueText(palette = palette, text = subtitleSizeLabel(settings.subtitleSize))
-                    },
-                    onClick = { openDialog = DLG_SUB_SIZE },
-                )
-            }
-
-            item("subpos") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.ArrowDownward,
-                    title = "Subtitle position",
-                    subtitle = "Vertical placement on screen",
-                    trailing = {
-                        ValueText(palette = palette, text = subtitlePosLabel(settings.subtitlePosition))
-                    },
-                    onClick = { openDialog = DLG_SUB_POS },
-                )
-            }
-
-            item("subcolor") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.FormatColorText,
-                    title = "Subtitle color",
-                    subtitle = "Text color of rendered subtitles",
-                    trailing = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            ValueText(palette = palette, text = subtitleColorLabel(settings.subtitleColor))
                             Spacer(Modifier.width(Dimens.gapSm))
-                            Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .clip(CircleShape)
-                                    .background(subtitleColorValue(settings.subtitleColor))
-                                    .border(1.dp, palette.rowLine, CircleShape),
+                            Text(
+                                activeSkin.displayName,
+                                color = palette.text,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
                             )
                         }
-                    },
-                    onClick = { openDialog = DLG_SUB_COLOR },
-                )
-            }
-
-            item("subbold") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.FormatBold,
-                    title = "Bold subtitles",
-                    subtitle = "High-contrast bold outlined look",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = settings.subtitleBold,
-                            onToggle = { persist { it.copy(subtitleBold = !it.subtitleBold) } },
-                        )
-                    },
-                )
-            }
-
-            item("sublang") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Translate,
-                    title = "Subtitle language",
-                    subtitle = "Preferred language for online search",
-                    trailing = {
-                        ValueText(
-                            palette = palette,
-                            text = when (settings.defaultSubtitleLanguage) {
-                                "chi" -> "中文"
-                                "eng" -> "English"
-                                else -> "Any"
-                            },
-                        )
-                    },
-                    onClick = { openDialog = DLG_SUB_LANG },
-                )
-            }
-
-            // ══ CONTROLS & GESTURES ═════════════════════════════
-            item("sec-gestures") { SectionHeader(palette, "Controls & Gestures") }
-
-            item("doubleTapSeek") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.TouchApp,
-                    title = "Double-tap to seek",
-                    subtitle = "Tap left / right side to jump",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = settings.doubleTapSeek,
-                            onToggle = { persist { it.copy(doubleTapSeek = !it.doubleTapSeek) } },
-                        )
-                    },
-                )
-            }
-
-            item("swipeToSeek") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Swipe,
-                    title = "Swipe to seek",
-                    subtitle = "Horizontal drag scrubs the timeline",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = settings.swipeToSeek,
-                            onToggle = { persist { it.copy(swipeToSeek = !it.swipeToSeek) } },
-                        )
-                    },
-                )
-            }
-
-            item("volumeGesture") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.VolumeUp,
-                    title = "Volume gesture",
-                    subtitle = "Vertical drag on the right side",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = settings.volumeGesture,
-                            onToggle = { persist { it.copy(volumeGesture = !it.volumeGesture) } },
-                        )
-                    },
-                )
-            }
-
-            item("brightnessGesture") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.WbSunny,
-                    title = "Brightness gesture",
-                    subtitle = "Vertical drag on the left side",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = settings.brightnessGesture,
-                            onToggle = { persist { it.copy(brightnessGesture = !it.brightnessGesture) } },
-                        )
-                    },
-                )
-            }
-
-            item("pinchZoom") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.ZoomIn,
-                    title = "Pinch to zoom",
-                    subtitle = "Scale the video with a pinch gesture",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = settings.pinchZoom,
-                            onToggle = { persist { it.copy(pinchZoom = !it.pinchZoom) } },
-                        )
-                    },
-                )
-            }
-
-            item("seekstep") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.SwapHoriz,
-                    title = "Seek step",
-                    subtitle = "Buttons & double-tap distance",
-                    trailing = {
-                        ValueText(palette = palette, text = "${settings.seekIncrementSec}s")
-                    },
-                    onClick = {
-                        val steps = intArrayOf(5, 10, 15, 30, 60)
-                        val idx = steps.indexOf(settings.seekIncrementSec).coerceAtLeast(0)
-                        persist { it.copy(seekIncrementSec = steps[(idx + 1) % steps.size]) }
-                    },
-                )
-            }
-
-            item("autoHide") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.HourglassEmpty,
-                    title = "Auto-hide controls",
-                    subtitle = "Delay before the HUD disappears",
-                    trailing = {
-                        ValueText(
-                            palette = palette,
-                            text = when (settings.autoHideControlsMs) {
-                                2500L -> "2.5s"
-                                3500L -> "3.5s"
-                                5500L -> "5.5s"
-                                8000L -> "8s"
-                                else -> "5.5s"
-                            },
-                        )
-                    },
-                    onClick = {
-                        val steps = longArrayOf(2500L, 3500L, 5500L, 8000L)
-                        val idx = steps.indexOf(settings.autoHideControlsMs).let { if (it < 0) 2 else it }
-                        persist { it.copy(autoHideControlsMs = steps[(idx + 1) % steps.size]) }
-                    },
-                )
-            }
-
-            item("fastseek") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.FastForward,
-                    title = "Fast seek threshold",
-                    subtitle = "Long jumps snap to keyframes",
-                    trailing = {
-                        ValueText(
-                            palette = palette,
-                            text = when (settings.fastSeekThresholdSec) {
-                                60L -> "1m"
-                                300L -> "5m"
-                                else -> "2m"
-                            },
-                        )
-                    },
-                    onClick = {
-                        val steps = longArrayOf(60L, 120L, 300L)
-                        val idx = steps.indexOf(settings.fastSeekThresholdSec).coerceAtLeast(0)
-                        persist { it.copy(fastSeekThresholdSec = steps[(idx + 1) % steps.size]) }
-                    },
-                )
-            }
-
-            // ══ AUDIO ════════════════════════════════════════════
-            item("sec-audio") { SectionHeader(palette, "Audio") }
-
-            item("audioEffect") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.Headphones,
-                    title = "Audio effect",
-                    subtitle = "Lift dialogue and cut rumble",
-                    trailing = {
-                        ToggleSwitch(
-                            palette = palette,
-                            on = settings.audioEffectEnabled,
-                            onToggle = {
-                                persist { it.copy(audioEffectEnabled = !it.audioEffectEnabled) }
-                            },
-                        )
-                    },
-                )
-            }
-
-            item("volumeBoost") {
-                SettingsRow(
-                    palette = palette,
-                    icon = Icons.Filled.GraphicEq,
-                    title = "Volume boost",
-                    subtitle = "Extra loudness above system max",
-                    trailing = {
-                        ValueText(
-                            palette = palette,
-                            text = if (settings.volumeBoostPct == 0) "Off"
-                            else "+${settings.volumeBoostPct}%",
-                        )
-                    },
-                    onClick = { openDialog = DLG_BOOST },
-                )
-            }
-
-            // ── about footer ─────────────────────────────────────
-            item("footer") {
-                val version = remember {
-                    try {
-                        val pi = context.packageManager.getPackageInfo(context.packageName, 0)
-                        val code = if (Build.VERSION.SDK_INT >= 28) {
-                            pi.longVersionCode
-                        } else {
-                            @Suppress("DEPRECATION")
-                            pi.versionCode.toLong()
-                        }
-                        "v" + pi.versionName + " (" + code + ")"
-                    } catch (_: Throwable) {
-                        ""
                     }
                 }
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Dimens.gapLg)
-                        .padding(top = Dimens.gapXl, bottom = Dimens.gapSm),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        "ANONRODE PLAYER",
-                        color = palette.textDim,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
+
+                item("sec-categories") {
+                    SectionHeader(palette, "Categories")
+                }
+
+                // Category 1: PLAYBACK
+                item("cat-playback") {
+                    SettingsFolderCard(
+                        palette = palette,
+                        folder = SettingsFolder.PLAYBACK,
+                        badgeText = "${settings.defaultPlaybackSpeed}×" + if (settings.autoAdvance) " · Auto" else "",
+                        onClick = { activeFolder = SettingsFolder.PLAYBACK },
                     )
-                    if (version.isNotEmpty()) {
-                        Text(
-                            version,
-                            color = palette.textDim,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(top = Dimens.gapXs),
-                        )
+                }
+
+                // Category 2: AUDIO
+                item("cat-audio") {
+                    val boost = settings.volumeBoostPct
+                    val audioText = if (boost > 0) "+$boost% boost" else if (settings.audioEffectEnabled) "Dialogue lift" else "Standard"
+                    SettingsFolderCard(
+                        palette = palette,
+                        folder = SettingsFolder.AUDIO,
+                        badgeText = audioText,
+                        onClick = { activeFolder = SettingsFolder.AUDIO },
+                    )
+                }
+
+                // Category 3: SUBTITLES
+                item("cat-subtitles") {
+                    val subText = if (settings.subtitleAutoSyncEnabled) "Auto-sync on" else "${subtitleSizeLabel(settings.subtitleSize)} · ${subtitleColorLabel(settings.subtitleColor)}"
+                    SettingsFolderCard(
+                        palette = palette,
+                        folder = SettingsFolder.SUBTITLES,
+                        badgeText = subText,
+                        previewColor = subtitleColorValue(settings.subtitleColor),
+                        onClick = { activeFolder = SettingsFolder.SUBTITLES },
+                    )
+                }
+
+                // Category 4: GESTURES
+                item("cat-gestures") {
+                    SettingsFolderCard(
+                        palette = palette,
+                        folder = SettingsFolder.GESTURES,
+                        badgeText = "${settings.seekIncrementSec}s seek",
+                        onClick = { activeFolder = SettingsFolder.GESTURES },
+                    )
+                }
+
+                // Category 5: APPEARANCE
+                item("cat-appearance") {
+                    SettingsFolderCard(
+                        palette = palette,
+                        folder = SettingsFolder.APPEARANCE,
+                        badgeText = activeSkin.displayName,
+                        previewColor = palette.accent,
+                        onClick = { activeFolder = SettingsFolder.APPEARANCE },
+                    )
+                }
+
+                // Category 6: LIBRARY
+                item("cat-library") {
+                    SettingsFolderCard(
+                        palette = palette,
+                        folder = SettingsFolder.LIBRARY,
+                        badgeText = "Maintenance",
+                        onClick = { activeFolder = SettingsFolder.LIBRARY },
+                    )
+                }
+
+                // ── Directory Hub Footer ──────────────────────────
+                item("hub-footer") {
+                    AboutFooter(context = context, palette = palette)
+                }
+            } else {
+                // ── Sub-page Category Header ──────────────────────
+                item("cat-header") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = Dimens.gapSm, end = Dimens.gapLg, top = Dimens.gapMd, bottom = Dimens.gapSm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SettingsBackButton(palette = palette, onClick = { activeFolder = null })
+                        Spacer(Modifier.width(Dimens.gapXs))
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = Dimens.gapSm)
+                        ) {
+                            Text(
+                                activeFolder!!.title,
+                                color = palette.text,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                activeFolder!!.subtitle,
+                                color = palette.textDim,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
-                    Text(
-                        "Local-only playback · nothing leaves your device",
-                        color = palette.textDim,
-                        style = MaterialTheme.typography.labelSmall,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(top = Dimens.gapXs),
-                    )
+                }
+
+                when (activeFolder) {
+                    SettingsFolder.PLAYBACK -> {
+                        item("sub-sec-playback") { SectionHeader(palette, "Playback Preferences") }
+                        item("resume") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.History,
+                                title = "Resume position",
+                                subtitle = "What to do with a saved position",
+                                trailing = {
+                                    ValueText(
+                                        palette = palette,
+                                        text = when (settings.resumeBehavior) {
+                                            ResumeBehavior.ALWAYS_RESUME -> "Resume"
+                                            ResumeBehavior.ALWAYS_START_OVER -> "Start over"
+                                            else -> "Ask"
+                                        },
+                                    )
+                                },
+                                onClick = { openDialog = DLG_RESUME },
+                            )
+                        }
+                        item("speed") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.Speed,
+                                title = "Default playback speed",
+                                subtitle = "Used until a video has its own speed",
+                                trailing = {
+                                    ValueText(palette = palette, text = "${settings.defaultPlaybackSpeed}×")
+                                },
+                                onClick = { openDialog = DLG_SPEED },
+                            )
+                        }
+                        item("autoplay") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.PlayCircle,
+                                title = "Autoplay next episode",
+                                subtitle = "Auto-advance with countdown",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = settings.autoAdvance,
+                                        onToggle = { persist { it.copy(autoAdvance = !it.autoAdvance) } },
+                                    )
+                                },
+                            )
+                        }
+                        item("sleep") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.Timer,
+                                title = "Sleep timer",
+                                subtitle = "Stop playback automatically",
+                                trailing = {
+                                    ValueText(
+                                        palette = palette,
+                                        text = sleepLabel(settings.sleepTimerMinutes),
+                                    )
+                                },
+                                onClick = { openDialog = DLG_SLEEP },
+                            )
+                        }
+                        item("sub-sec-engine") { SectionHeader(palette, "Engine & Screen") }
+                        item("keepScreenOn") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.StayCurrentPortrait,
+                                title = "Keep screen on",
+                                subtitle = "Prevent the display sleeping during playback",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = settings.keepScreenOn,
+                                        onToggle = { persist { it.copy(keepScreenOn = !it.keepScreenOn) } },
+                                    )
+                                },
+                            )
+                        }
+                        item("backgroundPlayback") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.Headphones,
+                                title = "Background playback",
+                                subtitle = "Keep playing when the app is hidden",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = settings.backgroundPlayback,
+                                        onToggle = { persist { it.copy(backgroundPlayback = !it.backgroundPlayback) } },
+                                    )
+                                },
+                            )
+                        }
+                        item("decoder") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.Memory,
+                                title = "Decoder priority",
+                                subtitle = "Which video decoder to prefer",
+                                trailing = {
+                                    ValueText(
+                                        palette = palette,
+                                        text = when (settings.decoderPriority) {
+                                            DecoderPriority.PREFER_APP -> "App SW"
+                                            DecoderPriority.DEVICE_ONLY -> "HW only"
+                                            else -> "HW + SW"
+                                        },
+                                    )
+                                },
+                                onClick = { openDialog = DLG_DECODER },
+                            )
+                        }
+                    }
+
+                    SettingsFolder.AUDIO -> {
+                        item("sub-sec-sound") { SectionHeader(palette, "Equalizer & Sound") }
+                        item("audioEffect") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.Headphones,
+                                title = "Audio effect",
+                                subtitle = "Lift dialogue and cut rumble",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = settings.audioEffectEnabled,
+                                        onToggle = {
+                                            persist { it.copy(audioEffectEnabled = !it.audioEffectEnabled) }
+                                        },
+                                    )
+                                },
+                            )
+                        }
+                        item("volumeBoost") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.GraphicEq,
+                                title = "Volume boost",
+                                subtitle = "Extra loudness above system max",
+                                trailing = {
+                                    ValueText(
+                                        palette = palette,
+                                        text = if (settings.volumeBoostPct == 0) "Off"
+                                        else "+${settings.volumeBoostPct}%",
+                                    )
+                                },
+                                onClick = { openDialog = DLG_BOOST },
+                            )
+                        }
+                    }
+
+                    SettingsFolder.SUBTITLES -> {
+                        item("sub-sec-sync") { SectionHeader(palette, "Auto-Sync & Storage") }
+                        item("autosync") {
+                            val current = settings.subtitleAutoSyncEnabled
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.AutoAwesome,
+                                title = "Subtitle auto-sync",
+                                subtitle = "Speech-match · drift-aware",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = current,
+                                        onToggle = {
+                                            val next = !current
+                                            PlayerPrefs.saveAutoSyncEnabled(context, next)
+                                            persist { it.copy(subtitleAutoSyncEnabled = next, autoSyncEnabled = next) }
+                                        },
+                                    )
+                                },
+                            )
+                        }
+                        item("subtree") {
+                            val tree = subTreeUri
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.FolderOpen,
+                                title = "Subtitles folder access",
+                                subtitle = if (tree == null) {
+                                    "Android 13+ hides .srt files from apps — grant the folder holding your subtitles"
+                                } else {
+                                    "Sidecar search also scans: ${subtitleTreeLabel(tree)}"
+                                },
+                                trailing = {
+                                    ValueText(
+                                        palette = palette,
+                                        text = if (tree == null) "Set" else "Change",
+                                    )
+                                },
+                                onClick = { subTreePicker.launch(null) },
+                            )
+                        }
+                        item("sub-sec-appearance") { SectionHeader(palette, "Appearance & Language") }
+                        item("subsize") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.FormatSize,
+                                title = "Subtitle size",
+                                subtitle = "Font size of rendered subtitles",
+                                trailing = {
+                                    ValueText(palette = palette, text = subtitleSizeLabel(settings.subtitleSize))
+                                },
+                                onClick = { openDialog = DLG_SUB_SIZE },
+                            )
+                        }
+                        item("subpos") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.ArrowDownward,
+                                title = "Subtitle position",
+                                subtitle = "Vertical placement on screen",
+                                trailing = {
+                                    ValueText(palette = palette, text = subtitlePosLabel(settings.subtitlePosition))
+                                },
+                                onClick = { openDialog = DLG_SUB_POS },
+                            )
+                        }
+                        item("subcolor") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.FormatColorText,
+                                title = "Subtitle color",
+                                subtitle = "Text color of rendered subtitles",
+                                trailing = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        ValueText(palette = palette, text = subtitleColorLabel(settings.subtitleColor))
+                                        Spacer(Modifier.width(Dimens.gapSm))
+                                        Box(
+                                            modifier = Modifier
+                                                .size(10.dp)
+                                                .clip(CircleShape)
+                                                .background(subtitleColorValue(settings.subtitleColor))
+                                                .border(1.dp, palette.rowLine, CircleShape),
+                                        )
+                                    }
+                                },
+                                onClick = { openDialog = DLG_SUB_COLOR },
+                            )
+                        }
+                        item("subbold") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.FormatBold,
+                                title = "Bold subtitles",
+                                subtitle = "High-contrast bold outlined look",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = settings.subtitleBold,
+                                        onToggle = { persist { it.copy(subtitleBold = !it.subtitleBold) } },
+                                    )
+                                },
+                            )
+                        }
+                        item("sublang") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.Translate,
+                                title = "Subtitle language",
+                                subtitle = "Preferred language for online search",
+                                trailing = {
+                                    ValueText(
+                                        palette = palette,
+                                        text = when (settings.defaultSubtitleLanguage) {
+                                            "chi" -> "中文"
+                                            "eng" -> "English"
+                                            else -> "Any"
+                                        },
+                                    )
+                                },
+                                onClick = { openDialog = DLG_SUB_LANG },
+                            )
+                        }
+                    }
+
+                    SettingsFolder.GESTURES -> {
+                        item("sub-sec-gestures") { SectionHeader(palette, "Touch Controls") }
+                        item("doubleTapSeek") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.TouchApp,
+                                title = "Double-tap to seek",
+                                subtitle = "Tap left / right side to jump",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = settings.doubleTapSeek,
+                                        onToggle = { persist { it.copy(doubleTapSeek = !it.doubleTapSeek) } },
+                                    )
+                                },
+                            )
+                        }
+                        item("swipeToSeek") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.Swipe,
+                                title = "Swipe to seek",
+                                subtitle = "Horizontal drag scrubs the timeline",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = settings.swipeToSeek,
+                                        onToggle = { persist { it.copy(swipeToSeek = !it.swipeToSeek) } },
+                                    )
+                                },
+                            )
+                        }
+                        item("volumeGesture") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.VolumeUp,
+                                title = "Volume gesture",
+                                subtitle = "Vertical drag on the right side",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = settings.volumeGesture,
+                                        onToggle = { persist { it.copy(volumeGesture = !it.volumeGesture) } },
+                                    )
+                                },
+                            )
+                        }
+                        item("brightnessGesture") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.WbSunny,
+                                title = "Brightness gesture",
+                                subtitle = "Vertical drag on the left side",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = settings.brightnessGesture,
+                                        onToggle = { persist { it.copy(brightnessGesture = !it.brightnessGesture) } },
+                                    )
+                                },
+                            )
+                        }
+                        item("pinchZoom") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.ZoomIn,
+                                title = "Pinch to zoom",
+                                subtitle = "Scale the video with a pinch gesture",
+                                trailing = {
+                                    ToggleSwitch(
+                                        palette = palette,
+                                        on = settings.pinchZoom,
+                                        onToggle = { persist { it.copy(pinchZoom = !it.pinchZoom) } },
+                                    )
+                                },
+                            )
+                        }
+                        item("sub-sec-increments") { SectionHeader(palette, "Timing & Increments") }
+                        item("seekstep") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.SwapHoriz,
+                                title = "Seek step",
+                                subtitle = "Buttons & double-tap distance",
+                                trailing = {
+                                    ValueText(palette = palette, text = "${settings.seekIncrementSec}s")
+                                },
+                                onClick = {
+                                    val steps = intArrayOf(5, 10, 15, 30, 60)
+                                    val idx = steps.indexOf(settings.seekIncrementSec).coerceAtLeast(0)
+                                    persist { it.copy(seekIncrementSec = steps[(idx + 1) % steps.size]) }
+                                },
+                            )
+                        }
+                        item("autoHide") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.HourglassEmpty,
+                                title = "Auto-hide controls",
+                                subtitle = "Delay before the HUD disappears",
+                                trailing = {
+                                    ValueText(
+                                        palette = palette,
+                                        text = when (settings.autoHideControlsMs) {
+                                            2500L -> "2.5s"
+                                            3500L -> "3.5s"
+                                            5500L -> "5.5s"
+                                            8000L -> "8s"
+                                            else -> "5.5s"
+                                        },
+                                    )
+                                },
+                                onClick = {
+                                    val steps = longArrayOf(2500L, 3500L, 5500L, 8000L)
+                                    val idx = steps.indexOf(settings.autoHideControlsMs).let { if (it < 0) 2 else it }
+                                    persist { it.copy(autoHideControlsMs = steps[(idx + 1) % steps.size]) }
+                                },
+                            )
+                        }
+                        item("fastseek") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.FastForward,
+                                title = "Fast seek threshold",
+                                subtitle = "Long jumps snap to keyframes",
+                                trailing = {
+                                    ValueText(
+                                        palette = palette,
+                                        text = when (settings.fastSeekThresholdSec) {
+                                            60L -> "1m"
+                                            300L -> "5m"
+                                            else -> "2m"
+                                        },
+                                    )
+                                },
+                                onClick = {
+                                    val steps = longArrayOf(60L, 120L, 300L)
+                                    val idx = steps.indexOf(settings.fastSeekThresholdSec).coerceAtLeast(0)
+                                    persist { it.copy(fastSeekThresholdSec = steps[(idx + 1) % steps.size]) }
+                                },
+                            )
+                        }
+                    }
+
+                    SettingsFolder.APPEARANCE -> {
+                        item("sub-sec-theme") { SectionHeader(palette, "Skin & Color Palettes") }
+                        Skin.entries.forEach { skin ->
+                            item("skin-${skin.name}") {
+                                val skinPalette = SkinPalette.forSkin(skin)
+                                val isSelected = skin == activeSkin
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapXs)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(if (isSelected) palette.accent.copy(alpha = 0.08f) else palette.rowBg)
+                                            .border(
+                                                1.dp,
+                                                if (isSelected) palette.accent else palette.rowLine,
+                                                RoundedCornerShape(12.dp)
+                                            )
+                                            .clickable { themePrefs.setSkin(skin) }
+                                            .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapMd),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(24.dp)
+                                                .clip(CircleShape)
+                                                .background(skinPalette.background)
+                                                .border(1.dp, skinPalette.surfaceLine, CircleShape),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(10.dp)
+                                                    .clip(CircleShape)
+                                                    .background(skinPalette.accent),
+                                            )
+                                        }
+                                        Spacer(Modifier.width(Dimens.gapMd))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                skin.displayName,
+                                                color = if (isSelected) palette.accent else palette.text,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                            )
+                                            Text(
+                                                when (skin) {
+                                                    Skin.CHARCOAL -> "Deep charcoal with amber accent"
+                                                    Skin.MIDNIGHT -> "Pure OLED black with electric blue"
+                                                    Skin.SLATE -> "Cool slate gray with cyan highlight"
+                                                    Skin.LIGHT -> "Clean crisp paper with slate contrast"
+                                                    Skin.FOREST -> "Deep emerald with sage tones"
+                                                    Skin.AMBER -> "Warm dusk amber with golden glow"
+                                                    Skin.CRIMSON -> "Rich wine red with crimson accent"
+                                                },
+                                                color = palette.textDim,
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
+                                        }
+                                        RadioDot(palette = palette, selected = isSelected)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    SettingsFolder.LIBRARY -> {
+                        item("sub-sec-maintenance") { SectionHeader(palette, "Maintenance & Media") }
+                        item("rescan") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.Refresh,
+                                title = "Rescan library",
+                                subtitle = "Rebuild the video list from MediaStore now",
+                                trailing = {
+                                    if (rescanning) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            color = palette.accent,
+                                            strokeWidth = 2.dp,
+                                        )
+                                    } else {
+                                        ValueText(palette = palette, text = "RUN")
+                                    }
+                                },
+                                onClick = {
+                                    if (!rescanning) {
+                                        rescanning = true
+                                        coroutineScope.launch {
+                                            val count = withContext(Dispatchers.IO) {
+                                                try {
+                                                    AnonrodeApp.get(context).scanner.scan(force = true).videos.size
+                                                } catch (t: Throwable) {
+                                                    -1
+                                                }
+                                            }
+                                            rescanning = false
+                                            toast(
+                                                if (count >= 0) "Library refreshed · $count videos"
+                                                else "Rescan failed — try again",
+                                            )
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                        item("clearProgress") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.DeleteSweep,
+                                title = "Clear playback progress",
+                                subtitle = "Reset positions, speeds & sync locks for all videos",
+                                trailing = { ValueText(palette = palette, text = "CLEAR") },
+                                onClick = { openDialog = DLG_CLEAR },
+                            )
+                        }
+                        item("sub-sec-diag") { SectionHeader(palette, "Diagnostics") }
+                        item("sharelogs") {
+                            SettingsRow(
+                                palette = palette,
+                                icon = Icons.Filled.Share,
+                                title = "Share app logs",
+                                subtitle = "The sync decision trail — what locked, what refused, and why",
+                                trailing = {},
+                                onClick = {
+                                    coroutineScope.launch { SyncLogShare.shareSyncLog(context) }
+                                },
+                            )
+                        }
+                    }
+                    null -> {}
                 }
             }
         }
@@ -1386,6 +1553,150 @@ private fun SettingsBackButton(palette: SkinPalette, onClick: () -> Unit) {
             modifier = Modifier
                 .size(24.dp)
                 .graphicsLayer { rotationZ = 180f },
+        )
+    }
+}
+
+@Composable
+private fun SettingsFolderCard(
+    palette: SkinPalette,
+    folder: SettingsFolder,
+    badgeText: String,
+    previewColor: Color? = null,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapXs)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(palette.rowBg)
+                .border(1.dp, palette.rowLine, RoundedCornerShape(16.dp))
+                .clickable(onClick = onClick)
+                .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapMd),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(palette.accent.copy(alpha = 0.12f))
+                    .border(1.dp, palette.accent.copy(alpha = 0.22f), RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    folder.icon,
+                    contentDescription = null,
+                    tint = palette.accent,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.width(Dimens.gapMd))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    folder.title,
+                    color = palette.text,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    folder.subtitle,
+                    color = palette.textDim,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(Dimens.gapSm))
+            if (badgeText.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(palette.surface)
+                        .border(1.dp, palette.surfaceLine.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (previewColor != null) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(previewColor)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        badgeText,
+                        color = palette.textDim,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFeatureSettings = "tnum",
+                        ),
+                    )
+                }
+            }
+            Spacer(Modifier.width(Dimens.gapXs))
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = palette.textDim.copy(alpha = 0.6f),
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AboutFooter(context: android.content.Context, palette: SkinPalette) {
+    val version = remember {
+        try {
+            val pi = context.packageManager.getPackageInfo(context.packageName, 0)
+            val code = if (Build.VERSION.SDK_INT >= 28) {
+                pi.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                pi.versionCode.toLong()
+            }
+            "v" + pi.versionName + " (" + code + ")"
+        } catch (_: Throwable) {
+            ""
+        }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Dimens.gapLg)
+            .padding(top = Dimens.gapXl, bottom = Dimens.gapSm),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "ANONRODE PLAYER",
+            color = palette.textDim,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+        if (version.isNotEmpty()) {
+            Text(
+                version,
+                color = palette.textDim,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(top = Dimens.gapXs),
+            )
+        }
+        Text(
+            "Local-only playback · nothing leaves your device",
+            color = palette.textDim,
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = Dimens.gapXs),
         )
     }
 }

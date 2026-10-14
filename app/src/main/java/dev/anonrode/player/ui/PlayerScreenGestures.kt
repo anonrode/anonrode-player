@@ -105,6 +105,10 @@ internal fun Modifier.playerGestureLayer(
                     if (isPipMode || ui.locked.value) return@detectTapGestures
                     actions.ui.notifyUserInteraction()
                     val w = gestures.scrW.floatValue
+                    val h = gestures.scrH.floatValue
+                    val density = actions.view.resources.displayMetrics.density.coerceAtLeast(1f)
+                    val edgeDeadZone = 52f * density
+                    if (off.y < edgeDeadZone || off.y > h - edgeDeadZone) return@detectTapGestures
                     val x = off.x
                     when {
                         x < w * 0.35f -> {
@@ -130,6 +134,18 @@ internal fun Modifier.playerGestureLayer(
             detectDragGestures(
                 onDragStart = { off ->
                     if (ui.locked.value || isPipMode) return@detectDragGestures
+                    val density = actions.view.resources.displayMetrics.density.coerceAtLeast(1f)
+                    val topDeadZone = 52f * density
+                    val bottomDeadZone = 52f * density
+                    val sideDeadZone = 24f * density
+                    val h = gestures.scrH.floatValue
+                    val w = gestures.scrW.floatValue
+                    // System edge gesture protection: ignore drags initiating in notification shade
+                    // or home/minimize navigation swipe zones so system shade swipes do not alter volume.
+                    if (off.y < topDeadZone || off.y > h - bottomDeadZone || off.x < sideDeadZone || off.x > w - sideDeadZone) {
+                        gestures.mode.value = null
+                        return@detectDragGestures
+                    }
                     actions.ui.notifyUserInteraction()
                     gestures.mode.value = null
                     gestures.startX.floatValue = off.x
@@ -209,6 +225,9 @@ internal fun Modifier.playerGestureLayer(
                     gestures.lastX.floatValue = x
                 },
                 onDragEnd = {
+                    if (gestures.mode.value == "vol") {
+                        actions.commitVolumeGesture()
+                    }
                     // Commit the ONE pending scrub seek (fast/keyframe seek —
                     // scrubbing is coarse navigation; the seekbar handles
                     // exact seeks). Same setSeekParameters pattern as seekBy.
@@ -269,21 +288,42 @@ internal fun Modifier.playerGestureLayer(
                     }
                     false
                 } ?: true
-                if (!activated) return@awaitEachGesture
-                // Long-press survived — engage the rock-solid 2.0x speed boost.
-                actions.startSpeedBoost()
+                // Long-press survived — engage discrete milestone speed scrub.
+                actions.startSpeedScrub()
+                val startX = down.position.x
+                val density = actions.view.resources.displayMetrics.density.coerceAtLeast(1f)
+                var isSliding = false
+                var lastMoveTime = System.currentTimeMillis()
+
                 try {
                     // Hold until the finger lifts; a second finger going
-                    // down aborts the boost. Consume changes so no other gesture fires.
+                    // down aborts the scrub. Consume changes so no other gesture fires.
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         event.changes.forEach { it.consume() }
                         val pressed = event.changes.filter { it.pressed }
                         val heldPointer = event.changes.firstOrNull { it.id == down.id && it.pressed }
                         if (heldPointer == null || pressed.isEmpty() || pressed.size > 1) break
+
+                        val deltaPx = heldPointer.position.x - startX
+                        val deltaDp = deltaPx / density
+
+                        if (abs(deltaDp) > 8f) {
+                            isSliding = true
+                            lastMoveTime = System.currentTimeMillis()
+                            // Each 34dp of horizontal drag moves 1 discrete milestone step
+                            val stepOffset = (deltaDp / 34f).roundToInt()
+                            val targetIndex = (4 + stepOffset).coerceIn(0, actions.discreteMilestones.size - 1)
+                            actions.updateDiscreteScrub(targetIndex, isSliding = true)
+                        } else {
+                            if (System.currentTimeMillis() - lastMoveTime > 600L && isSliding) {
+                                isSliding = false
+                                actions.updateDiscreteScrub(actions.ui.discreteScrubIndex.intValue, isSliding = false)
+                            }
+                        }
                     }
                 } finally {
-                    actions.stopSpeedBoost()
+                    actions.stopSpeedScrub()
                 }
             }
         }

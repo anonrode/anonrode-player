@@ -1,13 +1,25 @@
 package dev.anonrode.player.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,10 +34,12 @@ import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -38,6 +52,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalView
 import android.view.HapticFeedbackConstants
@@ -46,12 +61,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 
 /* ── Small overlay surfaces: double-tap flash, gesture HUD pill, buffering
  * spinner, lock badge, A-B chip, Up Next pill, auto-advance countdown,
@@ -60,38 +78,18 @@ import androidx.compose.ui.unit.sp
  * [modifier].
  * ------------------------------------------------------------------------- */
 
-/** Double-tap seek flash on the tapped edge. */
+/** Double-tap seek flash on the tapped edge: delegates to box-free floating SeekRippleOverlay. */
 @Composable
 internal fun DoubleTapFlash(
     modifier: Modifier = Modifier,
     side: Int,
     seekIncrementSec: Int = 10,
 ) {
-    Box(
-        modifier = modifier
-            .padding(horizontal = 32.dp)
-            .size(64.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.20f))
-            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = if (side < 0) Icons.Filled.FastRewind else Icons.Filled.FastForward,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(24.dp)
-            )
-            Text(
-                text = "${if (side < 0) "−" else "+"}${seekIncrementSec.coerceAtLeast(1)}s",
-                color = Color.White,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-    }
+    SeekRippleOverlay(
+        side = side,
+        seconds = seekIncrementSec.coerceAtLeast(1),
+        modifier = modifier,
+    )
 }
 
 /** Gesture HUD pill (volume / brightness / seek / zoom / speed feedback). */
@@ -147,7 +145,7 @@ internal fun LockBadge(
                     )
                 )
             )
-            .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.50f), CircleShape)
+            .border(1.dp, accent.copy(alpha = 0.50f), CircleShape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -158,7 +156,7 @@ internal fun LockBadge(
         Icon(
             imageVector = Icons.Filled.Lock,
             contentDescription = "Unlock controls",
-            tint = Color(0xFF38BDF8),
+            tint = accent,
             modifier = Modifier.size(20.dp),
         )
     }
@@ -236,26 +234,68 @@ internal fun UpNextPill(
 internal fun NextCountdownOverlay(
     modifier: Modifier = Modifier,
     countdownSec: Int,
+    accent: Color,
     onCancel: () -> Unit,
     onPlayNow: () -> Unit,
 ) {
-    Column(
+    Box(
         modifier = modifier
-            .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(16.dp))
-            .padding(horizontal = 22.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF0F172A).copy(alpha = 0.94f))
+            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(
-            "Next episode in $countdownSec...",
-            color = Color.White,
-            style = MaterialTheme.typography.titleMedium
-        )
-        Row(
-            modifier = Modifier.padding(top = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            TextButton(onClick = onCancel) { Text("Cancel") }
-            TextButton(onClick = onPlayNow) { Text("Play now") }
+            Text(
+                text = "Next episode in ${countdownSec}s…",
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .clickable(onClick = onCancel)
+                        .padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Cancel",
+                        color = Color(0xFFCBD5E1),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(accent.copy(alpha = 0.25f))
+                        .border(1.dp, accent.copy(alpha = 0.70f), RoundedCornerShape(10.dp))
+                        .clickable(onClick = onPlayNow)
+                        .padding(horizontal = 18.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Play now",
+                        color = accent,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
         }
     }
 }
@@ -293,6 +333,7 @@ internal fun PlayerOverlayToast(
 /**
  * Volume / Brightness vertical slider pill shown during vertical drag gestures.
  * Positioned on the left edge (Brightness) or right edge (Volume).
+ * Mature obsidian glass aesthetic, dynamic glyphs, and frosted monochrome rail.
  */
 @Composable
 internal fun VerticalGestureHudPill(
@@ -304,19 +345,22 @@ internal fun VerticalGestureHudPill(
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF0F172A).copy(alpha = 0.88f))
-            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(16.dp))
-            .padding(horizontal = 10.dp, vertical = 14.dp),
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color(0xD9080A0E))
+            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(20.dp))
+            .padding(horizontal = 11.dp, vertical = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             val icon = if (type == VerticalHudType.VOLUME) {
-                if (progress <= 0.01f) Icons.AutoMirrored.Filled.VolumeOff
-                else Icons.AutoMirrored.Filled.VolumeUp
+                when {
+                    progress <= 0.01f -> Icons.AutoMirrored.Filled.VolumeOff
+                    progress < 0.50f -> Icons.AutoMirrored.Filled.VolumeDown
+                    else -> Icons.AutoMirrored.Filled.VolumeUp
+                }
             } else {
                 Icons.Filled.WbSunny
             }
@@ -326,12 +370,12 @@ internal fun VerticalGestureHudPill(
                 tint = Color.White,
                 modifier = Modifier.size(18.dp),
             )
-            // Vertical level bar: 6dp width, 80dp height
+            // Vertical level bar: 7dp width, 88dp height
             Box(
                 modifier = Modifier
-                    .size(width = 6.dp, height = 80.dp)
+                    .size(width = 7.dp, height = 88.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.18f)),
+                    .background(Color.White.copy(alpha = 0.16f)),
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 Box(
@@ -339,7 +383,7 @@ internal fun VerticalGestureHudPill(
                         .fillMaxWidth()
                         .fillMaxHeight(progress.coerceIn(0f, 1f))
                         .clip(CircleShape)
-                        .background(Color(0xFF38BDF8))
+                        .background(Color.White)
                 )
             }
             Text(
@@ -348,13 +392,19 @@ internal fun VerticalGestureHudPill(
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
+                fontFeatureSettings = "tnum",
             )
         }
     }
 }
 
 /**
- * Double-tap seek ripples: circular indicator on left half (-10s) or right half (+10s).
+ * Double-tap seek indicator:
+ * Pure floating vector chevrons and label on left half (-10s) or right half (+10s).
+ * - Strictly zero bounding box, zero borders, zero background containers.
+ * - Almost transparent black (Color(0x73000000)).
+ * - Strictly zero blur, razor-sharp vector geometry.
+ * - Buttery fluid momentum glide + snappy spring entrance.
  */
 @Composable
 internal fun SeekRippleOverlay(
@@ -363,69 +413,237 @@ internal fun SeekRippleOverlay(
     modifier: Modifier = Modifier,
 ) {
     if (side == 0) return
-    Box(modifier = modifier) {
-        Box(
-            modifier = Modifier
-                .align(if (side < 0) Alignment.CenterStart else Alignment.CenterEnd)
-                .padding(horizontal = 32.dp)
-                .size(64.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.20f))
-                .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    imageVector = if (side < 0) Icons.Filled.FastRewind else Icons.Filled.FastForward,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(24.dp),
-                )
-                Text(
-                    text = "${if (side < 0) "−" else "+"}${seconds}s",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
+
+    val animAlpha = remember { Animatable(0f) }
+    val animOffset = remember { Animatable(if (side < 0) 14f else -14f) }
+
+    LaunchedEffect(side, seconds) {
+        animAlpha.snapTo(0f)
+        animOffset.snapTo(if (side < 0) 14f else -14f)
+        coroutineScope {
+            launch {
+                animAlpha.animateTo(
+                    targetValue = 1f,
+                    animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
                 )
             }
+            launch {
+                animOffset.animateTo(
+                    targetValue = 0f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessLow
+                    )
+                )
+            }
+        }
+    }
+
+    Box(modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .align(if (side < 0) Alignment.CenterStart else Alignment.CenterEnd)
+                .padding(horizontal = 44.dp)
+                .offset(x = animOffset.value.dp)
+                .graphicsLayer { alpha = animAlpha.value },
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Icon(
+                imageVector = if (side < 0) Icons.Filled.FastRewind else Icons.Filled.FastForward,
+                contentDescription = null,
+                tint = Color.Black.copy(alpha = 0.45f),
+                modifier = Modifier.size(38.dp),
+            )
+            Text(
+                text = "${if (side < 0) "−" else "+"}${seconds}s",
+                color = Color.Black.copy(alpha = 0.48f),
+                fontSize = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.5.sp,
+            )
         }
     }
 }
 
 /**
- * Press-and-hold 2.0x temporary speed banner at top-center.
+ * Discrete milestone speed scrub HUD (Long-press & horizontal slide).
+ *
+ * Implements Feature 1 from the reference recording with:
+ * - State A (Resting / Finger still): Compact translucent pill "[ ▶▶ 2.0x Speed Playing ]".
+ * - State B (Sliding horizontally): Expanded discrete milestone track with strict 1:1
+ *   vertical alignment between labels, tick markers, thumb disc, and readout.
+ * - Smoky translucent black cinema styling with zero bright blue clutter.
  */
 @Composable
-internal fun SpeedBannerHud(
-    speedText: String,
+internal fun DiscreteSpeedScrubHud(
+    visible: Boolean,
+    isSliding: Boolean,
+    stepIndex: Int,
+    milestones: List<Float>,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier
-            .clip(CircleShape)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        Color(0xFF2A3647),
-                        Color(0xFF1A2330),
-                        Color(0xFF111722),
-                    )
+    if (!visible) return
+    val speed = milestones.getOrElse(stepIndex) { 2.0f }
+
+    AnimatedContent(
+        targetState = isSliding,
+        transitionSpec = {
+            fadeIn(animationSpec = tween(150)) togetherWith fadeOut(animationSpec = tween(150))
+        },
+        modifier = modifier,
+        label = "DiscreteSpeedHudAnim",
+    ) { sliding ->
+        if (!sliding) {
+            // State A: Compact Translucent Pill
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xD9080A0E))
+                    .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 18.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.FastForward,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(14.dp),
                 )
-            )
-            .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.50f), CircleShape)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text("⏩", fontSize = 13.sp)
-        Text(
-            text = speedText,
-            color = Color(0xFFFCD34D),
-            fontSize = 13.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-        )
+                val formattedSpeed = if (speed % 1f == 0f) "${speed.toInt()}.0x" else "${speed}x"
+                Text(
+                    text = "$formattedSpeed Speed Playing",
+                    color = Color.White,
+                    fontSize = 12.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontFeatureSettings = "tnum",
+                )
+            }
+        } else {
+            // State B: Expanded Discrete Milestone Track with Strict 1:1 Vertical Alignment
+            val count = milestones.size.coerceAtLeast(2)
+            val thumbRadius = 8.dp
+            val horizontalPadding = 16.dp
+
+            BoxWithConstraints(
+                modifier = Modifier
+                    .width(304.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color(0xEB080A0E))
+                    .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp))
+                    .padding(horizontal = horizontalPadding, vertical = 12.dp),
+            ) {
+                val availableWidth = maxWidth
+                val trackWidth = availableWidth - (thumbRadius * 2)
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    // Row 1: Milestone Labels precisely positioned at X_i = thumbRadius + (fraction * trackWidth)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(18.dp)
+                    ) {
+                        milestones.forEachIndexed { idx, m ->
+                            val fraction = idx.toFloat() / (count - 1).toFloat()
+                            val isActive = idx == stepIndex
+                            val label = if (m == 0.25f) "¼" else if (m % 1f == 0f) "${m.toInt()}x" else "${m}x"
+                            val centerX = thumbRadius + (trackWidth * fraction)
+
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = centerX - 14.dp)
+                                    .width(28.dp)
+                                    .fillMaxHeight(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = label,
+                                    color = if (isActive) Color.White else Color.White.copy(alpha = 0.38f),
+                                    fontSize = if (isActive) 11.5.sp else 10.sp,
+                                    fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Medium,
+                                    fontFamily = FontFamily.Monospace,
+                                )
+                            }
+                        }
+                    }
+
+                    // Row 2: Track with Tick Dots and Thumb (Strict vertical alignment with Row 1)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(20.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        // Inactive Rail
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Color.White.copy(alpha = 0.15f))
+                        )
+
+                        // Milestone Tick Dots
+                        milestones.forEachIndexed { idx, _ ->
+                            val fraction = idx.toFloat() / (count - 1).toFloat()
+                            val centerX = thumbRadius + (trackWidth * fraction)
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = centerX - 1.5.dp)
+                                    .size(width = 3.dp, height = 8.dp)
+                                    .clip(RoundedCornerShape(1.5.dp))
+                                    .background(Color.White.copy(alpha = 0.30f))
+                            )
+                        }
+
+                        // Active Glow Fill (up to active thumb center)
+                        val activeFraction = stepIndex.toFloat() / (count - 1).toFloat()
+                        val activeFillWidth = thumbRadius + (trackWidth * activeFraction)
+                        Box(
+                            modifier = Modifier
+                                .width(activeFillWidth)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Color.White.copy(alpha = 0.85f))
+                        )
+
+                        // Pure White Thumb Disc exactly centered at centerX
+                        Box(
+                            modifier = Modifier
+                                .offset(x = activeFillWidth - thumbRadius)
+                                .size(thumbRadius * 2)
+                                .clip(CircleShape)
+                                .background(Color.White)
+                                .border(1.5.dp, Color.Black.copy(alpha = 0.3f), CircleShape)
+                        )
+                    }
+
+                    // Row 3: Numeric Readout and Instructions
+                    val displaySpeed = if (speed % 1f == 0f) "${speed.toInt()}.0x" else "${speed}x"
+                    Text(
+                        text = displaySpeed,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                    )
+                    Text(
+                        text = "◀ Slide between milestones · Release to restore ▶",
+                        color = Color.White.copy(alpha = 0.45f),
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -434,6 +652,7 @@ internal fun SpeedBannerHud(
  */
 @Composable
 internal fun LockScrimOverlay(
+    accent: Color,
     onUnlock: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -460,7 +679,7 @@ internal fun LockScrimOverlay(
                         )
                     )
                 )
-                .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.85f), CircleShape)
+                .border(1.dp, accent.copy(alpha = 0.85f), CircleShape)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -473,12 +692,12 @@ internal fun LockScrimOverlay(
             Icon(
                 imageVector = Icons.Filled.Lock,
                 contentDescription = null,
-                tint = Color(0xFF38BDF8),
+                tint = accent,
                 modifier = Modifier.size(18.dp),
             )
             Text(
                 text = "Screen Locked · Tap to Unlock",
-                color = Color(0xFF38BDF8),
+                color = accent,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -492,6 +711,7 @@ internal fun LockScrimOverlay(
 @Composable
 internal fun AspectBadgeOverlay(
     badgeText: String,
+    accent: Color,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -503,7 +723,7 @@ internal fun AspectBadgeOverlay(
     ) {
         Text(
             text = badgeText,
-            color = Color(0xFF38BDF8),
+            color = accent,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
         )
@@ -536,11 +756,12 @@ internal fun SubSyncStatusHud(
     isSyncLocked: Boolean,
     liveOffsetMs: Long,
     accent: Color,
+    syncEnabled: Boolean = true,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val shouldShow = visible && (isSyncRunning || isSyncLocked)
+    val shouldShow = visible
     AnimatedVisibility(
         visible = shouldShow,
         enter = androidx.compose.animation.fadeIn(),
@@ -548,7 +769,12 @@ internal fun SubSyncStatusHud(
         modifier = modifier,
     ) {
         val lockedColor = Color(0xFF10B981)
-        val activeAccent = if (isSyncLocked) lockedColor else accent
+        val offColor = Color(0xFF94A3B8)
+        val activeAccent = when {
+            !syncEnabled -> offColor
+            isSyncLocked -> lockedColor
+            else -> accent
+        }
         val view = LocalView.current
 
         Row(
@@ -580,7 +806,20 @@ internal fun SubSyncStatusHud(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (isSyncRunning) {
+            if (!syncEnabled) {
+                Icon(
+                    imageVector = Icons.Filled.AutoAwesome,
+                    contentDescription = "Sync Off",
+                    tint = offColor,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    text = "Sync Off",
+                    color = offColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            } else if (isSyncRunning) {
                 CircularProgressIndicator(
                     color = accent,
                     strokeWidth = 2.dp,
@@ -606,6 +845,20 @@ internal fun SubSyncStatusHud(
                     color = lockedColor,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
+                    fontFeatureSettings = "tnum",
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.AutoAwesome,
+                    contentDescription = "Sub Sync",
+                    tint = accent,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    text = "Sub Sync",
+                    color = accent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
         }

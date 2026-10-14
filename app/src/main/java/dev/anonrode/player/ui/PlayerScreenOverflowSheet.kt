@@ -69,9 +69,9 @@ import androidx.compose.ui.unit.sp
  * subtitle source, subtitle style, the EQ panel, the full sleep option
  * list, and Settings as a footer.
  *
- * Speed and aspect deliberately do NOT appear here — they live in the dock
- * as labeled pills with direct-pick dropdowns (one home per control is
- * the rule this round enforces). PiP and lock live in the top bar.
+ * Speed and aspect deliberately do NOT appear here — speed lives on the
+ * ribbon's Speed tool (precision card), aspect/fullscreen on the transport
+ * row's right wing, and lock on the left wing (one home per control).
  * ------------------------------------------------------------------------- */
 
 /** Inputs the tiles need to render their current state. */

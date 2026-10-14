@@ -143,49 +143,63 @@ internal class PlayerScreenActions(
         }
     }
 
-    fun setHudVisible(visible: Boolean) {
-        if (ui.locked.value) return
-        ui.controlsVisible.value = visible
-        if (!visible) closeTier2And3()
-    }
-
     fun toggleThreeDotsMenu() {
-        ui.threeDotsMenuOpen.value = !ui.threeDotsMenuOpen.value
-        if (ui.threeDotsMenuOpen.value) {
-            ui.audioSheetOpen.value = false
-            ui.subStyleSheetOpen.value = false
+        val next = !ui.threeDotsMenuOpen.value
+        if (next) {
+            closeAllDrawers()
         }
-    }
-
-    fun openThreeDotsMenu() {
-        ui.threeDotsMenuOpen.value = true
-        ui.audioSheetOpen.value = false
-        ui.subStyleSheetOpen.value = false
+        ui.threeDotsMenuOpen.value = next
+        view.haptic()
     }
 
     fun closeThreeDotsMenu() {
         ui.threeDotsMenuOpen.value = false
     }
 
-    fun openAudioSheet() {
-        ui.threeDotsMenuOpen.value = false
-        ui.subStyleSheetOpen.value = false
-        ui.audioSheetOpen.value = true
+    fun togglePlaylistDrawer() {
+        val next = !ui.playlistDrawerOpen.value
+        if (next) {
+            closeAllDrawers()
+        }
+        ui.playlistDrawerOpen.value = next
         view.haptic()
-        onOpenAudioTrackPicker()
     }
 
-    fun closeAudioSheet() {
-        ui.audioSheetOpen.value = false
+    fun openPlaylistDrawer() {
+        closeAllDrawers()
+        ui.playlistDrawerOpen.value = true
+        view.haptic()
     }
 
-    fun openSubtitleStyleSheet() {
+    fun closePlaylistDrawer() {
+        ui.playlistDrawerOpen.value = false
+    }
+
+    fun toggleSubtitleDrawer() {
+        val next = !ui.subtitleDrawerOpen.value
+        if (next) {
+            closeAllDrawers()
+        }
+        ui.subtitleDrawerOpen.value = next
+        view.haptic()
+    }
+
+    fun openSubtitleDrawer() {
+        closeAllDrawers()
+        ui.subtitleDrawerOpen.value = true
+        view.haptic()
+    }
+
+    fun closeSubtitleDrawer() {
+        ui.subtitleDrawerOpen.value = false
+    }
+
+    fun closeAllDrawers() {
         ui.threeDotsMenuOpen.value = false
-        ui.subStyleSheetOpen.value = true
-    }
-
-    fun closeSubtitleStyleSheet() {
-        ui.subStyleSheetOpen.value = false
+        ui.playlistDrawerOpen.value = false
+        ui.subtitleDrawerOpen.value = false
+        ui.equalizerSheetOpen.value = false
+        ui.speedCardOpen.value = false
     }
 
     fun closeTier2And3() {
@@ -252,20 +266,6 @@ internal class PlayerScreenActions(
         persistPlaylistMode()
     }
 
-    fun toggleLoop() {
-        val next = if (ui.repeatMode.value == RepeatLoopMode.OFF) RepeatLoopMode.ONE else RepeatLoopMode.OFF
-        ui.repeatMode.value = next
-        view.haptic()
-        val exoMode = when (next) {
-            RepeatLoopMode.OFF -> Player.REPEAT_MODE_OFF
-            RepeatLoopMode.ONE -> Player.REPEAT_MODE_ONE
-            RepeatLoopMode.ALL -> Player.REPEAT_MODE_ALL
-        }
-        livePlayer.repeatMode = exoMode
-        showTransientToast(if (next == RepeatLoopMode.ONE) "Loop Video: ON" else "Loop Video: OFF")
-        persistPlaylistMode()
-    }
-
     fun cycleRepeatLoopMode() {
         val next = ui.repeatMode.value.next()
         ui.repeatMode.value = next
@@ -326,8 +326,6 @@ internal class PlayerScreenActions(
         showTransientToast(if (nextMin == 0) "Sleep Timer Off" else "Sleep Timer: ${nextMin}m")
     }
 
-    fun advanceAb() = cycleAbRepeat()
-
     fun cycleAbRepeat() {
         val curPos = livePlayer.currentPosition
         when {
@@ -383,16 +381,70 @@ internal class PlayerScreenActions(
             return
         }
         speedIdx.intValue = normal
+        ui.currentPlaybackSpeed.floatValue = 1f
         livePlayer.setPlaybackSpeed(1f)
         onSpeedChanged(1f)
         view.haptic()
         showTransientToast("Speed reset to " + speedLabel(1f))
     }
 
-    fun cycleSpeed() {
-        val nextIdx = (speedIdx.intValue + 1) % speeds.size
-        setSpeed(speeds[nextIdx])
+    fun resetSpeedToDefault() = resetSpeed()
+
+    fun toggleSpeedCard() {
+        val next = !ui.speedCardOpen.value
+        ui.speedCardOpen.value = next
+        if (next) {
+            ui.threeDotsMenuOpen.value = false
+        }
         view.haptic()
+    }
+
+    fun closeSpeedCard() {
+        ui.speedCardOpen.value = false
+    }
+
+    fun setArbitrarySpeed(speed: Float) {
+        val clamped = (kotlin.math.round(speed * 100f) / 100f).coerceIn(0.25f, 4.0f)
+        ui.currentPlaybackSpeed.floatValue = clamped
+        val matchingIdx = speeds.indexOfFirst { abs(it - clamped) < 0.05f }
+        if (matchingIdx >= 0) speedIdx.intValue = matchingIdx
+        (engine?.player ?: livePlayer).setPlaybackSpeed(clamped)
+        onSpeedChanged(clamped)
+    }
+
+    fun stepSpeed(delta: Float) {
+        val current = ui.currentPlaybackSpeed.floatValue
+        setArbitrarySpeed(current + delta)
+        view.haptic()
+    }
+
+    val discreteMilestones = listOf(0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f, 4.0f)
+    private var scrubBaseSpeed = 1.0f
+
+    fun startSpeedScrub() {
+        scrubBaseSpeed = ui.currentPlaybackSpeed.floatValue
+        ui.discreteScrubIndex.intValue = 4 // 2.0x milestone default
+        ui.showSpeedScrubHud(2.0f, expanded = false)
+        (engine?.player ?: livePlayer).setPlaybackSpeed(2.0f)
+        view.haptic()
+    }
+
+    fun updateDiscreteScrub(stepIndex: Int, isSliding: Boolean) {
+        val validIndex = stepIndex.coerceIn(0, discreteMilestones.size - 1)
+        val changed = validIndex != ui.discreteScrubIndex.intValue
+        ui.discreteScrubIndex.intValue = validIndex
+        val speed = discreteMilestones[validIndex]
+        ui.updateSpeedScrub(speed, expanded = isSliding)
+        (engine?.player ?: livePlayer).setPlaybackSpeed(speed)
+        if (changed) {
+            view.haptic()
+        }
+    }
+
+    fun stopSpeedScrub() {
+        ui.hideSpeedScrubHud()
+        (engine?.player ?: livePlayer).setPlaybackSpeed(scrubBaseSpeed)
+        showTransientToast("Restored ${speedLabel(scrubBaseSpeed)}")
     }
 
     /**
@@ -556,19 +608,12 @@ internal class PlayerScreenActions(
         onRebuildDecoder(nextHw)
     }
 
-    fun toggleOrientation() = cycleRotateMode()
-
     /** Step the 3-state rotation mode forward (sensor → landscape →
      *  portrait → sensor). The activity orientation is reapplied by
      *  RotationLockEffect, which is keyed on this state. */
     fun cycleRotateMode() {
         val next = quick.rotateMode.value.next()
         applyRotateMode(next)
-    }
-
-    /** Jump to a specific rotation mode (called by the long-press menu). */
-    fun setRotateMode(mode: RotateMode) {
-        applyRotateMode(mode)
     }
 
     private fun applyRotateMode(mode: RotateMode) {
@@ -605,6 +650,10 @@ internal class PlayerScreenActions(
      */
     fun setSubSyncEnabled(enabled: Boolean) {
         quick.subSyncEnabled.value = enabled
+        if (!enabled) {
+            quick.isSyncLocked.value = false
+            quick.subSyncRunning.value = false
+        }
         onSetSubSyncEnabled(enabled)
         AppLog.d("PLAYER", "sub-sync toggle=$enabled")
         showTransientToast(if (enabled) "Sub sync on" else "Sub sync off")
@@ -686,18 +735,17 @@ internal class PlayerScreenActions(
     }
 
     fun seekDelta(seconds: Int) {
-        seekBy(seconds)
+        seekBy(seconds, forceFast = true)
         ui.showSeekRipple(view, if (seconds < 0) -1 else 1, abs(seconds))
     }
 
-    fun seekBy(sec: Int) {
+    fun seekBy(sec: Int, forceFast: Boolean = false) {
         val p = engine?.player ?: livePlayer
         val d = p.duration.takeIf { it > 0 } ?: return
-        // Big jumps snap to the nearest keyframe (instant); small ones
-        // stay frame-exact. EXACT is restored shortly after so drags and
-        // swipes are unaffected by the temporary parameter.
+        // Double-taps, skip buttons, and big jumps snap to the nearest keyframe (instant, 0ms stall);
+        // EXACT is restored shortly after so fine timeline drags are unaffected.
         // (setSeekParameters/SeekParameters live on ExoPlayer, not Player.)
-        val fast = abs(sec) >= fastSeekThresholdSec
+        val fast = forceFast || abs(sec) >= fastSeekThresholdSec
         if (fast) {
             (p as? ExoPlayer)?.setSeekParameters(SeekParameters.CLOSEST_SYNC)
         }
@@ -712,29 +760,23 @@ internal class PlayerScreenActions(
         view.postDelayed({ ui.flashSide.value = 0 }, 420)
     }
 
-    fun startSpeedBoost() {
-        if (ui.boostActive.value) return
-        ui.showSpeedBanner(view, 2.0f)
-        (engine?.player ?: livePlayer).setPlaybackSpeed(2.0f)
-        view.haptic()
-    }
-
-    fun stopSpeedBoost() {
-        if (!ui.boostActive.value) return
-        ui.hideSpeedBanner()
-        val normalSpeed = speeds.getOrElse(speedIdx.intValue) { 1.0f }
-        (engine?.player ?: livePlayer).setPlaybackSpeed(normalSpeed)
-    }
-
     fun updateVolumeGesture(deltaY: Float) {
         val maxV = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val scrH = gestures.scrH.floatValue.takeIf { it > 0f } ?: 1000f
         val frac = (deltaY / (scrH * 0.7f)).coerceIn(-1f, 1f)
         val nv = (gestures.startVol.intValue + (frac * maxV).roundToInt()).coerceIn(0, maxV)
-        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nv, 0)
+        val currentV = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        if (nv != currentV) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nv, 0)
+        }
         val progress = nv.toFloat() / maxV.toFloat()
         val pctText = "${(progress * 100).roundToInt()}%"
         ui.showVerticalHud(view, VerticalHudType.VOLUME, progress, pctText)
+    }
+
+    fun commitVolumeGesture() {
+        val curV = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        activity?.let { dev.anonrode.player.PlayerPrefs.saveVolume(it, curV) }
     }
 
     fun updateBrightnessGesture(deltaY: Float) {
@@ -746,6 +788,7 @@ internal class PlayerScreenActions(
             attr.screenBrightness = nb
             w.attributes = attr
         }
+        dev.anonrode.player.PlayerPrefs.saveScreenBrightness(context, nb)
         val pctText = "${(nb * 100).roundToInt()}%"
         ui.showVerticalHud(view, VerticalHudType.BRIGHTNESS, nb, pctText)
     }

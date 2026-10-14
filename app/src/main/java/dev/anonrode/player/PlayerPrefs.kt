@@ -98,6 +98,58 @@ object PlayerPrefs {
         prefs(context).edit().putBoolean(KEY_SUBTITLE_AUTO_SYNC, enabled).apply()
     }
 
+    private const val KEY_SCREEN_BRIGHTNESS = "screen_brightness"
+    private const val SERIES_SPEED_PREFIX = "series_speed_"
+    private const val SERIES_ZOOM_PREFIX = "series_zoom_"
+
+    fun savedScreenBrightness(context: Context): Float? =
+        prefs(context).getFloat(KEY_SCREEN_BRIGHTNESS, -1f).takeIf { it in 0.01f..1.0f }
+
+    fun saveScreenBrightness(context: Context, brightness: Float) {
+        prefs(context).edit().putFloat(KEY_SCREEN_BRIGHTNESS, brightness.coerceIn(0.02f, 1.0f)).apply()
+    }
+
+    fun seriesSpeed(context: Context, parentPath: String): Float? {
+        if (parentPath.isBlank()) return null
+        return prefs(context).getFloat("$SERIES_SPEED_PREFIX$parentPath", -1f).takeIf { it > 0f }
+    }
+
+    fun saveSeriesSpeed(context: Context, parentPath: String, speed: Float) {
+        if (parentPath.isBlank()) return
+        prefs(context).edit().putFloat("$SERIES_SPEED_PREFIX$parentPath", speed).apply()
+    }
+
+    fun seriesZoom(context: Context, parentPath: String): Int? {
+        if (parentPath.isBlank()) return null
+        val idx = prefs(context).getInt("$SERIES_ZOOM_PREFIX$parentPath", -1)
+        return if (idx >= 0) idx else null
+    }
+
+    fun saveSeriesZoom(context: Context, parentPath: String, zoomIdx: Int) {
+        if (parentPath.isBlank()) return
+        prefs(context).edit().putInt("$SERIES_ZOOM_PREFIX$parentPath", zoomIdx).apply()
+    }
+
+    private const val KEY_SAVED_VOLUME = "saved_player_volume"
+    private const val SERIES_SUBTITLE_PREFIX = "series_sub_"
+
+    fun savedVolume(context: Context): Int? =
+        prefs(context).getInt(KEY_SAVED_VOLUME, -1).takeIf { it >= 0 }
+
+    fun saveVolume(context: Context, volume: Int) {
+        prefs(context).edit().putInt(KEY_SAVED_VOLUME, volume).apply()
+    }
+
+    fun seriesSubtitleChoice(context: Context, parentPath: String): String? {
+        if (parentPath.isBlank()) return null
+        return prefs(context).getString("$SERIES_SUBTITLE_PREFIX$parentPath", null)
+    }
+
+    fun saveSeriesSubtitleChoice(context: Context, parentPath: String, choice: String) {
+        if (parentPath.isBlank()) return
+        prefs(context).edit().putString("$SERIES_SUBTITLE_PREFIX$parentPath", choice).apply()
+    }
+
     /* ── Quick Access Ribbon arrangement ───────────────────────────────────
      * Persisted as the enum NAMES joined by a newline, so the stored value
      * is decoupled from the enum's ordinals: reordering the declaration in

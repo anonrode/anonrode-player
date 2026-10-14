@@ -64,9 +64,8 @@ object SyncLogShare {
             val engine = if (app?.isReady == true) app.engine else null
             val activityUri = (context as? PlayerActivity)?.activeUriStr
             if (engine != null) {
-                val player = engine.player
-                val posMs = try { player?.currentPosition ?: 0L } catch (_: Throwable) { 0L }
-                val spd = try { player?.playbackParameters?.speed ?: 1.0f } catch (_: Throwable) { 1.0f }
+                val posMs = engine.clock.positionMs
+                val spd = engine.clock.speed
                 val activeUri = activityUri ?: engine.currentUri
                 SyncSnapshot(
                     uri = activeUri,

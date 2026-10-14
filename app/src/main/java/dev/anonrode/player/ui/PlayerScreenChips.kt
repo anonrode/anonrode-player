@@ -2,6 +2,9 @@ package dev.anonrode.player.ui
 
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -12,19 +15,16 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -33,12 +33,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 /* ── Shared control-chip vocabulary (v0.7.3 chrome redesign) ──────────────
  * ONE primitive for every circular icon control in the player: top bar
@@ -74,22 +73,34 @@ internal fun ControlChip(
     haptic: Int = HapticFeedbackConstants.KEYBOARD_TAP,
 ) {
     val view = LocalView.current
+    // Press feel: the painted circle springs down to 0.90 and settles back
+    // with a slight overshoot. The scale lives on the VISUAL only — the
+    // clickable cell keeps its full ≥48dp hit area for the whole gesture.
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.90f else 1f,
+        animationSpec = spring(
+            dampingRatio = 0.55f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "chipPress",
+    )
     val tint = when {
         !enabled -> Color.White.copy(alpha = 0.35f)
         selected -> accent
         else -> Color.White
     }
-    val bg = if (selected) accent.copy(alpha = 0.20f) else Color.Black.copy(alpha = 0.35f)
-    val border = if (selected) accent.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.20f)
+    val bg = if (selected) accent.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.08f)
+    val border = if (selected) accent.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.15f)
     val cell = size.coerceAtLeast(PlayerDimens.touchMin)
     Box(
         modifier = modifier
             .size(cell)
-            .clip(CircleShape)
             .then(
                 if (onLongClick == null) {
                     Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
+                        interactionSource = interactionSource,
                         indication = ripple(bounded = true, color = tint),
                         enabled = enabled,
                         onClick = {
@@ -99,7 +110,7 @@ internal fun ControlChip(
                     )
                 } else {
                     Modifier.combinedClickable(
-                        interactionSource = remember { MutableInteractionSource() },
+                        interactionSource = interactionSource,
                         indication = ripple(bounded = true, color = tint),
                         enabled = enabled,
                         onClick = {
@@ -118,6 +129,10 @@ internal fun ControlChip(
         Box(
             modifier = Modifier
                 .size(size)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
                 .clip(CircleShape)
                 .background(bg)
                 .border(1.dp, border, CircleShape),
@@ -133,150 +148,9 @@ internal fun ControlChip(
     }
 }
 
-/**
- * Rounded pill carrying TEXT instead of an icon: the speed and aspect chips
- * in the utility row, and the sync state chip's shell. The outer Box is
- * the touch cell (48dp tall, width wraps the label); the inner Box paints
- * the [PlayerDimens.pillH] pill. The visible text IS the accessible name
- * (unlike icon-only controls, no contentDescription needed).
- */
-@Composable
-internal fun TextPill(
-    text: String,
-    accent: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    /** Accent-colored pill (active value, e.g. a non-1.0× speed). */
-    selected: Boolean = false,
-    onLongClick: (() -> Unit)? = null,
-) {
-    val view = LocalView.current
-    Box(
-        modifier = modifier
-            .height(PlayerDimens.touchMin)
-            .clip(RoundedCornerShape(999.dp))
-            .then(
-                if (onLongClick == null) {
-                    Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = true, color = accent),
-                        onClick = {
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                            onClick()
-                        },
-                    )
-                } else {
-                    Modifier.combinedClickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = true, color = accent),
-                        onClick = {
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                            onClick()
-                        },
-                        onLongClick = {
-                            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                            onLongClick()
-                        },
-                    )
-                },
-            )
-            .padding(horizontal = 2.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .height(PlayerDimens.pillH)
-                .clip(RoundedCornerShape(999.dp))
-                .background(
-                    if (selected) accent.copy(alpha = 0.20f) else Color.Black.copy(alpha = 0.35f)
-                )
-                .border(
-                    1.dp,
-                    if (selected) accent.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.20f),
-                    RoundedCornerShape(999.dp),
-                )
-                .padding(horizontal = 10.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text,
-                color = if (selected) accent else Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
-    }
-}
-
-internal enum class TimeSeekDirection { BACK, FORWARD }
-
-/** 48×44 accent pill with the REAL configured step: "‹5" "30›". The v0.7.2
- *  audit caught the label hardcoded as "10" while Settings offers
- *  5/10/15/30 — the pill renders [seconds] now, so it can't lie. */
-@Composable
-internal fun TimeSeekButton(
-    direction: TimeSeekDirection,
-    seconds: Int,
-    accent: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val view = LocalView.current
-    Box(
-        modifier = modifier
-            .size(PlayerDimens.chipMd)
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = ripple(bounded = false, radius = 36.dp, color = accent),
-                onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    onClick()
-                },
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = PlayerDimens.skipW, height = PlayerDimens.skipH)
-                .clip(RoundedCornerShape(10.dp))
-                .background(accent.copy(alpha = 0.22f))
-                .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(10.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(1.dp),
-            ) {
-                if (direction == TimeSeekDirection.BACK) {
-                    Text(
-                        "‹",
-                        color = accent,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 14.sp,
-                    )
-                }
-                Text(
-                    seconds.coerceAtLeast(1).toString(),
-                    color = accent,
-                    fontWeight = FontWeight.Black,
-                    fontSize = 14.sp,
-                )
-                if (direction == TimeSeekDirection.FORWARD) {
-                    Text(
-                        "›",
-                        color = accent,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 14.sp,
-                    )
-                }
-            }
-        }
-    }
-}
-
 /** 64dp play/pause — the only oversized control in the dock, so the thumb
- *  finds it first. Animated icon flip on the isPlaying toggle. */
+ *  finds it first. Animated icon flip on the isPlaying toggle, and a deep
+ *  springy press (the primary control gets the deepest travel). */
 @Composable
 internal fun BigPlayPauseButton(
     isPlaying: Boolean,
@@ -292,14 +166,21 @@ internal fun BigPlayPauseButton(
             Color(0xFF111722),
         )
     )
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.88f else 1f,
+        animationSpec = spring(
+            dampingRatio = 0.5f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "playPress",
+    )
     Box(
         modifier = modifier
             .size(PlayerDimens.playBig)
-            .clip(CircleShape)
-            .background(cinemaGradient)
-            .border(1.dp, Color.White.copy(alpha = 0.22f), CircleShape)
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interactionSource,
                 indication = ripple(bounded = true, radius = 40.dp, color = accent),
                 onClick = {
                     view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -308,20 +189,37 @@ internal fun BigPlayPauseButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        AnimatedContent(
-            targetState = isPlaying,
-            transitionSpec = {
-                (slideInVertically { it } + fadeIn()) togetherWith
-                    (slideOutVertically { -it } + fadeOut())
-            },
-            label = "playPause",
-        ) { playing ->
-            Icon(
-                if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                contentDescription = if (playing) "Pause" else "Play",
-                tint = Color.White,
-                modifier = Modifier.size(PlayerDimens.glyphPlay),
-            )
+        // Visual layer only — the clickable cell stays at the full 64dp for
+        // the entire gesture so the thumb never loses the button mid-press.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .clip(CircleShape)
+                .background(cinemaGradient)
+                .border(1.dp, Color.White.copy(alpha = 0.22f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            AnimatedContent(
+                targetState = isPlaying,
+                transitionSpec = {
+                    (slideInVertically { it } + fadeIn()) togetherWith
+                        (slideOutVertically { -it } + fadeOut())
+                },
+                label = "playPause",
+            ) { playing ->
+                Icon(
+                    if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (playing) "Pause" else "Play",
+                    tint = Color.White,
+                    modifier = Modifier
+                        .size(PlayerDimens.glyphPlay)
+                        .then(if (!playing) Modifier.padding(start = 2.dp) else Modifier),
+                )
+            }
         }
     }
 }

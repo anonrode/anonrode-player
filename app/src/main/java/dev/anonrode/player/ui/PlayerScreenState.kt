@@ -82,13 +82,17 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
     val isBuffering = mutableStateOf(false)
     val locked = mutableStateOf(false)
 
-    // ── Tier 2: Three-Dots Floating Card ──
+    // ── Tier 2: Slide-in Right Drawers (v5) ──
     val threeDotsMenuOpen = mutableStateOf(false)
+    val playlistDrawerOpen = mutableStateOf(false)
+    val subtitleDrawerOpen = mutableStateOf(false)
 
     // ── Tier 3: Bottom / Modal Sheets ──
-    val audioSheetOpen = mutableStateOf(false)
-    val subStyleSheetOpen = mutableStateOf(false)
     val equalizerSheetOpen = mutableStateOf(false)
+    val speedCardOpen = mutableStateOf(false)
+
+    /** Persistent playback speed across session, backing the Speed Pill readout. */
+    val currentPlaybackSpeed = mutableFloatStateOf(1.0f)
 
     // ── Top Zone Controls ──
     val isHwDecoder = mutableStateOf(true)
@@ -133,11 +137,14 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
     val seekRippleSide = mutableIntStateOf(0)
     val seekRippleSeconds = mutableIntStateOf(10)
 
-    /** Hold-to-2× speed boost gesture and top banner HUD. */
+    /** True while the temporary speed gesture (hold-scrub) is engaged. */
     val boostActive = mutableStateOf(false)
-    val boostSpeed = mutableFloatStateOf(2.0f)
-    val speedBannerVisible = mutableStateOf(false)
-    val speedBannerText = mutableStateOf("2.0× SPEED")
+
+    /** Discrete milestone speed scrub HUD state. */
+    val speedScrubHudVisible = mutableStateOf(false)
+    val speedScrubExpanded = mutableStateOf(false)
+    val currentScrubSpeed = mutableFloatStateOf(2.0f)
+    val discreteScrubIndex = mutableIntStateOf(4)
 
     /** Volume & Brightness vertical pill HUDs. */
     val verticalHudVisible = mutableStateOf(false)
@@ -191,23 +198,30 @@ internal class PlayerUiState(initialIsPlaying: Boolean) {
         view.postDelayed(hideVerticalHudRunnable, 900L)
     }
 
-    fun showSpeedBanner(view: View, speed: Float = 2.0f) {
-        speedBannerText.value = "${speed}× SPEED"
-        speedBannerVisible.value = true
+    fun showSpeedScrubHud(speed: Float, expanded: Boolean) {
+        currentScrubSpeed.floatValue = speed
+        speedScrubExpanded.value = expanded
+        speedScrubHudVisible.value = true
         boostActive.value = true
-        boostSpeed.floatValue = speed
     }
 
-    fun hideSpeedBanner() {
-        speedBannerVisible.value = false
+    fun updateSpeedScrub(speed: Float, expanded: Boolean) {
+        currentScrubSpeed.floatValue = speed
+        speedScrubExpanded.value = expanded
+    }
+
+    fun hideSpeedScrubHud() {
+        speedScrubHudVisible.value = false
+        speedScrubExpanded.value = false
         boostActive.value = false
     }
 
     fun closeTier2And3() {
         threeDotsMenuOpen.value = false
-        audioSheetOpen.value = false
-        subStyleSheetOpen.value = false
+        playlistDrawerOpen.value = false
+        subtitleDrawerOpen.value = false
         equalizerSheetOpen.value = false
+        speedCardOpen.value = false
     }
 }
 
@@ -431,6 +445,9 @@ internal class QuickRowUiState {
 
     /** True while the ribbon customise sheet is open. */
     val showRibbonCustomise = mutableStateOf(false)
+
+    /** True when the elastic drawer sleeve is expanded to full available width. */
+    val ribbonExpanded = mutableStateOf(false)
 
     /**
      * Horizontal scroll position of the Quick Access Ribbon, in px.

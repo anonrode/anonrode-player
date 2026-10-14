@@ -22,12 +22,20 @@ fun View.haptic(
 // ── Player overlay palette ─────────────────────────────────────────────
 // The video overlay (top bar, dock, sync popover) is intentionally dark and
 // high-contrast on every skin — it sits on top of the video frame and must
-// stay readable. The skin's accent still bleeds through (TimeSeek pill,
-// HW chip, speed pill, SYNCED chip) but the scrims and panel stay dark.
+// stay readable. The skin's accent still bleeds through (the seekbar and
+// its thumb, lock badge, speed pill, HW chip, SYNCED chip) but the scrims
+// and panel stay dark.
 //
 // Overlay dark backgrounds and dividers
 internal val OverlayPanelBg = Color(0xFF1C1C24)
 internal val OverlayMenuDivider = Color(0xFF33333B)
+
+/**
+ * A-B repeat region marks on the seekbar. Amber on purpose: the played
+ * track beneath them is the skin accent, so the A/B ticks must stay
+ * readable on top of any accent value.
+ */
+internal val AbMarkAmber = Color(0xFFFBBF24)
 
 /** Subtitle drag safe margins, as fractions of the stage (box center). */
 internal const val SUB_X_MIN = 0.06f
