@@ -19,7 +19,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.test.utils.NoOpPlayer
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.test.utils.TestExoPlayerBuilder
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.anonrode.player.EpisodeQueue
 import dev.anonrode.player.core.model.Video
@@ -65,7 +66,10 @@ class PlayerScreenRenderTest {
         onAccent = Color(0xFF04150D),
     )
 
-    private fun fixturePlayer(): NoOpPlayer = NoOpPlayer()
+    private fun fixturePlayer(): ExoPlayer =
+        TestExoPlayerBuilder(
+            androidx.test.core.app.ApplicationProvider.getApplicationContext<Context>(),
+        ).build()
 
     private fun fixtureActions(): PlayerScreenActions {
         val context = androidx.test.core.app.ApplicationProvider
