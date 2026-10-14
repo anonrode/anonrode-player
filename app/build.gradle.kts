@@ -83,6 +83,14 @@ android {
     }
     buildFeatures { compose = true }
 
+    testOptions {
+        unitTests {
+            // Robolectric needs the merged resources to render the real
+            // Compose chrome into PNGs (ui_render workflow).
+            isIncludeAndroidResources = true
+        }
+    }
+
     splits {
         abi {
             isEnable = true
@@ -124,4 +132,12 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
     implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.junit4)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.androidx.compose.ui.test.manifest)
+    testImplementation(libs.androidx.media3.test.utils)
 }
