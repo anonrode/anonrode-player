@@ -47,4 +47,15 @@ _Permanent truth document. Read before touching anything. Never delete or replac
     - **Cue-Guided Anchor Windowing:** Never blindly decode 600s of audio from t=0s. Examine subtitle cues first, seek directly to the first dense dialogue cluster, and decode a 60s–90s window to lock in < 1s.
 13. **Native Multimodal File Perception:** Never spawn external CLI subprocesses (such as `ffmpeg`, `ffprobe`) to inspect video/audio frames or transcripts when `view_file` natively perceives and analyzes video, audio, and image files directly in context. Always use `view_file` directly.
 14. **Live-sync fallback envelope (v0.9.11):** the AGC floor/peak fallback in `AudioSyncProcessor` was replaced by a min-statistics noise floor + long-horizon energy scale (constants `NOISE_DECAY/RISE`, `HI_DECAY`, `NOISE_GUARD=2.0`, `SPAN_HI=0.7`), validated in the 1:1 replica (`tools/_sync_replica_eval.py`, synthetic suite + real films; evidence log `tools/_sync_fallback_study.md`). Do not re-tune these constants or the correlator gates casually. NOTE: this rule set's earlier "9.0→7.0 z-floor" wording describes the v0.8 state — the correlator's validated z-floor since 716c186 is 5.5→4.5 (n=160→280 ramp).
+15. **Stale player UI has no tenure.** The user is not afraid to delete: any
+    player-screen UI element may be ripped out and replaced whenever that makes
+    the player better. Never preserve a stale control, drawer, overlay, or
+    component for continuity's sake — replace or delete it outright, and honor
+    rule 10 (no dead code) when doing so. Design first; implement only on the
+    user's explicit approval.
+16. **Design-skill leverage for UI work.** When designing or redrawing UI, use
+    the locally available design skills (design-system, ui-ux-pro-max,
+    impeccable) for tokens/layout discipline, and verify visual work in an HTML
+    mockup before proposing implementation. No paid services or model downloads
+    without the user's explicit approval (metered data).
 
