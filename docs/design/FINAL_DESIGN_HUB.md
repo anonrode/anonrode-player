@@ -156,6 +156,7 @@ _Single source of truth for the player-screen redesign. Numbering inherits `docs
   - S4 Continuity: History page (8.2/9.2), playlist drag-reorder (7.3), Up-Next hero rows (8.3), resume pill polish (8.1), preview-bubble honesty fallback (4.4), aspect per-show memory (4.9), global default speed (5.3).
   - S5 Audio & decoder: audio-effect presets + EQ presets (2.15), mute memory (2.7), screenshot folder+filename (2.5), Night default off (2.8), decoder cross-swap regression (8.4), truth pills (1.4).
   - S6 Consolidation part 1: settings drawer restyle (7.2), rip-outs (7.5), style-tray merge (6.6).
+  - User feedback (pre-0.9.12 session): Home/Series card icons render too large — audit card anatomy in LibraryScreen.kt (Home + Series tabs + continue-watching cards) and size icons/badges back to the token scale during Phase 2 (S4/S6).
   - Exit benchmarks: CI green; % accuracy in History real; reorder survives restart; decoder cycle keeps position/speed/offset (instrumented); no orphaned sheets; visual diff.
 - **Phase 3 — "The complete product"**
   - S6 rest: settings search (9.5), series drill-down (9.3), poster sidecars (9.6), accent unification (9.7), hold-to-unlock ring (4.8, optional), PiP fit-finish (8.5).
