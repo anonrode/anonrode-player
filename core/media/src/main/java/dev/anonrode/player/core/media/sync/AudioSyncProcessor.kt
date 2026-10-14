@@ -31,8 +31,11 @@ interface SyncListener {
  * Live subtitle-sync audio analyzer, injected into Media3's audio sink.
  *
  * Uses neural voice activity detection ([LiveVad]) on a low-priority background
- * worker thread when available, with an asymmetric AGC energy envelope as a
- * reliable zero-dependency fallback. Hands snapshots of the speech envelope
+ * worker thread when available, with a min-statistics noise-floor +
+ * long-horizon energy envelope as a reliable zero-dependency fallback
+ * (evidence + validation: tools/_sync_fallback_study.md; the plain
+ * floor/peak AGC this replaced pinned music into mid-range scores and
+ * could not lock real dramas or films). Hands snapshots of the speech envelope
  * to [SyncAnalysisWorker] on the [SpeechCorrelator.PASS_BINS] schedule.
  */
 @UnstableApi
@@ -92,7 +95,8 @@ class AudioSyncProcessor(
 
     @Volatile internal var trackingMode = false
     @Volatile private var activeOffsetSeconds = Double.NaN
-    @Volatile private var trackingBinsSinceLastEval = 0
+    @Volatile private var lastTrackingEvalWallMs = 0L
+    @Volatile private var lastTrackingEvalPosMs = 0L
     @Volatile private var trackingCandidateOffset = Double.NaN
     @Volatile private var trackingCandidateHits = 0
 
@@ -139,8 +143,8 @@ class AudioSyncProcessor(
     private var windowN = 0
     private var wSumSq = 0.0   // Σ x²
 
-    private var floor = 0.0
-    private var peak = 0.0
+    private var noiseFloor = 0.0
+    private var hiEnergy = 0.0
 
     // 300Hz-3000Hz vocal formant bandpass filter (Biquad IIR)
     private var bpB0 = 1f
@@ -267,7 +271,8 @@ class AudioSyncProcessor(
         locked = false
         trackingMode = false
         activeOffsetSeconds = Double.NaN
-        trackingBinsSinceLastEval = 0
+        lastTrackingEvalWallMs = 0L
+        lastTrackingEvalPosMs = 0L
         trackingCandidateOffset = Double.NaN
         trackingCandidateHits = 0
         stableHits = 0
@@ -291,7 +296,8 @@ class AudioSyncProcessor(
         activeOffsetSeconds = offsetSeconds.toDouble()
         trackingCandidateOffset = Double.NaN
         trackingCandidateHits = 0
-        trackingBinsSinceLastEval = 0
+        lastTrackingEvalWallMs = System.currentTimeMillis()
+        lastTrackingEvalPosMs = 0L
         driftTracker.reset()
         driftTracker.add(0.0, offsetSeconds.toDouble())
         AppLog.d("SYNC", "initialized live baseline lock to ${offsetSeconds}s (tracking armed)")
@@ -473,7 +479,7 @@ class AudioSyncProcessor(
         baseIdx = if (anchorPosMs >= 0L) (anchorPosMs / 100L).toInt() else 0
         binCount = 0; totalFrames = 0
         windowN = 0; wSumSq = 0.0
-        floor = 0.0; peak = 0.0
+        noiseFloor = 0.0; hiEnergy = 0.0
         java.util.Arrays.fill(bpX1, 0f)
         java.util.Arrays.fill(bpX2, 0f)
         java.util.Arrays.fill(bpY1, 0f)
@@ -482,7 +488,8 @@ class AudioSyncProcessor(
         passesUsed = 0; gaveUp = false
         trackingMode = false
         activeOffsetSeconds = Double.NaN
-        trackingBinsSinceLastEval = 0
+        lastTrackingEvalWallMs = 0L
+        lastTrackingEvalPosMs = 0L
         trackingCandidateOffset = Double.NaN
         trackingCandidateHits = 0
         // P1-4: a fresh window must also drop the drift history. Without
@@ -557,24 +564,31 @@ class AudioSyncProcessor(
     /**
      * Computes the speech score for one completed window (energy fallback).
      *
-     * The score is the window's RMS placed between an adaptive quiet floor
-     * and an adaptive loud peak, i.e. "how loud is this window relative to
-     * the range this track actually occupies".
+     * v0.9.11 fallback envelope: a min-statistics noise floor plus a
+     * long-horizon loudness scale. The old floor/peak AGC let music and
+     * effects ride into mid-range scores (65% of bins read as "speech" on
+     * real dramas), collapsing the Pearson contrast below the lock gate.
+     * Here the floor falls instantly to any quieter window and creeps up
+     * onto true noise; the scale follows the loudest sustained content with
+     * ~50 s of memory; and the score measures how far a window sits above
+     * [NOISE_GUARD]× the floor — silence and music stay low, dialogue pins.
      */
     private fun finishWindow() {
         val n = windowN
         val rms = sqrt(wSumSq / n)
 
-        if (floor <= 0.0) {
-            floor = rms
-            peak = rms * 2.0 + 0.0001
+        if (noiseFloor <= 0.0) {
+            noiseFloor = rms * 0.5
+            hiEnergy = rms
         } else {
-            floor += (rms - floor) * (if (rms < floor) FLOOR_DOWN else FLOOR_UP)
-            peak += (rms - peak) * (if (rms > peak) PEAK_UP else PEAK_DOWN)
+            noiseFloor = min(rms, noiseFloor * NOISE_DECAY)
+            noiseFloor += (rms - noiseFloor) * NOISE_RISE
+            hiEnergy = max(rms, hiEnergy * HI_DECAY)
         }
-        val headroom = peak - floor
-        val sp = ((rms - floor) / max(headroom, peak * 0.05 + 0.0001))
-            .coerceIn(0.0, 1.0).toFloat()
+        val span = hiEnergy * SPAN_HI - noiseFloor * NOISE_GUARD
+        val sp = if (span > 1e-6f) {
+            ((rms - noiseFloor * NOISE_GUARD) / span).coerceIn(0.0, 1.0).toFloat()
+        } else 0f
 
         windowN = 0
         accumulateBin(sp)
@@ -614,16 +628,23 @@ class AudioSyncProcessor(
 
 
         // If already locked and in tracking mode: schedule periodic drift checks
-        // at low overhead (cadence of 25s, or 6s to confirm a suspected piecewise cut)
+        // at low overhead (cadence of 25s wall-clock, or 6s to confirm a suspected piecewise cut)
         if (trackingMode && cues.isNotEmpty() && enabled) {
-            trackingBinsSinceLastEval++
-            val requiredBins = if (!trackingCandidateOffset.isNaN() && trackingCandidateHits == 1) {
-                TRACKING_CONFIRM_BINS
-            } else {
-                TRACKING_CADENCE_BINS
+            val now = System.currentTimeMillis()
+            if (lastTrackingEvalWallMs == 0L) {
+                lastTrackingEvalWallMs = now
+                lastTrackingEvalPosMs = posMs
             }
-            if (trackingBinsSinceLastEval >= requiredBins) {
-                trackingBinsSinceLastEval = 0
+            val requiredIntervalMs = if (!trackingCandidateOffset.isNaN() && trackingCandidateHits == 1) {
+                TRACKING_CONFIRM_INTERVAL_MS
+            } else {
+                TRACKING_CADENCE_INTERVAL_MS
+            }
+            val wallElapsed = now - lastTrackingEvalWallMs
+            val posElapsed = posMs - lastTrackingEvalPosMs
+            if (wallElapsed >= requiredIntervalMs || posElapsed >= requiredIntervalMs) {
+                lastTrackingEvalWallMs = now
+                lastTrackingEvalPosMs = posMs
                 scheduleEvaluate(posMs)
             }
             return
@@ -768,7 +789,8 @@ class AudioSyncProcessor(
             activeOffsetSeconds = baseOffset
             trackingCandidateOffset = Double.NaN
             trackingCandidateHits = 0
-            trackingBinsSinceLastEval = 0
+            lastTrackingEvalWallMs = System.currentTimeMillis()
+            lastTrackingEvalPosMs = req.posMs
             listener.onSyncLocked(baseOffset.toFloat(), speedF)
         }
         // First agreeing pass: wait for the NEXT scheduled pass to
@@ -799,12 +821,24 @@ class AudioSyncProcessor(
                 return
             }
         }
+        val active = activeOffsetSeconds
+        if (active.isNaN()) {
+            AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s skipped: activeOffsetSeconds is NaN")
+            return
+        }
+
+        // Local Leash: Constrain search to maxOffsetSec = 1.5s around activeOffsetSeconds.
+        // By shifting baseSeconds by -active, findOffset searches the local drift window
+        // [active - 1.5s, active + 1.5s], strictly preventing unconstrained searches (e.g. ±120s)
+        // that hallucinated distant spurious peaks (such as the 68.0s jump in House of the Dragon).
         val outcome = SpeechCorrelator.findOffset(
-            req.bins, req.binCount, req.cues,
-            maxOffsetSec = SpeechCorrelator.MAX_OFFSET_SEC,
-            baseSeconds = req.baseSeconds,
+            audio = req.bins,
+            binCount = req.binCount,
+            cues = req.cues,
+            maxOffsetSec = LOCAL_LEASH_RADIUS_SEC,
+            baseSeconds = req.baseSeconds - active,
         )
-        val result = when (outcome) {
+        val rawResult = when (outcome) {
             is SpeechCorrelator.Outcome.NotReady -> {
                 AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s: not ready (sparse speech)")
                 return
@@ -818,11 +852,10 @@ class AudioSyncProcessor(
 
         if (req.generation != generation) return
 
-        val active = activeOffsetSeconds
-        if (active.isNaN()) {
-            activeOffsetSeconds = result.offsetSeconds
-            return
-        }
+        // Map the measured local drift back to absolute media offset:
+        // actualOffset = active + deltaOffset
+        val measuredOffset = active + rawResult.offsetSeconds
+        val result = rawResult.copy(offsetSeconds = measuredOffset)
 
         val delta = abs(result.offsetSeconds - active)
         AppLog.d("SYNC", "tracking eval t=${req.posMs / 1000}s: measured off=${result.offsetSeconds}s active=${active}s delta=${delta}s cont=${result.containment} margin=${result.margin}")
@@ -883,16 +916,25 @@ class AudioSyncProcessor(
          */
         private const val BIN_WINDOW = 40 * 10 * 2 + 15 * 60 * 10
 
-        private const val FLOOR_DOWN = 0.06
-        private const val FLOOR_UP = 0.0007
-        private const val PEAK_UP = 0.08
-        private const val PEAK_DOWN = 0.002
+        // v0.9.11 fallback-envelope constants (tools/_sync_fallback_study.md):
+        // validated in the 1:1 Python replica — synthetic ground-truth suite
+        // (0 / ±2.7 / ±9.3 / +64 s all recovered to the bin) + real films
+        // where the old AGC could not lock (Kill To Love now locks at +0.00 s
+        // with r=0.295, margin=0.146, containment=0.44, z=15.0).
+        private const val NOISE_DECAY = 0.9995
+        private const val NOISE_RISE = 0.005
+        private const val HI_DECAY = 0.9998
+        private const val NOISE_GUARD = 2.0
+        private const val SPAN_HI = 0.7
 
-        /** Low-overhead evaluation cadence during continuous tracking: 25 seconds of audio. */
-        private const val TRACKING_CADENCE_BINS = 250
+        /** Local leash search radius around active offset: ±1.5s. */
+        private const val LOCAL_LEASH_RADIUS_SEC = 1.5
 
-        /** Fast re-eval slot to confirm a suspected piecewise cut: 6 seconds of audio. */
-        private const val TRACKING_CONFIRM_BINS = 60
+        /** Low-overhead evaluation cadence during continuous tracking: 25 seconds wall-clock time. */
+        private const val TRACKING_CADENCE_INTERVAL_MS = 25_000L
+
+        /** Fast re-eval slot to confirm a suspected piecewise cut: 6 seconds wall-clock time. */
+        private const val TRACKING_CONFIRM_INTERVAL_MS = 6_000L
 
     }
 }

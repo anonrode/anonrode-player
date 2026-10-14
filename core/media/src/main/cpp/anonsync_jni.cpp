@@ -140,6 +140,10 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeAlignPcm(
     if (rem <= 0) return nullptr;
 
     uint8_t* bufPtr = static_cast<uint8_t*>(rawBufPtr) + pos;
+    uintptr_t addr = reinterpret_cast<uintptr_t>(bufPtr);
+    if ((isFloat && (addr % sizeof(float) != 0)) || (!isFloat && (addr % sizeof(int16_t) != 0))) {
+        return nullptr;
+    }
 
     // 1. Convert cues from JNI array
     jsize cueCount = env->GetArrayLength(jCueStarts);
@@ -240,6 +244,10 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeExtractOnsets(
     if (rem <= 0) return nullptr;
 
     uint8_t* bufPtr = static_cast<uint8_t*>(rawBufPtr) + pos;
+    uintptr_t addr = reinterpret_cast<uintptr_t>(bufPtr);
+    if ((isFloat && (addr % sizeof(float) != 0)) || (!isFloat && (addr % sizeof(int16_t) != 0))) {
+        return nullptr;
+    }
 
     anonsync::VoiceBandpassFilter filter(16000.0, 300.0, 3400.0);
     std::vector<float> monoAudio;
