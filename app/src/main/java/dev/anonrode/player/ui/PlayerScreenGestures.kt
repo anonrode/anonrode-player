@@ -288,6 +288,11 @@ internal fun Modifier.playerGestureLayer(
                     }
                     false
                 } ?: true
+                // Nothing but a survived long-press may engage the scrub:
+                // an early lift or an aborted hold (second finger, slop
+                // exit, pointer cancel delivered as release) must fall
+                // through to the tap/drag detectors untouched.
+                if (!activated) return@awaitEachGesture
                 // Long-press survived — engage discrete milestone speed scrub.
                 actions.startSpeedScrub()
                 val startX = down.position.x
