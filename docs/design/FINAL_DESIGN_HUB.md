@@ -142,6 +142,8 @@ _Single source of truth for the player-screen redesign. Numbering inherits `docs
 | `4b9fe9d` | fix(player): every tap armed the hold-to-speed scrub at 2.0× (guard dropped in `4cef2c8` during v0.9.10→11 swap). Restored `if (!activated)` guard + fall-through documented. **Push/tag v0.9.12 pending user approval.** |
 | `eedb602` | docs: AGENTS rules 15 (stale UI no tenure) + 16 (design-skill leverage, no unapproved downloads) |
 
+**Design gate status: PASSED (this session).** Mockup `scratch/proposed_black_glass_player.html` — 10 frames, judged in rounds by the acceptance pass. Round-2 verdict: law holds everywhere; 5 numeric-truth defects (remaining-time/fill disagreements, orphaned Order label, cross-frame duration mismatch, inconsistent card anatomy) — all fixed and re-verified round-3: overall PASS, zero must-fix. Numeric data on the dock must derive from ONE source of truth in code (elapsed + duration → fill, remaining, %) — that is now a Phase-1 S1/S2 benchmark, not just a mockup property.
+
 ## 13. PHASES, SECTIONS, SUBAGENT FLEET (≤3 concurrent, report back here)
 **Sequence:** P1 → P2 → P3. Each section = one subagent workstream with entry/exit benchmarks; reports land in this doc as updates; integration pass closes each phase.
 
