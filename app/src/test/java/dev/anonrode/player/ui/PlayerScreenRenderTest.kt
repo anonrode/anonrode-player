@@ -38,6 +38,7 @@ import dev.anonrode.player.core.model.Video
 import dev.anonrode.player.core.ui.theme.PlayerAccentTokens
 import dev.anonrode.player.feature.library.LibraryViewModel
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.printToLog
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import kotlinx.coroutines.runBlocking
@@ -412,23 +413,46 @@ class PlayerScreenRenderTest {
         }
     }
 
-    private fun libraryFactory(context: Context): ViewModelProvider.Factory =
+    private fun libraryFactory(context: Context, stash: (LibraryViewModel) -> Unit = {}): ViewModelProvider.Factory =
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                LibraryViewModel(
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val vm = LibraryViewModel(
                     scanner = MediaScanner(context),
                     stateStore = MediaStateStore(MediaDatabase.get(context).mediaStateDao()),
                     settings = context.playerSettingsDataStore,
-                ) as T
+                )
+                stash(vm)
+                return vm as T
+            }
         }
+
+    /** Wait for library content; on timeout dump the VM state + the semantics
+     *  tree so CI logs say exactly what rendered (or why nothing did). */
+    private fun awaitOrDump(expected: String, vm: () -> LibraryViewModel?) {
+        try {
+            compose.waitUntil(timeoutMillis = 25_000) {
+                compose.onAllNodesWithText(expected, substring = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+        } catch (t: Throwable) {
+            val state = vm()?.ui?.value
+            println("RENDER-DIAG expected='$expected' loading=${state?.loading} videos=${state?.videoCount} inProgress=${state?.inProgress?.size} series=${state?.series?.size}")
+            compose.onRoot().printToLog("RENDER-DIAG")
+            throw t
+        }
+    }
 
     @Test
     fun library_home() {
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<Context>()
         installFakeMediaProvider()
+        // Probe #1: the fake provider must feed the SHIPPED scanner synchronously.
+        val probe = MediaScanner(context).scan(force = true)
+        println("RENDER-DIAG provider probe: videos=${probe.videos.size} series=${probe.series.map { it.name }}")
         seedWatchProgress(context)
-        val factory = libraryFactory(context)
+        var vmRef: LibraryViewModel? = null
+        val factory = libraryFactory(context) { vmRef = it }
         compose.setContent {
             Stage(false) {
                 LibraryScreen(
@@ -437,10 +461,7 @@ class PlayerScreenRenderTest {
                 )
             }
         }
-        compose.waitUntil(timeoutMillis = 20_000) {
-            compose.onAllNodesWithText("Continue watching", substring = true)
-                .fetchSemanticsNodes().isNotEmpty()
-        }
+        awaitOrDump("Continue watching") { vmRef }
         capture("library_home")
     }
 
@@ -449,7 +470,8 @@ class PlayerScreenRenderTest {
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<Context>()
         installFakeMediaProvider()
         seedWatchProgress(context)
-        val factory = libraryFactory(context)
+        var vmRef: LibraryViewModel? = null
+        val factory = libraryFactory(context) { vmRef = it }
         compose.setContent {
             Stage(false) {
                 LibraryScreen(
@@ -459,10 +481,7 @@ class PlayerScreenRenderTest {
                 )
             }
         }
-        compose.waitUntil(timeoutMillis = 20_000) {
-            compose.onAllNodesWithText("House Of The Dragon", substring = true)
-                .fetchSemanticsNodes().isNotEmpty()
-        }
+        awaitOrDump("House Of The Dragon") { vmRef }
         capture("library_series")
     }
 }
