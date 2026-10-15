@@ -399,6 +399,7 @@ class PlayerScreenRenderTest {
                     }
                 )
             }
+            println("RENDER-DIAG provider.query(uri=$uri, cols=${cols.size}, sort=$sortOrder) -> ${cursor.count} rows")
             return cursor
         }
     }
@@ -409,21 +410,33 @@ class PlayerScreenRenderTest {
         val resolver = context.contentResolver
         FakeMediaProvider.rows = fakeVideoRows()
         runCatching {
-            org.robolectric.Robolectric.buildContentProvider(FakeMediaProvider::class.java)
-                .create("media")
-        }
+            org.robolectric.Robolectric.setupContentProvider(FakeMediaProvider::class.java, "media")
+        }.onFailure { println("RENDER-DIAG setupContentProvider failed: $it") }
         runCatching {
             ShadowContentResolver.registerProviderInternal("media", FakeMediaProvider())
+        }.onFailure { println("RENDER-DIAG registerProviderInternal failed: $it") }
+
+        // Probe: reproduce the scanner's EXACT query shape and print the raw
+        // cursor, so a zero-row read is attributable (store vs sorting vs
+        // projection).
+        val cols = arrayOf(
+            "_id", "display_name", "duration", "width", "height",
+            "_size", "date_modified", "_data", "is_pending",
+        )
+        for (sort in listOf(null, "date_modified DESC")) {
+            runCatching {
+                resolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cols, null, null, sort)
+            }.onSuccess { c ->
+                println("RENDER-DIAG rawQuery sort=$sort rows=${c?.count} cols=${c?.columnNames?.toList()}")
+                c?.use { if (it.moveToFirst()) print("RENDER-DIAG firstRow id=${it.getLong(0)} data=${it.getString(7)} pending=${it.getInt(8)}") }
+                println()
+            }.onFailure { println("RENDER-DIAG rawQuery sort=$sort threw: $it") }
         }
+
         val probeA = MediaScanner(context).scan(force = true)
-        println("RENDER-DIAG probeA(provider): videos=${probeA.videos.size}")
+        println("RENDER-DIAG probeA(scanner): videos=${probeA.videos.size}")
         if (probeA.videos.isEmpty()) {
-            // Fallback: some Robolectric builds resolve "media" to their own
-            // store; write through the MediaStore API exactly like an indexer.
-            val keys = arrayOf(
-                "_id", "display_name", "duration", "width", "height",
-                "_size", "date_modified", "_data", "is_pending",
-            )
+            // Fallback: write through the MediaStore API exactly like an indexer.
             for (r in fakeVideoRows()) {
                 val values = ContentValues().apply {
                     put("_id", r[0] as Long)
@@ -439,7 +452,7 @@ class PlayerScreenRenderTest {
                 runCatching { resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) }
             }
             val probeB = MediaScanner(context).scan(force = true)
-            println("RENDER-DIAG probeB(insert): videos=${probeB.videos.size} keys=${keys.size}")
+            println("RENDER-DIAG probeB(insert): videos=${probeB.videos.size}")
         }
     }
 
