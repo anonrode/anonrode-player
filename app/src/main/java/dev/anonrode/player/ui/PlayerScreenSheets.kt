@@ -65,6 +65,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -512,67 +513,6 @@ internal fun PlayerSlideInDrawer(
  * Slides in from the right listing episodes in the current folder.
  */
 @Composable
-/**
- * Hairline slider law (mockup C/D/E): a 3dp painted rail — accent fill over
- * white 15% — with a 13dp white knob behind an accent halo. The Material
- * slider remains only as a transparent drag surface, because its default
- * 16dp capsule track is exactly the clunky shape the design removes.
- */
-@Composable
-private fun HairlineSlider(
-    value: Float,
-    onValueChange: (Float) -> Unit,
-    valueRange: ClosedFloatingPointRange<Float>,
-    trackActive: Color,
-    modifier: Modifier = Modifier,
-    trackRest: Color = Color.White.copy(alpha = 0.15f),
-) {
-    val frac = ((value - valueRange.start) / (valueRange.endInclusive - valueRange.start))
-        .coerceIn(0f, 1f)
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(24.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Box(
-            Modifier
-                .padding(horizontal = 10.dp)
-                .fillMaxWidth()
-                .height(3.dp),
-        ) {
-            Box(Modifier.fillMaxSize().clip(CircleShape).background(trackRest))
-            Box(Modifier.fillMaxWidth(frac).clip(CircleShape).background(trackActive))
-        }
-        Slider(
-            value = value.coerceIn(valueRange.start, valueRange.endInclusive),
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            thumb = {
-                Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
-                    Box(
-                        Modifier
-                            .size(18.dp)
-                            .background(trackActive.copy(alpha = 0.20f), CircleShape),
-                    )
-                    Box(
-                        Modifier
-                            .size(13.dp)
-                            .shadow(2.dp, CircleShape)
-                            .background(Color.White, CircleShape),
-                    )
-                }
-            },
-            colors = SliderDefaults.colors(
-                thumbColor = Color.Transparent,
-                activeTrackColor = Color.Transparent,
-                inactiveTrackColor = Color.Transparent,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
 internal fun PlayerPlaylistDrawer(
     visible: Boolean,
     queue: EpisodeQueue?,
@@ -1701,5 +1641,67 @@ internal fun PrecisionSpeedCard(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Hairline slider law (mockup C/D/E): a 3dp painted rail — accent fill over
+ * white 15% — with a 13dp white knob behind an accent halo. The Material
+ * slider remains only as a transparent drag surface, because its default
+ * 16dp capsule track is exactly the clunky shape the design removes.
+ */
+@Composable
+private fun HairlineSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    trackActive: Color,
+    modifier: Modifier = Modifier,
+    trackRest: Color = Color.White.copy(alpha = 0.15f),
+) {
+    val frac = ((value - valueRange.start) / (valueRange.endInclusive - valueRange.start))
+        .coerceIn(0f, 1f)
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(24.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(
+            Modifier
+                .padding(horizontal = 10.dp)
+                .fillMaxWidth()
+                .height(3.dp),
+        ) {
+            Box(Modifier.fillMaxSize().clip(CircleShape).background(trackRest))
+            Box(Modifier.fillMaxWidth(frac).clip(CircleShape).background(trackActive))
+        }
+        Slider(
+            value = value.coerceIn(valueRange.start, valueRange.endInclusive),
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            thumb = {
+                Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier
+                            .size(18.dp)
+                            .background(trackActive.copy(alpha = 0.20f), CircleShape),
+                    )
+                    Box(
+                        Modifier
+                            .size(13.dp)
+                            .shadow(2.dp, CircleShape)
+                            .background(Color.White, CircleShape),
+                    )
+                }
+            },
+            colors = SliderDefaults.colors(
+                thumbColor = Color.Transparent,
+                activeTrackColor = Color.Transparent,
+                inactiveTrackColor = Color.Transparent,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
