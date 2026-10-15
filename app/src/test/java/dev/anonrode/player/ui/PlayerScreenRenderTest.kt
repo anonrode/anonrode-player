@@ -384,16 +384,19 @@ class PlayerScreenRenderTest {
                 }
                 cursor.addRow(
                     cols.map { col ->
+                        // Match the REAL MediaStore constants — DISPLAY_NAME is
+                        // "_display_name", and a literal typo here silently
+                        // nulls every row into the scanner's skip guard.
                         when (col) {
-                            "_id" -> r[0]
-                            "display_name" -> r[1]
-                            "duration" -> r[2]
-                            "width" -> r[3]
-                            "height" -> r[4]
-                            "_size" -> r[5]
-                            "date_modified" -> r[6]
-                            "_data" -> r[7]
-                            "is_pending" -> 0
+                            MediaStore.Video.Media._ID -> r[0]
+                            MediaStore.Video.Media.DISPLAY_NAME -> r[1]
+                            MediaStore.Video.Media.DURATION -> r[2]
+                            MediaStore.Video.Media.WIDTH -> r[3]
+                            MediaStore.Video.Media.HEIGHT -> r[4]
+                            MediaStore.Video.Media.SIZE -> r[5]
+                            MediaStore.Video.Media.DATE_MODIFIED -> r[6]
+                            MediaStore.Video.Media.DATA -> r[7]
+                            MediaStore.Video.Media.IS_PENDING -> 0
                             else -> null
                         }
                     }
@@ -416,80 +419,22 @@ class PlayerScreenRenderTest {
             ShadowContentResolver.registerProviderInternal("media", FakeMediaProvider())
         }.onFailure { println("RENDER-DIAG registerProviderInternal failed: $it") }
 
-        // Probe: reproduce the scanner's EXACT query shape and print the raw
-        // cursor, so a zero-row read is attributable (store vs sorting vs
-        // projection).
-        val cols = arrayOf(
-            "_id", "display_name", "duration", "width", "height",
-            "_size", "date_modified", "_data", "is_pending",
-        )
-        for (sort in listOf(null, "date_modified DESC")) {
-            runCatching {
-                resolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cols, null, null, sort)
-            }.onSuccess { c ->
-                println("RENDER-DIAG rawQuery sort=$sort rows=${c?.count} cols=${c?.columnNames?.toList()}")
-                c?.use { if (it.moveToFirst()) print("RENDER-DIAG firstRow id=${it.getLong(0)} data=${it.getString(7)} pending=${it.getInt(8)}") }
-                println()
-            }.onFailure { println("RENDER-DIAG rawQuery sort=$sort threw: $it") }
-        }
-
+        // Probe: the provider must feed the SHIPPED scanner synchronously.
         val probeA = MediaScanner(context).scan(force = true)
         println("RENDER-DIAG probeA(scanner): videos=${probeA.videos.size}")
-        // The scanner logs query failures to its OWN file (AppLog) — read it
-        // so a swallowed exception surfaces in CI.
-        runCatching {
-            dev.anonrode.player.core.media.log.AppLog.init(context)
-            dev.anonrode.player.core.media.log.AppLog.flush()
-            Thread.sleep(300)
-            val logFile = java.io.File(context.filesDir, "logs/anonrode-player.log")
-            println("RENDER-DIAG applog exists=${logFile.exists()}")
-            if (logFile.exists()) println("RENDER-DIAG applog:\n" + logFile.readText().takeLast(2500))
-        }.onFailure { println("RENDER-DIAG applog read failed: $it") }
-        // Parse replica: same cursor, same statements, same Video ctor — any
-        // throw prints its full stack here instead of vanishing.
-        runCatching {
-            resolver.query(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cols, null, null, "date_modified DESC",
-            )?.use { c ->
-                var n = 0
-                while (c.moveToNext()) {
-                    val name = c.getString(c.getColumnIndexOrThrow("display_name")) ?: continue
-                    val data = c.getString(c.getColumnIndexOrThrow("_data")) ?: continue
-                    val id = c.getLong(c.getColumnIndexOrThrow("_id"))
-                    val v = dev.anonrode.player.core.model.Video(
-                        uri = ContentUris.withAppendedId(
-                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id,
-                        ).toString(),
-                        path = data,
-                        title = name.substringBeforeLast('.'),
-                        durationMs = c.getLong(c.getColumnIndexOrThrow("duration")),
-                        width = c.getInt(c.getColumnIndexOrThrow("width")),
-                        height = c.getInt(c.getColumnIndexOrThrow("height")),
-                        sizeBytes = c.getLong(c.getColumnIndexOrThrow("_size")),
-                        lastModifiedMs = c.getLong(c.getColumnIndexOrThrow("date_modified")) * 1000L,
-                        mediaStoreId = id,
-                        parentPath = data.substringBeforeLast('/'),
-                        displayName = name,
-                    )
-                    n++
-                    if (n == 1) println("RENDER-DIAG replica row1: id=$id title=${v.title} parent=${v.parentPath}")
-                }
-                println("RENDER-DIAG replica total=$n")
-            }
-        }.onFailure { println("RENDER-DIAG replica threw:\n" + it.stackTraceToString()) }
         if (probeA.videos.isEmpty()) {
             // Fallback: write through the MediaStore API exactly like an indexer.
             for (r in fakeVideoRows()) {
                 val values = ContentValues().apply {
-                    put("_id", r[0] as Long)
-                    put("display_name", r[1] as String)
-                    put("duration", r[2] as Long)
-                    put("width", r[3] as Int)
-                    put("height", r[4] as Int)
-                    put("_size", r[5] as Long)
-                    put("date_modified", r[6] as Long)
-                    put("_data", r[7] as String)
-                    put("is_pending", 0)
+                    put(MediaStore.Video.Media._ID, r[0] as Long)
+                    put(MediaStore.Video.Media.DISPLAY_NAME, r[1] as String)
+                    put(MediaStore.Video.Media.DURATION, r[2] as Long)
+                    put(MediaStore.Video.Media.WIDTH, r[3] as Int)
+                    put(MediaStore.Video.Media.HEIGHT, r[4] as Int)
+                    put(MediaStore.Video.Media.SIZE, r[5] as Long)
+                    put(MediaStore.Video.Media.DATE_MODIFIED, r[6] as Long)
+                    put(MediaStore.Video.Media.DATA, r[7] as String)
+                    put(MediaStore.Video.Media.IS_PENDING, 0)
                 }
                 runCatching { resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) }
             }
@@ -506,7 +451,7 @@ class PlayerScreenRenderTest {
         val idsByPath = HashMap<String, Long>()
         resolver.query(
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-            arrayOf("_id", "_data"), null, null, null,
+            arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DATA), null, null, null,
         )?.use { c ->
             while (c.moveToNext()) idsByPath[c.getString(1)] = c.getLong(0)
         }
