@@ -435,6 +435,46 @@ class PlayerScreenRenderTest {
 
         val probeA = MediaScanner(context).scan(force = true)
         println("RENDER-DIAG probeA(scanner): videos=${probeA.videos.size}")
+        // The scanner logs query failures to its OWN file (AppLog) — read it
+        // so a swallowed exception surfaces in CI.
+        runCatching {
+            dev.anonrode.player.core.media.log.AppLog.init(context)
+            val logFile = java.io.File(context.filesDir, "logs/anonrode-player.log")
+            println("RENDER-DIAG applog exists=${logFile.exists()}")
+            if (logFile.exists()) println("RENDER-DIAG applog:\n" + logFile.readText().takeLast(2500))
+        }.onFailure { println("RENDER-DIAG applog read failed: $it") }
+        // Parse replica: same cursor, same statements, same Video ctor — any
+        // throw prints its full stack here instead of vanishing.
+        runCatching {
+            resolver.query(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cols, null, null, "date_modified DESC",
+            )?.use { c ->
+                var n = 0
+                while (c.moveToNext()) {
+                    val name = c.getString(c.getColumnIndexOrThrow("display_name")) ?: continue
+                    val data = c.getString(c.getColumnIndexOrThrow("_data")) ?: continue
+                    val id = c.getLong(c.getColumnIndexOrThrow("_id"))
+                    val v = dev.anonrode.player.core.model.Video(
+                        uri = ContentUris.withAppendedId(
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id,
+                        ).toString(),
+                        path = data,
+                        title = name.substringBeforeLast('.'),
+                        durationMs = c.getLong(c.getColumnIndexOrThrow("duration")),
+                        width = c.getInt(c.getColumnIndexOrThrow("width")),
+                        height = c.getInt(c.getColumnIndexOrThrow("height")),
+                        sizeBytes = c.getLong(c.getColumnIndexOrThrow("_size")),
+                        lastModifiedMs = c.getLong(c.getColumnIndexOrThrow("date_modified")) * 1000L,
+                        mediaStoreId = id,
+                        parentPath = data.substringBeforeLast('/'),
+                        displayName = name,
+                    )
+                    n++
+                    if (n == 1) println("RENDER-DIAG replica row1: id=$id title=${v.title} parent=${v.parentPath}")
+                }
+                println("RENDER-DIAG replica total=$n")
+            }
+        }.onFailure { println("RENDER-DIAG replica threw:\n" + it.stackTraceToString()) }
         if (probeA.videos.isEmpty()) {
             // Fallback: write through the MediaStore API exactly like an indexer.
             for (r in fakeVideoRows()) {
