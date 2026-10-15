@@ -1691,7 +1691,6 @@ private fun HairlineSlider(
                     Box(
                         Modifier
                             .size(13.dp)
-                            .shadow(2.dp, CircleShape)
                             .background(Color.White, CircleShape),
                     )
                 }
