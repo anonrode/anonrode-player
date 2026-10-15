@@ -704,7 +704,10 @@ internal fun RibbonToolItem(
         val discModifier =
             Modifier.background(color = Color.Black.copy(alpha = 0.42f), shape = CircleShape)
 
-        val borderColor = if (selected) accent else Color.White.copy(alpha = 0.15f)
+        // Unselected discs carry NO border (mockup: `border: 1px transparent`
+        // — the 42% glass alone separates them from the video); selected
+        // earns the 1.5dp accent ring.
+        val borderColor = if (selected) accent else Color.Transparent
         val borderWidth = if (selected) 1.5.dp else 1.dp
 
         // 44dp disc + 3dp halo band = 50dp stack, so the glow reads OUTSIDE

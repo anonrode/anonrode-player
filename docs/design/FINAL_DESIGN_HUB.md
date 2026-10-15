@@ -196,7 +196,12 @@ _Mandate: match `scratch/proposed_black_glass_player.html` 1:1 in every section,
 - Reveal motion (better-than-HTML): top slides −8dp, dock slides +10dp on the emphasized bezier, 40ms stagger.
 - Rule-10 cleanups: DecoderPill call removed (composable pending removal check), isSpeedPill param chain removed, fmtClock def removed (dead after pill move).
 
-**Round 1 render verdict:** _pending — push blocked by flaky network (remote hangups); retry queued._ Log every next verdict here.
+**Round 1 render verdict (artifact player-screens-6cc01ab, judged):** PASS on structure — bare transport icons ✓, dark-glass hero ✓, glass discs w/ ring-only active state ✓, tech line ✓, sync pill w/ hairline ✓, resume pill inside the dock ✓, immersive fully black ✓. Residuals → round 2: unselected disc borders still drew (mockup = transparent); speed-card slider = thick white capsule (Material default track) with no ticks/labels; drawer sliders same capsule defect.
+
+**Round 2 — conversion (local, pushing):**
+- Unselected ribbon disc border → transparent (mockup `border: 1px transparent`).
+- New `HairlineSlider` (Sheets): 3dp painted rail w/ 13dp white knob behind an accent halo; Material Slider = transparent drag surface only. Applied to: sync popover ±5s, subtitle drawer offset ±5s, settings Volume/Brightness, speed card.
+- Speed card gets 0.25x/4.0x end labels (ticks follow next round if the render wants them).
 
 **Round 2 planned (apply + render after round 1 evidence):**
 - Drawer feel audit (explicit user demand): confirm 260–300ms emphasized-bezier + velocity dismiss (72dp / 800dp/s, spring 0.85) survive; panel = 0.96 flat glass, zero shadows/blur layers on the panel; drag uses graphicsLayer-only translation; scrim fades with the panel; add drawer CONTENT stagger (sections cascade 40–70ms) on first open only.

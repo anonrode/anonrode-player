@@ -512,6 +512,67 @@ internal fun PlayerSlideInDrawer(
  * Slides in from the right listing episodes in the current folder.
  */
 @Composable
+/**
+ * Hairline slider law (mockup C/D/E): a 3dp painted rail — accent fill over
+ * white 15% — with a 13dp white knob behind an accent halo. The Material
+ * slider remains only as a transparent drag surface, because its default
+ * 16dp capsule track is exactly the clunky shape the design removes.
+ */
+@Composable
+private fun HairlineSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    trackActive: Color,
+    modifier: Modifier = Modifier,
+    trackRest: Color = Color.White.copy(alpha = 0.15f),
+) {
+    val frac = ((value - valueRange.start) / (valueRange.endInclusive - valueRange.start))
+        .coerceIn(0f, 1f)
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(24.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(
+            Modifier
+                .padding(horizontal = 10.dp)
+                .fillMaxWidth()
+                .height(3.dp),
+        ) {
+            Box(Modifier.fillMaxSize().clip(CircleShape).background(trackRest))
+            Box(Modifier.fillMaxWidth(frac).clip(CircleShape).background(trackActive))
+        }
+        Slider(
+            value = value.coerceIn(valueRange.start, valueRange.endInclusive),
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            thumb = {
+                Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier
+                            .size(18.dp)
+                            .background(trackActive.copy(alpha = 0.20f), CircleShape),
+                    )
+                    Box(
+                        Modifier
+                            .size(13.dp)
+                            .shadow(2.dp, CircleShape)
+                            .background(Color.White, CircleShape),
+                    )
+                }
+            },
+            colors = SliderDefaults.colors(
+                thumbColor = Color.Transparent,
+                activeTrackColor = Color.Transparent,
+                inactiveTrackColor = Color.Transparent,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
 internal fun PlayerPlaylistDrawer(
     visible: Boolean,
     queue: EpisodeQueue?,
@@ -1031,19 +1092,15 @@ internal fun PlayerSubtitleDrawer(
                     }
 
                     // Continuous Slider (-5.0s to +5.0s)
-                    Slider(
+                    HairlineSlider(
                         value = (offsetMs / 1000f).coerceIn(-5f, 5f),
                         onValueChange = { newVal ->
                             val diff = (newVal * 1000f).toLong() - offsetMs
                             onNudge(diff)
                         },
                         valueRange = -5f..5f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = accent.primary,
-                            activeTrackColor = accent.primary,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.15f),
-                        ),
-                        modifier = Modifier.fillMaxWidth().height(24.dp)
+                        trackActive = accent.primary,
+                        modifier = Modifier.fillMaxWidth(),
                     )
 
                     // Reset & Resync
@@ -1416,15 +1473,12 @@ internal fun PlayerSettingsDrawer(
                         style = Tnum,
                     )
                 }
-                Slider(
+                HairlineSlider(
                     value = currentVolume.coerceIn(0f, 1f),
                     onValueChange = onVolumeChange,
-                    colors = SliderDefaults.colors(
-                        thumbColor = accent.primary,
-                        activeTrackColor = accent.primary,
-                        inactiveTrackColor = Color.White.copy(alpha = 0.15f),
-                    ),
-                    modifier = Modifier.fillMaxWidth().height(24.dp)
+                    valueRange = 0f..1f,
+                    trackActive = accent.primary,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
 
@@ -1449,15 +1503,12 @@ internal fun PlayerSettingsDrawer(
                         style = Tnum,
                     )
                 }
-                Slider(
+                HairlineSlider(
                     value = currentBrightness.coerceIn(0f, 1f),
                     onValueChange = onBrightnessChange,
-                    colors = SliderDefaults.colors(
-                        thumbColor = accent.primary,
-                        activeTrackColor = accent.primary,
-                        inactiveTrackColor = Color.White.copy(alpha = 0.15f),
-                    ),
-                    modifier = Modifier.fillMaxWidth().height(24.dp)
+                    valueRange = 0f..1f,
+                    trackActive = accent.primary,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
 
@@ -1606,17 +1657,21 @@ internal fun PrecisionSpeedCard(
             }
 
             // Row 2: Precision Slider (0.25x to 4.00x with 0.01x granularity)
-            Slider(
+            HairlineSlider(
                 value = currentSpeed.coerceIn(0.25f, 4.0f),
                 onValueChange = { onSetSpeed(it) },
                 valueRange = 0.25f..4.0f,
-                colors = SliderDefaults.colors(
-                    thumbColor = Color.White,
-                    activeTrackColor = Color.White.copy(alpha = 0.85f),
-                    inactiveTrackColor = Color.White.copy(alpha = 0.18f),
-                ),
-                modifier = Modifier.fillMaxWidth().height(24.dp),
+                trackActive = Color.White.copy(alpha = 0.85f),
+                trackRest = Color.White.copy(alpha = 0.18f),
+                modifier = Modifier.fillMaxWidth(),
             )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("0.25x", color = Color.White.copy(alpha = 0.45f), fontSize = 9.sp, style = Tnum)
+                Text("4.0x", color = Color.White.copy(alpha = 0.45f), fontSize = 9.sp, style = Tnum)
+            }
 
             // Row 3: Preset Chips (0.25x, 1.0x, 1.5x, 2.0x, 3.0x, 4.0x)
             Row(
