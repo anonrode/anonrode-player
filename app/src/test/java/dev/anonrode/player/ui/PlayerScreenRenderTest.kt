@@ -353,63 +353,118 @@ class PlayerScreenRenderTest {
     )
 
     /** A MatrixCursor-backed provider for authority "media", matching the
-     *  exact projection MediaScanner reads (columns copied from it verbatim). */
-    private fun installFakeMediaProvider() {
-        val provider = object : ContentProvider() {
-            override fun onCreate(): Boolean = true
-            override fun getType(uri: Uri): String? = null
-            override fun insert(uri: Uri, values: ContentValues?): Uri? = null
-            override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
-            override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
-            override fun query(
-                uri: Uri,
-                projection: Array<out String>?,
-                selection: String?,
-                selectionArgs: Array<out String>?,
-                sortOrder: String?,
-            ): Cursor {
-                val cols = (projection ?: arrayOf("_id")).toList()
-                val cursor = MatrixCursor(cols.toTypedArray())
-                for (r in fakeVideoRows()) {
-                    val path = r[7] as String
-                    // Folder-scoped queries (videosInFolder) filter by DATA prefix.
-                    if (selection != null && selectionArgs != null && selection.contains("LIKE")) {
-                        val prefix = selectionArgs[0].removeSuffix("%")
-                        if (!path.startsWith(prefix)) continue
-                    }
-                    cursor.addRow(
-                        cols.map { col ->
-                            when (col) {
-                                "_id" -> r[0]
-                                "display_name" -> r[1]
-                                "duration" -> r[2]
-                                "width" -> r[3]
-                                "height" -> r[4]
-                                "_size" -> r[5]
-                                "date_modified" -> r[6]
-                                "_data" -> r[7]
-                                "is_pending" -> 0
-                                else -> null
-                            }
-                        }
-                    )
-                }
-                return cursor
-            }
+     *  exact projection MediaScanner reads (columns copied from it verbatim).
+     *  Registered through Robolectric's provider controller; an insert-based
+     *  fallback covers Robolectric builds that ship their own media store. */
+    private class FakeMediaProvider : ContentProvider() {
+        companion object {
+            var rows: List<Array<Any>> = emptyList()
         }
-        ShadowContentResolver.registerProviderInternal("media", provider)
+
+        override fun onCreate(): Boolean = true
+        override fun getType(uri: Uri): String? = null
+        override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+        override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+        override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+        override fun query(
+            uri: Uri,
+            projection: Array<out String>?,
+            selection: String?,
+            selectionArgs: Array<out String>?,
+            sortOrder: String?,
+        ): Cursor {
+            val cols = (projection ?: arrayOf("_id")).toList()
+            val cursor = MatrixCursor(cols.toTypedArray())
+            for (r in rows) {
+                val path = r[7] as String
+                // Folder-scoped queries (videosInFolder) filter by DATA prefix.
+                if (selection != null && selectionArgs != null && selection.contains("LIKE")) {
+                    val prefix = selectionArgs[0].removeSuffix("%")
+                    if (!path.startsWith(prefix)) continue
+                }
+                cursor.addRow(
+                    cols.map { col ->
+                        when (col) {
+                            "_id" -> r[0]
+                            "display_name" -> r[1]
+                            "duration" -> r[2]
+                            "width" -> r[3]
+                            "height" -> r[4]
+                            "_size" -> r[5]
+                            "date_modified" -> r[6]
+                            "_data" -> r[7]
+                            "is_pending" -> 0
+                            else -> null
+                        }
+                    }
+                )
+            }
+            return cursor
+        }
+    }
+
+    /** Feed the fake provider, probe the SHIPPED scanner, and fall back to
+     *  MediaStore-API inserts when the provider registration is bypassed. */
+    private fun installAndProbeMedia(context: Context) {
+        val resolver = context.contentResolver
+        FakeMediaProvider.rows = fakeVideoRows()
+        runCatching {
+            org.robolectric.Robolectric.buildContentProvider(FakeMediaProvider::class.java)
+                .create("media")
+        }
+        runCatching {
+            ShadowContentResolver.registerProviderInternal("media", FakeMediaProvider())
+        }
+        val probeA = MediaScanner(context).scan(force = true)
+        println("RENDER-DIAG probeA(provider): videos=${probeA.videos.size}")
+        if (probeA.videos.isEmpty()) {
+            // Fallback: some Robolectric builds resolve "media" to their own
+            // store; write through the MediaStore API exactly like an indexer.
+            val keys = arrayOf(
+                "_id", "display_name", "duration", "width", "height",
+                "_size", "date_modified", "_data", "is_pending",
+            )
+            for (r in fakeVideoRows()) {
+                val values = ContentValues().apply {
+                    put("_id", r[0] as Long)
+                    put("display_name", r[1] as String)
+                    put("duration", r[2] as Long)
+                    put("width", r[3] as Int)
+                    put("height", r[4] as Int)
+                    put("_size", r[5] as Long)
+                    put("date_modified", r[6] as Long)
+                    put("_data", r[7] as String)
+                    put("is_pending", 0)
+                }
+                runCatching { resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) }
+            }
+            val probeB = MediaScanner(context).scan(force = true)
+            println("RENDER-DIAG probeB(insert): videos=${probeB.videos.size} keys=${keys.size}")
+        }
     }
 
     /** Watch positions through the SHIPPED store — the same writes the player
-     *  makes on pause. Two continue-watching items + one finished episode. */
+     *  makes on pause. Ids are re-queried from whatever store answered, so
+     *  seeding matches the scanned rows. Two continue items + one finished. */
     private fun seedWatchProgress(context: Context) {
+        val resolver = context.contentResolver
+        val idsByPath = HashMap<String, Long>()
+        resolver.query(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            arrayOf("_id", "_data"), null, null, null,
+        )?.use { c ->
+            while (c.moveToNext()) idsByPath[c.getString(1)] = c.getLong(0)
+        }
+        println("RENDER-DIAG idsByPath=${idsByPath.size}")
+        fun uriOf(pathSuffix: String): String? {
+            val entry = idsByPath.entries.firstOrNull { it.key.endsWith(pathSuffix) } ?: return null
+            return ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, entry.value).toString()
+        }
         runBlocking(Dispatchers.IO) {
             val store = MediaStateStore(MediaDatabase.get(context).mediaStateDao())
-            fun uriOf(id: Long): String =
-                ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id).toString()
-            store.updatePosition(uriOf(1L), 3_588_000L, 3_588_000L, finished = true)
-            store.updatePosition(uriOf(2L), 2_783_000L, 3_232_000L)
-            store.updatePosition(uriOf(5L), 826_000L, 2_100_000L)
+            uriOf("season-1-episode-1.mkv")?.let { store.updatePosition(it, 3_588_000L, 3_588_000L, finished = true) }
+            uriOf("season-1-episode-2.mkv")?.let { store.updatePosition(it, 2_783_000L, 3_232_000L) }
+            uriOf("S01E04.540p.x265.AAC.mkv")?.let { store.updatePosition(it, 826_000L, 2_100_000L) }
         }
     }
 
@@ -446,10 +501,7 @@ class PlayerScreenRenderTest {
     @Test
     fun library_home() {
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<Context>()
-        installFakeMediaProvider()
-        // Probe #1: the fake provider must feed the SHIPPED scanner synchronously.
-        val probe = MediaScanner(context).scan(force = true)
-        println("RENDER-DIAG provider probe: videos=${probe.videos.size} series=${probe.series.map { it.name }}")
+        installAndProbeMedia(context)
         seedWatchProgress(context)
         var vmRef: LibraryViewModel? = null
         val factory = libraryFactory(context) { vmRef = it }
@@ -468,7 +520,7 @@ class PlayerScreenRenderTest {
     @Test
     fun library_series() {
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<Context>()
-        installFakeMediaProvider()
+        installAndProbeMedia(context)
         seedWatchProgress(context)
         var vmRef: LibraryViewModel? = null
         val factory = libraryFactory(context) { vmRef = it }
