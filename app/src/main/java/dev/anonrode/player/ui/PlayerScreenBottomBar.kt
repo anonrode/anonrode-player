@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -618,7 +619,7 @@ private fun ScrubBubble(
 
 /* ── Aspect chip (§4.9) — the CURRENT mode abbreviation in a hairline
  * pill (mockup `.chip.deco`): tap cycles, long-press opens the picker.
- * The visual is 30dp tall like the mockup; the touch cell stays 48dp. ── */
+ * 40dp wide × 30dp tall like the mockup chip; 48dp tall touch cell. ── */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AspectTextChip(
@@ -635,7 +636,7 @@ private fun AspectTextChip(
         label = "aspectPress",
     )
     Box(
-        modifier = Modifier.size(48.dp),
+        modifier = Modifier.width(40.dp).height(48.dp),
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -684,13 +685,9 @@ private fun TransportRow(
     onSeekForward: () -> Unit,
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Left wing: lock, hugging the start edge (content width — a weighted
-        // wing would steal room from the FIT/fullscreen pair on 360–400dp).
-        Box(contentAlignment = Alignment.CenterStart) {
+    Box(modifier = Modifier.fillMaxWidth()) {
+        // Left wing: lock, pinned to the start edge.
+        Row(modifier = Modifier.align(Alignment.CenterStart)) {
             ControlChip(
                 icon = if (actions.ui.locked.value) Icons.Filled.Lock else Icons.Filled.LockOpen,
                 contentDescription = if (actions.ui.locked.value) "Controls locked" else "Lock controls",
@@ -700,15 +697,14 @@ private fun TransportRow(
             )
         }
 
-        // Center cluster: absorbs the slack and self-centers. Portrait is
-        // mockup-exact (frame A: lock · ‹10s · hero · 10s› · FIT · ⛶) — the
-        // prev/next extras cannot fit a 392dp row without zero-width clipping
-        // the right wing (observed in the cf3f3eb render), so episode
-        // stepping stays landscape-only where the row has room.
+        // Center cluster: centered on the SCREEN — the mockup's hero sits on
+        // the exact centerline, and leftover-space centering read 26–30dp
+        // left of it in the renders. Portrait stays mockup-exact (lock ·
+        // ‹10s · hero · 10s› · FIT · ⛶); prev/next remain landscape-only.
         Row(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.align(Alignment.Center),
             horizontalArrangement = Arrangement.spacedBy(
-                fluid(min = 12.dp, max = 24.dp),
+                if (isLandscape) 16.dp else 8.dp,
                 Alignment.CenterHorizontally,
             ),
             verticalAlignment = Alignment.CenterVertically,
@@ -748,13 +744,10 @@ private fun TransportRow(
             }
         }
 
-        // Right wing: Aspect ratio & Fullscreen — content width, hugging the
-        // end edge, so neither control can ever be squeezed out.
+        // Right wing: Aspect ratio & Fullscreen, pinned to the end edge.
         Row(
-            horizontalArrangement = Arrangement.spacedBy(
-                fluid(min = 4.dp, max = 12.dp),
-                Alignment.End,
-            ),
+            modifier = Modifier.align(Alignment.CenterEnd),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             var aspectMenu by remember { mutableStateOf(false) }

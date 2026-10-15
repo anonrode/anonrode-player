@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.height
@@ -54,7 +53,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import android.view.HapticFeedbackConstants
 import androidx.compose.ui.Alignment
@@ -787,11 +789,14 @@ internal fun SubSyncStatusHud(
         val view = LocalView.current
 
         // The Thread (approved design §1.5): a 1dp pulse beneath the pill,
-        // drawn only where the engine has something true to say. Intrinsic
-        // width so the line measures exactly as wide as the pill above it.
-        Column(modifier = Modifier.width(IntrinsicSize.Max)) {
+        // drawn only where the engine has something true to say. The pill
+        // reports its MEASURED width so the line is exactly as wide as it is
+        // — intrinsic sizing under-measured it against the real dock.
+        val pillWidthPx = remember { mutableStateOf(0) }
+        Column {
         Row(
             modifier = Modifier
+                .onSizeChanged { pillWidthPx.value = it.width }
                 .clip(RoundedCornerShape(999.dp))
                 .background(Color(0xF50A0C10))
                 .border(
@@ -872,6 +877,7 @@ internal fun SubSyncStatusHud(
             isSyncRunning = isSyncRunning,
             isSyncLocked = isSyncLocked,
             accent = accent,
+            widthPx = pillWidthPx.value,
         )
         }
     }
@@ -891,8 +897,9 @@ private fun SyncThread(
     isSyncRunning: Boolean,
     isSyncLocked: Boolean,
     accent: Color,
+    widthPx: Int,
 ) {
-    if (!syncEnabled) return
+    if (!syncEnabled || widthPx <= 0) return
     val breathe = remember { Animatable(0.45f) }
     LaunchedEffect(isSyncRunning, isSyncLocked) {
         when {
@@ -909,7 +916,7 @@ private fun SyncThread(
     Box(
         modifier = Modifier
             .padding(top = 5.dp)
-            .fillMaxWidth()
+            .width(with(LocalDensity.current) { widthPx.toDp() })
             .height(1.dp)
             .background(accent.copy(alpha = breathe.value)),
     )
