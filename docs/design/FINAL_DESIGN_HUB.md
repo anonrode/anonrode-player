@@ -240,3 +240,13 @@ _Mandate: match `scratch/proposed_black_glass_player.html` 1:1 in every section,
 - Round 3 + 3.1 state = converged for every modelled frame; the phone feel-check is the remaining gate. Build for the check: `android_build` run 38707353369 on a289644, artifact `debug-apks`.
 
 **Standing loop protocol:** convert → `recordRoborazziDebug` retry push → dispatch ui_render → download artifact → read every frame vs mockup → log verdicts here → repeat. A section is DONE only when a screenshot round shows 1:1 (or documented better-than-HTML delta).
+
+## 16. REIMAGINATION — FEEL · VIBE · FLOW (whole-app proposal, awaiting sign-off)
+_User directive: reimagine the feel, vibe and flow "to everything" — whole app + shell, extending the pinned §0 language with the player chrome untouched; recorded in the interview that **subsync is the life of the app**. Design-only: nothing implements until sign-off (rules 15/16)._
+
+- Spec: `docs/design/FEEL_VIBE_FLOW.md` — identity system (palette + the **Thread** signature, type scale, posters), motion tokens + haptic vocabulary + handoff, journeys J1–J8, rip list, build mapping, 3 open questions.
+- Board (the judgeable artifact): `scratch/reimagined_feel_vibe_flow.html` (gitignored scratch, as with the player mockup) — 8 frames: vibe tokens · Home · Series hub · **the sync story ×3** · Watch History · Settings · motion/handoff · empty. Renders for review: `tools/_screen_ref/grabs/judge/reimagined_final*.png`.
+- Product record: `PRODUCT.md` at repo root (impeccable schema 1, platform android) — pinned commitments + subsync-as-life recorded.
+- The signature: **the Thread** — a 1-px pulse that appears only where the engine has something true to say; the sync lock is the app's one drama beat (single `CLOCK_TICK` haptic). Refuse-don't-guess becomes a design law, not just engine behavior.
+- Open questions (spec §5): ambient contrast (graphite app vs black player), History as a 4th tab vs the current sheet, lock moment haptic-only vs a quiet audio tick.
+- Phase mapping: absorbs into §13 P2 (library/series/history/settings restyle + the new `portrait_sync_locked` render state for the Thread/lock choreography) and P3 as already queued.
