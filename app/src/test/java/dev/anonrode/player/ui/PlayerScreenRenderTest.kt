@@ -439,6 +439,8 @@ class PlayerScreenRenderTest {
         // so a swallowed exception surfaces in CI.
         runCatching {
             dev.anonrode.player.core.media.log.AppLog.init(context)
+            dev.anonrode.player.core.media.log.AppLog.flush()
+            Thread.sleep(300)
             val logFile = java.io.File(context.filesDir, "logs/anonrode-player.log")
             println("RENDER-DIAG applog exists=${logFile.exists()}")
             if (logFile.exists()) println("RENDER-DIAG applog:\n" + logFile.readText().takeLast(2500))

@@ -368,6 +368,7 @@ class MediaScanner(private val context: Context) {
                 projection, selection, selectionArgs,
                 MediaStore.Video.Media.DATE_MODIFIED + " DESC",
             )?.use { c ->
+                println("[SCAN-DBG] cursor rows=${c.count} cols=${c.columnNames.toList()}")
                 val idCol = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
                 val nameCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
                 val durCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
@@ -384,6 +385,7 @@ class MediaScanner(private val context: Context) {
                     -1
                 }
                 while (c.moveToNext()) {
+                    println("[SCAN-DBG] row name=${c.getString(nameCol)} data=${c.getString(dataCol)} pend=${if (pendingCol >= 0) c.getInt(pendingCol) else -1}")
                     val name = c.getString(nameCol) ?: continue
                     val data = c.getString(dataCol) ?: continue
                     // Skip in-progress downloads/copies (API 29+).
@@ -425,8 +427,10 @@ class MediaScanner(private val context: Context) {
                         )
                     )
                 }
+                println("[SCAN-DBG] kept=${videos.size}")
             }
         } catch (t: Throwable) {
+            println("[SCAN-DBG] threw: $t")
             AppLog.e("SCAN", "MediaStore query failed", t)
             return null
         }
