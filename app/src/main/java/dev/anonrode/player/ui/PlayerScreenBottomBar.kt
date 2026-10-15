@@ -349,10 +349,13 @@ internal fun SeekBarRow(
     var leftShowsRemaining by remember { mutableStateOf(false) }
     var rightShowsDuration by remember { mutableStateOf(false) }
     val posWhole = positionSec.value.toLong()
-    val remSec = (durationSec.value - positionSec.value).coerceAtLeast(0f).toLong()
-    val leftLabel = if (leftShowsRemaining) "-${fmtTime(remSec)}" else fmtTime(posWhole * 1000L)
+    // fmtTime() takes MILLISECONDS — passing seconds here silently rendered
+    // "-0:00" on every frame (latent since the flip shipped; visible the
+    // moment the remaining side became the default).
+    val remMs = ((durationSec.value - positionSec.value).coerceAtLeast(0f) * 1000f).toLong()
+    val leftLabel = if (leftShowsRemaining) "-${fmtTime(remMs)}" else fmtTime(posWhole * 1000L)
     val rightLabel = if (rightShowsDuration) fmtTime(durationSec.value.toLong() * 1000L)
-    else "-${fmtTime(remSec)}"
+    else "-${fmtTime(remMs)}"
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(
             horizontalAlignment = Alignment.Start,
@@ -665,7 +668,8 @@ private fun AspectTextChip(
     }
 }
 
-/* ── Transport row — [🔒]  ⏮  [◀◀ Ns] [▶/⏸ hero] [Ns ▶▶]  ⏭  [FIT] [⤢] ── */
+/* ── Transport row — [🔒]  ‹10s [▶/⏸ hero] 10s›  [FIT] [⤢] (portrait, mockup A);
+ *    landscape adds ⏮ before / ⏭ after the seek chips (there is room). ── */
 @Composable
 private fun TransportRow(
     accent: Color,
@@ -679,15 +683,14 @@ private fun TransportRow(
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
 ) {
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Far Left wing: Lock controls (weight 1f, left-aligned)
-        Box(
-            modifier = Modifier.weight(1f),
-            contentAlignment = Alignment.CenterStart,
-        ) {
+        // Left wing: lock, hugging the start edge (content width — a weighted
+        // wing would steal room from the FIT/fullscreen pair on 360–400dp).
+        Box(contentAlignment = Alignment.CenterStart) {
             ControlChip(
                 icon = if (actions.ui.locked.value) Icons.Filled.Lock else Icons.Filled.LockOpen,
                 contentDescription = if (actions.ui.locked.value) "Controls locked" else "Lock controls",
@@ -697,22 +700,28 @@ private fun TransportRow(
             )
         }
 
-        // Center cluster: Primary Transport — ⏮ Prev, ±step seek chips
-        // flanking the hero (hub 4.6), ⏭ Next, on one shared fluid rhythm.
+        // Center cluster: absorbs the slack and self-centers. Portrait is
+        // mockup-exact (frame A: lock · ‹10s · hero · 10s› · FIT · ⛶) — the
+        // prev/next extras cannot fit a 392dp row without zero-width clipping
+        // the right wing (observed in the cf3f3eb render), so episode
+        // stepping stays landscape-only where the row has room.
         Row(
+            modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(
                 fluid(min = 12.dp, max = 24.dp),
                 Alignment.CenterHorizontally,
             ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ControlChip(
-                icon = Icons.Filled.SkipPrevious,
-                contentDescription = "Previous video",
-                accent = accent,
-                enabled = hasPreviousEpisode,
-                onClick = onPlayPrevious,
-            )
+            if (isLandscape) {
+                ControlChip(
+                    icon = Icons.Filled.SkipPrevious,
+                    contentDescription = "Previous video",
+                    accent = accent,
+                    enabled = hasPreviousEpisode,
+                    onClick = onPlayPrevious,
+                )
+            }
             SeekChip(
                 icon = Icons.Filled.FastRewind,
                 seconds = actions.ui.seekStepSec.intValue,
@@ -728,18 +737,20 @@ private fun TransportRow(
                 contentDescription = "Seek forward",
                 onClick = onSeekForward,
             )
-            ControlChip(
-                icon = Icons.Filled.SkipNext,
-                contentDescription = "Next video",
-                accent = accent,
-                enabled = hasNextEpisode,
-                onClick = onPlayNext,
-            )
+            if (isLandscape) {
+                ControlChip(
+                    icon = Icons.Filled.SkipNext,
+                    contentDescription = "Next video",
+                    accent = accent,
+                    enabled = hasNextEpisode,
+                    onClick = onPlayNext,
+                )
+            }
         }
 
-        // Far Right wing: Aspect ratio & Fullscreen / Rotate (weight 1f, right-aligned)
+        // Right wing: Aspect ratio & Fullscreen — content width, hugging the
+        // end edge, so neither control can ever be squeezed out.
         Row(
-            modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(
                 fluid(min = 4.dp, max = 12.dp),
                 Alignment.End,

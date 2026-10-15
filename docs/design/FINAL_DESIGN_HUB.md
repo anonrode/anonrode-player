@@ -227,4 +227,10 @@ _Mandate: match `scratch/proposed_black_glass_player.html` 1:1 in every section,
 - Planned "sync pill min-width": verified unnecessary — the pill sizes intrinsically and has no ellipsis path; no constraint added that the mockup doesn't carry.
 - `PlayerScreenRenderTest` fixture: speed card now passes `accent` (dropped `onDismiss`); all 7 states unchanged otherwise.
 
+**Round 3 render verdict (artifact `player-screens-cf3f3eb`, run 38703918173, 7/7 tests green, judged vs frames A/C/H):**
+- PASS 1:1: speed card = frame C (readout + dim pen glyph left, −/+ 40dp rounds right, milestone set 0.25/0.5/1/1.25/1.37-filled/2/3/4, uniform white-20% rail + 7 ticks, 15dp haloed knob, 0.25×/4.0× ends, ↺ Reset 1× + steps caption); ribbon closed = five discs incl. Night (default order) with the chevron at the row's right edge, 48dp pitch, 9sp labels; landscape top = inline `title · tech`; FIT text chip + fullscreen render in landscape; scrims changed per CSS (unverifiable on black bg — phone check pending).
+- FAIL (fixed in 3.1): `−remaining` printed "-0:00" — `fmtTime()` takes ms and both flip labels fed it seconds (latent since the flip shipped; defaulting the right side to remaining exposed it); "Screenshot" ellipsized to "Screensh…" (label needed the mockup's 52px max-width); portrait transport right wing clipped — eight ≥44dp controls cannot fit 392dp (latent pre-3.0: fullscreen never rendered in portrait; the new FIT text chip degraded to "FI"). Portrait is now mockup-exact (six controls: lock, ‹10s, hero, 10s›, FIT, ⛶); prev/next are landscape-only — in portrait, episode switching = playlist rows + Up-Next auto-advance (flagged to the user).
+
+**Round 3.1 — corrective commit (pushed for the confirming render):** the three fixes above — ms conversion, 52dp label width, content-width transport wings with a self-centering middle and portrait-exact six.
+
 **Standing loop protocol:** convert → `recordRoborazziDebug` retry push → dispatch ui_render → download artifact → read every frame vs mockup → log verdicts here → repeat. A section is DONE only when a screenshot round shows 1:1 (or documented better-than-HTML delta).

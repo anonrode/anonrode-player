@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -99,6 +100,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -801,12 +803,17 @@ internal fun RibbonToolItem(
         Spacer(Modifier.height(4.dp))
         Text(
             text = label,
+            // Mockup `.lbl` carries a 52px max-width — 2dp wider than the
+            // 48dp cell on each side (the row's 4dp gaps absorb the bleed),
+            // so words like "Screenshot" render whole instead of ellipsizing.
             color = if (selected) Color.White else Color(0xFFABABB2),
             fontSize = 9.sp,
             fontWeight = FontWeight.Medium,
             letterSpacing = 0.3.sp,
+            textAlign = TextAlign.Center,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.requiredWidth(52.dp),
         )
     }
 }
