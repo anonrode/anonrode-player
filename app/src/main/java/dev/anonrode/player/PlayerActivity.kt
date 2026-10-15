@@ -832,6 +832,15 @@ class PlayerActivity : ComponentActivity() {
                             title = title,
                             mediaId = currentUriStr ?: "",
                             cueText = cueText ?: embeddedCueText,
+                            // Hub 8.1: the resume pill renders INSIDE the dock
+                            // (the old activity-level overlay sat on the
+                            // seekbar). Host still owns the state.
+                            resumePillMs = resumedPillMs,
+                            onStartOver = {
+                                AnonrodeApp.get(this@PlayerActivity).engine.player.seekTo(0)
+                                resumedPillMs = null
+                                resumePillJob?.cancel()
+                            },
                             // v0.7.1 perf pass: pass the backing STATE objects
                             // (activity fields are mutableFloatStateOf) so a
                             // 10Hz tick recomposes only the seek bar, not the
@@ -1036,48 +1045,12 @@ class PlayerActivity : ComponentActivity() {
                             },
                         )
 
-                        // ── Non-blocking Resume Pill (replaces modal AlertDialog) ──
-                        val pillMs = resumedPillMs
-                        AnimatedVisibility(
-                            visible = pillMs != null,
-                            enter = fadeIn() + slideInVertically { it },
-                            exit = fadeOut() + slideOutVertically { it },
-                            modifier = androidx.compose.ui.Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 88.dp),
-                        ) {
-                            if (pillMs != null) {
-                                Surface(
-                                    shape = RoundedCornerShape(24.dp),
-                                    color = Color.Black.copy(alpha = 0.85f),
-                                    contentColor = Color.White,
-                                    tonalElevation = 6.dp,
-                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-                                ) {
-                                    Row(
-                                        modifier = androidx.compose.ui.Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                    ) {
-                                        Text(
-                                            text = "Resumed at " + fmtClock(pillMs),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = Color.White,
-                                        )
-                                        TextButton(
-                                            onClick = {
-                                                AnonrodeApp.get(this@PlayerActivity).engine.player.seekTo(0)
-                                                resumedPillMs = null
-                                                resumePillJob?.cancel()
-                                            },
-                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                                        ) {
-                                            Text("Start over", color = palette.accent, style = MaterialTheme.typography.labelLarge)
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // ── Resume Pill moved INSIDE the dock (hub 8.1) —
+                        // it now renders from PlayerScreenBottomBar, anchored
+                        // above the sync row; the old overlay here sat
+                        // dead-center on the seekbar. resumedPillMs is still
+                        // host-owned state: the pill appears/disappears from
+                        // this class, positioned by the screen. ──
                     }
                     // ── Cast route picker (audio output) ───────────────
                     if (castPickerOpen) {
@@ -1688,13 +1661,6 @@ class PlayerActivity : ComponentActivity() {
                 AppLog.e("STYLE", "persist subtitle style failed", e)
             }
         }
-    }
-
-    /** Short clock label for the resume prompt: 12:34 or 1:02:03. */
-    private fun fmtClock(ms: Long): String {
-        val s = ms / 1000
-        return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
-        else "%d:%02d".format(s / 60, s % 60)
     }
 
     /**

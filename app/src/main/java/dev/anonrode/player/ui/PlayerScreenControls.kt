@@ -4,6 +4,7 @@ import android.content.res.Configuration
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -11,6 +12,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -154,6 +157,9 @@ internal fun PlayerControlsOverlay(
     videoFps: Int = 0,
     hasSubtitleTrack: Boolean,
     liveOffsetMs: Long,
+    /** Non-blocking resume pill state (hub 8.1) — rendered inside the dock. */
+    resumePillMs: Long? = null,
+    onStartOver: () -> Unit = {},
     actions: PlayerScreenActions,
     onBack: () -> Unit,
     onPlayPrevious: () -> Unit,
@@ -162,11 +168,15 @@ internal fun PlayerControlsOverlay(
 ) {
     // Controls overlay fades completely (top bar + bottom bar + seekbar)
     // leaving a 100% clean, unblemished video frame in fullscreen immersion.
+    // Reveal motion (better than the static HTML): top slides down 8dp, dock
+    // slides up 10dp, both on the law's emphasized bezier, dock 40ms behind.
+    val easeReveal = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
     Box(Modifier.fillMaxSize()) {
         AnimatedVisibility(
             visible = visible,
-            enter = fadeIn(animationSpec = tween(220)),
-            exit = fadeOut(animationSpec = tween(220)),
+            enter = fadeIn(animationSpec = tween(240)) +
+                slideInVertically(animationSpec = tween(280, easing = easeReveal)) { -8 },
+            exit = fadeOut(animationSpec = tween(160)),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             PlayerScreenTopBar(
@@ -184,8 +194,12 @@ internal fun PlayerControlsOverlay(
         }
         AnimatedVisibility(
             visible = visible && showSeekBar,
-            enter = fadeIn(animationSpec = tween(220)),
-            exit = fadeOut(animationSpec = tween(220)),
+            enter = fadeIn(
+                animationSpec = tween(240, delayMillis = 40),
+            ) + slideInVertically(
+                animationSpec = tween(300, delayMillis = 40, easing = easeReveal),
+            ) { 10 },
+            exit = fadeOut(animationSpec = tween(160)),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             PlayerScreenBottomBar(
@@ -197,6 +211,8 @@ internal fun PlayerControlsOverlay(
                 bufferedSec = bufferedSec,
                 localSeek = localSeek,
                 isPlaying = isPlaying,
+                resumePillMs = resumePillMs,
+                onStartOver = onStartOver,
                 hasPreviousEpisode = hasPreviousEpisode,
                 hasNextEpisode = hasNextEpisode,
                 hasSubtitleTrack = hasSubtitleTrack,
@@ -315,13 +331,8 @@ internal fun PlayerScreenTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(PlayerDimens.gapXs),
             ) {
-                // 1. [ HD / HW ]
-                DecoderPill(
-                    isHw = actions.ui.isHwDecoder.value,
-                    accent = accent,
-                    onClick = { actions.toggleDecoder() },
-                )
-                // 2. [ CC ]
+                // [ CC ] — decoder truth lives in the tech sub-line under the
+                // title (hub 1.3); no chip in the top row echoes it.
                 ControlChip(
                     icon = Icons.Filled.ClosedCaption,
                     contentDescription = if (actions.ui.showCC.value) "Subtitles on" else "Subtitles off",
@@ -428,21 +439,16 @@ internal fun PlayerScreenTopBar(
                     }
                 }
 
-                // Chevron handle: sits directly adjacent to sleeve edge
+                // Chevron handle: bare icon per the mockup (`›` unboxed,
+                // white 60%) — a boxed chip here is exactly the clutter the
+                // design law strips out.
                 Box(
                     modifier = Modifier
                         .padding(start = 4.dp)
-                        .size(width = handleWidth, height = 44.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = 0.08f))
-                        .border(
-                            width = 1.dp,
-                            color = Color.White.copy(alpha = 0.16f),
-                            shape = RoundedCornerShape(12.dp),
-                        )
+                        .size(width = 32.dp, height = 44.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
-                            indication = ripple(bounded = true, color = accent),
+                            indication = ripple(bounded = false, radius = 20.dp, color = accent),
                             onClick = {
                                 view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
                                 val willExpand = !actions.quick.ribbonExpanded.value
@@ -459,8 +465,8 @@ internal fun PlayerScreenTopBar(
                     Icon(
                         imageVector = if (isExpanded) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight,
                         contentDescription = if (isExpanded) "Collapse tools ribbon" else "Expand tools ribbon",
-                        tint = accent,
-                        modifier = Modifier.size(18.dp),
+                        tint = Color.White.copy(alpha = 0.65f),
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }
@@ -574,7 +580,6 @@ private fun RibbonToolSlot(
                 label = "Speed",
                 accent = accent,
                 selected = abs(curSpeed - 1f) > 0.05f,
-                isSpeedPill = true,
                 onClick = { actions.toggleSpeedCard() },
                 onLongClick = { actions.resetSpeedToDefault() },
             )
@@ -639,17 +644,17 @@ internal fun RibbonToolItem(
     accent: Color,
     selected: Boolean = false,
     hasActiveDot: Boolean = false,
-    isSpeedPill: Boolean = false,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
     val view = LocalView.current
-    // Press feel: the tool disc springs down while held (visual only — the
-    // cell keeps its full 56dp+ touch footprint for the whole gesture).
+    // Press feel: 0.96 spring per the mockup law (`.disc:active`).
+    // The scale lives on the VISUAL only — the cell keeps its full ≥48dp
+    // touch footprint for the whole gesture.
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.90f else 1f,
+        targetValue = if (pressed) 0.96f else 1f,
         animationSpec = spring(
             dampingRatio = 0.55f,
             stiffness = Spring.StiffnessMediumLow,
@@ -691,34 +696,16 @@ internal fun RibbonToolItem(
         verticalArrangement = Arrangement.Center,
     ) {
         // ══ Disc (hub 2.3 active-state law) ══
-        // cinema disc always keeps its petrol-slate gradient — the ACTIVE
-        // state is the accent RING, a 12%-alpha accent halo
+        // Flat dark glass — rgba(0,0,0,.42) — never a gradient. The ACTIVE
+        // state is the accent RING (1.5dp) + a 12%-alpha accent halo
         // (`.disc.on .dn { border-color; box-shadow: 0 0 0 3px accent-dim }`
-        // in the approved mockup), and the accent-tinted label/icon.
+        // in the approved mockup), with the accent-tinted icon.
         // Never color-only: ring + label state together.
-        val cinemaGradient = Brush.verticalGradient(
-            listOf(
-                Color(0xFF242D3D),
-                Color(0xFF151D28),
-            )
-        )
-        val speedGradient = Brush.verticalGradient(
-            listOf(
-                Color(0xE6252C38),
-                Color(0xE6141822),
-            )
-        )
+        val discModifier =
+            Modifier.background(color = Color.Black.copy(alpha = 0.42f), shape = CircleShape)
 
-        val discModifier = when {
-            isSpeedPill -> Modifier.background(brush = speedGradient, shape = CircleShape)
-            else -> Modifier.background(brush = cinemaGradient, shape = CircleShape)
-        }
-        val borderColor = when {
-            isSpeedPill -> Color.White.copy(alpha = 0.35f)
-            selected -> accent
-            else -> Color.White.copy(alpha = 0.15f)
-        }
-        val borderWidth = if (isSpeedPill || selected) 1.5.dp else 1.dp
+        val borderColor = if (selected) accent else Color.White.copy(alpha = 0.15f)
+        val borderWidth = if (selected) 1.5.dp else 1.dp
 
         // 44dp disc + 3dp halo band = 50dp stack, so the glow reads OUTSIDE
         // the ring like the mockup's halo; the wrapper keeps every cell's
@@ -760,11 +747,9 @@ internal fun RibbonToolItem(
                 } else if (badgeText != null) {
                     Text(
                         text = badgeText,
-                        color = if (isSpeedPill) Color.White else if (selected) accent else Color(0xFFE2E8F0),
-                        fontSize = if (isSpeedPill) 13.sp else 11.5.sp,
-                        fontWeight = if (isSpeedPill) FontWeight.ExtraBold else FontWeight.Bold,
-                        fontFamily = if (isSpeedPill) FontFamily.Monospace else FontFamily.Default,
-                        letterSpacing = if (isSpeedPill) (-0.5).sp else 0.sp,
+                        color = Color.White,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold,
                         style = Tnum,
                     )
                 }
@@ -785,7 +770,7 @@ internal fun RibbonToolItem(
         Spacer(Modifier.height(4.dp))
         Text(
             text = label,
-            color = if (selected) accent else Color(0xFFCBD5E1),
+            color = if (selected) Color.White else Color(0xFFCBD5E1),
             fontSize = 10.5.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,

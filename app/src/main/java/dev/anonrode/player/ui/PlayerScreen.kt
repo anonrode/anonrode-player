@@ -300,6 +300,13 @@ fun PlayerScreen(
      */
     onShareSyncLog: () -> Unit = {},
     /**
+     * Non-blocking "Resumed at … [Start over]" pill (hub 8.1) — the HOST owns
+     * the state (it knows the restore moment); the screen renders it INSIDE
+     * the dock so the pill can never cover the scrubber again.
+     */
+    resumePillMs: Long? = null,
+    onStartOver: () -> Unit = {},
+    /**
      * A-B repeat region (ms). null start = inactive. The host enforces the
      * loop (seek back to A at B); the screen only surfaces state + the tap.
      * Tap cycle: set A → set B (loop starts) → clear.
@@ -812,6 +819,8 @@ fun PlayerScreen(
             videoFps = videoLineFps.intValue,
             hasSubtitleTrack = hasSubtitleTrack,
             liveOffsetMs = liveOffsetMs,
+            resumePillMs = resumePillMs,
+            onStartOver = onStartOver,
             actions = actions,
             onBack = onBack,
             onPlayPrevious = onPlayPrevious,

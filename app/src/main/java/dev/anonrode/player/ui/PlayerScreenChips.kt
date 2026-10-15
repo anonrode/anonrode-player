@@ -32,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -74,13 +73,14 @@ internal fun ControlChip(
     haptic: Int = HapticFeedbackConstants.KEYBOARD_TAP,
 ) {
     val view = LocalView.current
-    // Press feel: the painted circle springs down to 0.90 and settles back
-    // with a slight overshoot. The scale lives on the VISUAL only — the
-    // clickable cell keeps its full ≥48dp hit area for the whole gesture.
+    // Press feel: the disc springs to 0.96 per the mockup law
+    // (`transform: scale(0.96)` — values below 0.95 read exaggerated).
+    // The scale lives on the VISUAL only — the clickable cell keeps its
+    // full ≥48dp hit area for the whole gesture.
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.90f else 1f,
+        targetValue = if (pressed) 0.96f else 1f,
         animationSpec = spring(
             dampingRatio = 0.55f,
             stiffness = Spring.StiffnessMediumLow,
@@ -92,8 +92,11 @@ internal fun ControlChip(
         selected -> accent
         else -> Color.White
     }
-    val bg = if (selected) accent.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.08f)
-    val border = if (selected) accent.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.15f)
+    // Mockup law (ControlChip): no painted box unless the control carries
+    // STATE — plain white icons carry the dock/top bar; a selected control
+    // earns the dark glass disc + the accent ring. Nothing else.
+    val bg = if (selected) Color.Black.copy(alpha = 0.35f) else Color.Transparent
+    val border = if (selected) accent else Color.Transparent
     val cell = size.coerceAtLeast(PlayerDimens.touchMin)
     Box(
         modifier = modifier
@@ -160,19 +163,15 @@ internal fun BigPlayPauseButton(
     modifier: Modifier = Modifier,
 ) {
     val view = LocalView.current
-    val cinemaGradient = Brush.verticalGradient(
-        listOf(
-            Color(0xFF2A3647),
-            Color(0xFF1A2330),
-            Color(0xFF111722),
-        )
-    )
+    // Hero = dark glass 56-64dp with a hairline white border and a white
+    // glyph (mockup `.hero`: rgba(20,20,22,.88) + 1px white 12%). Flat,
+    // never a gradient.
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.88f else 1f,
+        targetValue = if (pressed) 0.96f else 1f,
         animationSpec = spring(
-            dampingRatio = 0.5f,
+            dampingRatio = 0.55f,
             stiffness = Spring.StiffnessMediumLow,
         ),
         label = "playPress",
@@ -200,8 +199,8 @@ internal fun BigPlayPauseButton(
                     scaleY = scale
                 }
                 .clip(CircleShape)
-                .background(cinemaGradient)
-                .border(1.dp, Color.White.copy(alpha = 0.22f), CircleShape),
+                .background(Color(0xE616181B))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             AnimatedContent(

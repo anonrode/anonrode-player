@@ -783,21 +783,18 @@ internal fun SubSyncStatusHud(
     ) {
         val lockedColor = Color(0xFF10B981)
         val offColor = Color(0xFF94A3B8)
-        val activeAccent = when {
-            !syncEnabled -> offColor
-            isSyncLocked -> lockedColor
-            else -> accent
-        }
         val view = LocalView.current
 
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xE60E1017))
+                .clip(RoundedCornerShape(999.dp))
+                .background(Color(0xF50A0C10))
                 .border(
                     width = 1.dp,
-                    color = activeAccent.copy(alpha = 0.35f),
-                    shape = RoundedCornerShape(16.dp),
+                    // Hairline white 8% per the design law — accent stays on
+                    // the status glyph/text only, never the pill border.
+                    color = Color.White.copy(alpha = 0.08f),
+                    shape = RoundedCornerShape(999.dp),
                 )
                 .then(
                     if (onLongClick != null) {

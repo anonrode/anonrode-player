@@ -133,6 +133,13 @@ internal fun PlayerScreenBottomBar(
     liveOffsetMs: Long = 0L,
     /** Media has subtitle tracks — kept for signature compatibility. */
     hasSubtitleTrack: Boolean = false,
+    /**
+     * Non-null while the non-blocking "Resumed at …" pill shows (position ms).
+     * Rendered INSIDE the dock so it can never cover the seekbar again — the
+     * old activity-level overlay sat dead-center on the scrubber.
+     */
+    resumePillMs: Long? = null,
+    onStartOver: () -> Unit = {},
     onPlayPrevious: () -> Unit,
     onPlayNext: () -> Unit,
     actions: PlayerScreenActions,
@@ -141,6 +148,7 @@ internal fun PlayerScreenBottomBar(
     val horizontalPadding = fluid(min = 12.dp, max = 24.dp)
     val verticalTopPadding = fluidVertical(base = 8.dp, isLandscape = isLandscape)
     val verticalBottomPadding = fluidVertical(base = 6.dp, isLandscape = isLandscape)
+    val view = LocalView.current
 
     Column(
         modifier = modifier
@@ -168,6 +176,60 @@ internal fun PlayerScreenBottomBar(
                 if (it.height > 0) actions.ui.bottomBarHeightPx.intValue = it.height
             },
     ) {
+        // ── Non-blocking Resume Pill (hub 8.1) — rendered INSIDE the dock:
+        // it sits above the sync row and can never cover the scrubber again
+        // (the old activity-level overlay sat dead-center on the track). ──
+        androidx.compose.animation.AnimatedVisibility(
+            visible = visible && resumePillMs != null,
+            enter = fadeIn(animationSpec = tween(180)) + slideInVertically(
+                animationSpec = tween(220),
+                initialOffsetY = { it / 2 },
+            ),
+            exit = fadeOut(animationSpec = tween(180)),
+        ) {
+            if (resumePillMs != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0xF50A0C10))
+                            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(999.dp))
+                            .padding(start = 14.dp, end = 7.dp, top = 5.dp, bottom = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        val totalSec = resumePillMs / 1000L
+                        Text(
+                            text = "Resumed at %d:%02d".format(totalSec / 60L, totalSec % 60L),
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            style = Tnum,
+                        )
+                        Text(
+                            text = "Start over",
+                            color = accent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color.White.copy(alpha = 0.06f))
+                                .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(999.dp))
+                                .clickable {
+                                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                    onStartOver()
+                                }
+                                .padding(horizontal = 11.dp, vertical = 5.dp),
+                        )
+                    }
+                }
+            }
+        }
+
         // ── Subtitle Sync Status Pill (Directly Above Scrubber Timeline) ──
         androidx.compose.animation.AnimatedVisibility(
             visible = visible && (actions.quick.subSyncRunning.value || actions.quick.isSyncLocked.value || hasSubtitleTrack),
