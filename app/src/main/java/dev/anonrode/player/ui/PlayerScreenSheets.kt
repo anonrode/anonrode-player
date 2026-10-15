@@ -21,6 +21,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -28,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -46,6 +49,7 @@ import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FontDownload
@@ -90,6 +94,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.anonrode.player.EpisodeQueue
@@ -331,7 +336,7 @@ internal fun PlayerSlideInDrawer(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.45f))
+                .background(Color.Black.copy(alpha = 0.42f))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -1495,16 +1500,22 @@ internal fun PlayerSettingsDrawer(
 }
 
 /**
- * Tier 2: Precision Speed Control Card.
+ * Tier 2: Precision Speed Control Card — mockup §C (`.speedcard`).
  *
- * Implements Feature 2 from the reference recording with:
- * - Stepper buttons [−] / [+] (±0.05x granular adjustment)
- * - Large tabular readout "1.00x ✎" (extra bold monospace)
- * - Continuous precision slider (0.25x to 4.00x with 0.01x granularity)
- * - One-tap Reset button [↺] back to 1.00x
- * - Preset milestone chips (0.25x, 1.0x, 1.5x, 2.0x, 3.0x, 4.0x)
- * - Smoky translucent black cinema styling with zero bright blue clutter.
+ * - Row 1: 22sp tnum readout + dim edit glyph (`.sval`), −/+ 40dp rounds
+ *   (`.sminus/.splus`, white 6% over a hairline) at the right.
+ * - Milestones: 0.25 / 0.5 / 1 / 1.25 / 2 / 3 / 4 as pill chips, plus the
+ *   live speed as a filled accent chip whenever it sits off the grid
+ *   (`.schip.on`) — the ONE filled primary of this view.
+ * - Rail: uniform white-20% hairline, 7 marker ticks (`.srail .ticks`),
+ *   15dp knob behind its accent halo, 0.25×/4.0× end labels underneath.
+ * - Footer: "↺ Reset 1×" chip + the step law caption ("±0.05 steps ·
+ *   slider 0.01").
+ *
+ * Dismissal is tap-outside (the PlayerScreen scrim); the mockup draws no
+ * close affordance inside the card.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PrecisionSpeedCard(
     visible: Boolean,
@@ -1512,136 +1523,195 @@ internal fun PrecisionSpeedCard(
     onStep: (Float) -> Unit,
     onSetSpeed: (Float) -> Unit,
     onReset: () -> Unit,
-    onDismiss: () -> Unit,
+    accent: Color,
     modifier: Modifier = Modifier,
 ) {
     if (!visible) return
+    val current = currentSpeed.coerceIn(0.25f, 4.0f)
+    // Mockup §C geometry: 330dp glass card, 22dp radius, hair2 border.
     Box(
         modifier = modifier
-            .widthIn(min = 310.dp, max = 340.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color(0xEB0A0C10))
-            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp))
-            .padding(16.dp)
+            .width(330.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color(0xF50A0C10))
+            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(22.dp))
+            .padding(14.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = {}, // Consume click inside
             ),
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            // Row 1: [-] Button, Large Tabular Speed "1.00x ✎", [+] Button, Reset [↺]
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // ── Row 1 (`.srow1`): readout left, steppers right ──
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Stepper [-]
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.08f))
-                        .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
-                        .clickable { onStep(-0.05f) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("−", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                }
-
-                // Center readout: "1.00x ✎"
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        text = String.format(java.util.Locale.US, "%.2fx", currentSpeed),
+                        text = String.format(java.util.Locale.US, "%.2f×", current),
                         color = Color.White,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontFamily = FontFamily.Monospace,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.SemiBold,
                         style = Tnum,
                     )
-                    Text("✎", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                    // Decorative affordance from the mockup (`.sval .pen`);
+                    // the value changes via steppers, chips and the slider.
+                    Icon(
+                        imageVector = Icons.Filled.Edit,
+                        contentDescription = null,
+                        tint = Color(0xFFABABB2),
+                        modifier = Modifier.size(16.dp),
+                    )
                 }
-
-                // Stepper [+]
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.08f))
-                        .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
-                        .clickable { onStep(0.05f) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("+", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                }
-
-                // Reset [↺]
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color.White.copy(alpha = 0.06f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
-                        .clickable { onReset() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("↺", color = Color.White.copy(alpha = 0.8f), fontSize = 15.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
+                            .clickable { onStep(-0.05f) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("−", color = Color.White, fontSize = 18.sp)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
+                            .clickable { onStep(0.05f) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("+", color = Color.White, fontSize = 18.sp)
+                    }
                 }
             }
 
-            // Row 2: Precision Slider (0.25x to 4.00x with 0.01x granularity)
+            // ── Row 2 (`.sgrid`): milestone chips + the off-grid live speed
+            //    as the accent-filled chip ──
+            val milestones = listOf(0.25f, 0.5f, 1f, 1.25f, 2f, 3f, 4f)
+            val entries = if (milestones.none { abs(current - it) < 0.005f }) {
+                (milestones + current).sorted()
+            } else {
+                milestones
+            }
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                entries.forEach { chipSpeed ->
+                    val isChipActive = abs(current - chipSpeed) < 0.005f
+                    Box(
+                        modifier = Modifier
+                            .height(30.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(
+                                if (isChipActive) accent else Color.White.copy(alpha = 0.05f)
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = if (isChipActive) Color.Transparent
+                                else Color.White.copy(alpha = 0.08f),
+                                shape = RoundedCornerShape(999.dp),
+                            )
+                            .clickable { onSetSpeed(chipSpeed) }
+                            .padding(horizontal = 11.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = speedChipLabel(chipSpeed),
+                            color = if (isChipActive) Color(0xFF04150D) else Color(0xFFABABB2),
+                            fontSize = 11.sp,
+                            fontWeight = if (isChipActive) FontWeight.SemiBold else FontWeight.Normal,
+                            style = Tnum,
+                        )
+                    }
+                }
+            }
+
+            // ── Row 3 (`.srail`): uniform rail + ticks + haloed knob, with
+            //    the 0.25×/4.0× ends underneath ──
             HairlineSlider(
-                value = currentSpeed.coerceIn(0.25f, 4.0f),
+                value = current,
                 onValueChange = { onSetSpeed(it) },
                 valueRange = 0.25f..4.0f,
-                trackActive = Color.White.copy(alpha = 0.85f),
-                trackRest = Color.White.copy(alpha = 0.18f),
-                modifier = Modifier.fillMaxWidth(),
+                trackActive = Color.White.copy(alpha = 0.20f),
+                trackRest = Color.White.copy(alpha = 0.20f),
+                haloColor = accent,
+                ticks = 7,
+                knobDiameter = 15.dp,
+                knobHaloDiameter = 25.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("0.25x", color = Color.White.copy(alpha = 0.45f), fontSize = 9.sp, style = Tnum)
-                Text("4.0x", color = Color.White.copy(alpha = 0.45f), fontSize = 9.sp, style = Tnum)
+                Text("0.25×", color = Color(0xFF78787F), fontSize = 9.sp, style = Tnum)
+                Text("4.0×", color = Color(0xFF78787F), fontSize = 9.sp, style = Tnum)
             }
 
-            // Row 3: Preset Chips (0.25x, 1.0x, 1.5x, 2.0x, 3.0x, 4.0x)
+            // ── Row 4 (`.resetrow`): reset chip + the step law caption ──
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                listOf(0.25f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f).forEach { chipSpeed ->
-                    val isChipActive = abs(currentSpeed - chipSpeed) < 0.02f
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(28.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (isChipActive) Color.White.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.05f))
-                            .border(1.dp, if (isChipActive) Color.White.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                            .clickable { onSetSpeed(chipSpeed) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = if (chipSpeed % 1f == 0f) "${chipSpeed.toInt()}x" else "${chipSpeed}x",
-                            color = if (isChipActive) Color.White else Color.White.copy(alpha = 0.65f),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
-                        )
-                    }
+                Row(
+                    modifier = Modifier
+                        .height(30.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(999.dp))
+                        .clickable { onReset() }
+                        .padding(horizontal = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = null,
+                        tint = Color(0xFFABABB2),
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                        text = "Reset 1×",
+                        color = Color(0xFFABABB2),
+                        fontSize = 11.sp,
+                        style = Tnum,
+                    )
                 }
+                Text(
+                    text = "±0.05 steps · slider 0.01",
+                    color = Color(0xFF78787F),
+                    fontSize = 10.sp,
+                    style = Tnum,
+                )
             }
         }
     }
+}
+
+/** Speed chip copy per the mockup: "0.25×", "0.5×", "1×", "1.25×" — never "1.0×". */
+private fun speedChipLabel(speed: Float): String = when {
+    speed % 1f == 0f -> "${speed.toInt()}×"
+    (speed * 10f) % 1f == 0f -> String.format(java.util.Locale.US, "%.1f×", speed)
+    else -> String.format(java.util.Locale.US, "%.2f×", speed)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1659,6 +1729,12 @@ private fun HairlineSlider(
     trackActive: Color,
     modifier: Modifier = Modifier,
     trackRest: Color = Color.White.copy(alpha = 0.15f),
+    /** Halo hue behind the knob (mockup: accent, 20%). */
+    haloColor: Color = trackActive,
+    /** Evenly spaced 3dp marker ticks riding above the rail (`.srail .ticks`). */
+    ticks: Int? = null,
+    knobDiameter: Dp = 13.dp,
+    knobHaloDiameter: Dp = 18.dp,
 ) {
     val frac = ((value - valueRange.start) / (valueRange.endInclusive - valueRange.start))
         .coerceIn(0f, 1f)
@@ -1677,20 +1753,40 @@ private fun HairlineSlider(
             Box(Modifier.fillMaxSize().clip(CircleShape).background(trackRest))
             Box(Modifier.fillMaxWidth(frac).clip(CircleShape).background(trackActive))
         }
+        if (ticks != null && ticks > 1) {
+            // Marker ticks ride just above the rail like the mockup
+            // (`.ticks` top 11.5 vs `.line` top 16).
+            Row(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .offset(y = (-4).dp)
+                    .padding(horizontal = 10.dp)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                repeat(ticks) {
+                    Box(
+                        Modifier
+                            .size(3.dp)
+                            .background(Color.White.copy(alpha = 0.5f), CircleShape)
+                    )
+                }
+            }
+        }
         Slider(
             value = value.coerceIn(valueRange.start, valueRange.endInclusive),
             onValueChange = onValueChange,
             valueRange = valueRange,
             thumb = {
-                Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(knobHaloDiameter), contentAlignment = Alignment.Center) {
                     Box(
                         Modifier
-                            .size(18.dp)
-                            .background(trackActive.copy(alpha = 0.20f), CircleShape),
+                            .size(knobHaloDiameter)
+                            .background(haloColor.copy(alpha = 0.20f), CircleShape),
                     )
                     Box(
                         Modifier
-                            .size(13.dp)
+                            .size(knobDiameter)
                             .background(Color.White, CircleShape),
                     )
                 }

@@ -182,7 +182,7 @@ class PlayerScreenRenderTest {
                         onStep = {},
                         onSetSpeed = {},
                         onReset = {},
-                        onDismiss = {},
+                        accent = accent.primary,
                     )
                 }
             }

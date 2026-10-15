@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.media.AudioManager
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxSize
@@ -1054,13 +1056,24 @@ fun PlayerScreen(
 
         // ── precision speed control card (tap speed pill in ribbon) ──
         if (ui.speedCardOpen.value && !isPipMode) {
+            // Tap-outside dismissal — the mockup card carries no close
+            // affordance, so this invisible scrim IS the close path (the
+            // card consumes taps inside its own bounds).
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { actions.closeSpeedCard() },
+            )
             PrecisionSpeedCard(
                 visible = ui.speedCardOpen.value,
                 currentSpeed = ui.currentPlaybackSpeed.floatValue,
                 onStep = { actions.stepSpeed(it) },
                 onSetSpeed = { actions.setArbitrarySpeed(it) },
                 onReset = { actions.resetSpeedToDefault() },
-                onDismiss = { actions.closeSpeedCard() },
+                accent = accent,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = bottomAnchor + PlayerDimens.gapMd)

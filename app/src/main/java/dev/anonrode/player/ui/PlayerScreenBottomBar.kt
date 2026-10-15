@@ -11,10 +11,12 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -36,7 +38,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.FastForward
@@ -73,9 +74,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -156,8 +159,13 @@ internal fun PlayerScreenBottomBar(
             // Scrim first, insets after — the gradient must reach the
             // physical bottom edge even when content clears the nav bar.
             .background(
+                // Mockup `.dock`: transparent → black 62% at 30% → 72% at
+                // the bottom edge (reaches the physical bottom via the
+                // nav-bar padding below).
                 Brush.verticalGradient(
-                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))
+                    0f to Color.Transparent,
+                    0.3f to Color.Black.copy(alpha = 0.62f),
+                    1f to Color.Black.copy(alpha = 0.72f),
                 )
             )
             .navigationBarsPadding()
@@ -198,32 +206,41 @@ internal fun PlayerScreenBottomBar(
                         modifier = Modifier
                             .clip(RoundedCornerShape(999.dp))
                             .background(Color(0xF50A0C10))
-                            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(999.dp))
-                            .padding(start = 14.dp, end = 7.dp, top = 5.dp, bottom = 5.dp),
+                            // hair2 (14%) per the mockup `.resume` border.
+                            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
+                            .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         val totalSec = resumePillMs / 1000L
                         Text(
-                            text = "Resumed at %d:%02d".format(totalSec / 60L, totalSec % 60L),
+                            // Mockup `.resume`: wording in --fg, the tnum time
+                            // in --dim. 11.5sp.
+                            text = buildAnnotatedString {
+                                append("Resumed at ")
+                                withStyle(SpanStyle(color = Color(0xFFABABB2))) {
+                                    append("%d:%02d".format(totalSec / 60L, totalSec % 60L))
+                                }
+                            },
                             color = Color.White,
-                            fontSize = 12.sp,
+                            fontSize = 11.5.sp,
                             style = Tnum,
                         )
                         Text(
                             text = "Start over",
-                            color = accent,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            // Mockup `.resume .act`: --fg text on white 5% with
+                            // a hair2 border, 10.5sp.
+                            color = Color.White,
+                            fontSize = 10.5.sp,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(999.dp))
-                                .background(Color.White.copy(alpha = 0.06f))
-                                .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(999.dp))
+                                .background(Color.White.copy(alpha = 0.05f))
+                                .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
                                 .clickable {
                                     view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                                     onStartOver()
                                 }
-                                .padding(horizontal = 11.dp, vertical = 5.dp),
+                                .padding(horizontal = 11.dp, vertical = 6.dp),
                         )
                     }
                 }
@@ -307,7 +324,9 @@ internal fun PlayerScreenBottomBar(
  * with a transparent track (the Slider keeps the proven drag semantics +
  * touch slop; we stopped pretending its internal track can show a buffer).
  *
- * Tap-to-toggle labels unchanged (left ↔ −remaining, right ↔ current).
+ * Tap-to-toggle: left swaps elapsed ⇄ −remaining, right swaps −remaining
+ * ⇄ total duration — mockup A's default is elapsed + −remaining, each with
+ * its own 9sp status label underneath (`.time small`: "elapsed"/"left").
  * ────────────────────────────────────────────────────────────────────── */
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -327,32 +346,41 @@ internal fun SeekBarRow(
     abEndMs: Long? = null,
     onSeekCommitted: (Float) -> Unit,
 ) {
-    var showRemainingOnLeft by remember { mutableStateOf(false) }
-    var showCurrentOnRight by remember { mutableStateOf(false) }
+    var leftShowsRemaining by remember { mutableStateOf(false) }
+    var rightShowsDuration by remember { mutableStateOf(false) }
     val posWhole = positionSec.value.toLong()
-    val leftLabel = if (showRemainingOnLeft) {
-        "−${fmtTime(((durationSec.value - positionSec.value).coerceAtLeast(0f)).toLong())}"
-    } else {
-        fmtTime(posWhole * 1000L)
-    }
-    val rightLabel = if (showCurrentOnRight) fmtTime(posWhole * 1000L)
-    else fmtTime(durationSec.value.toLong() * 1000L)
+    val remSec = (durationSec.value - positionSec.value).coerceAtLeast(0f).toLong()
+    val leftLabel = if (leftShowsRemaining) "-${fmtTime(remSec)}" else fmtTime(posWhole * 1000L)
+    val rightLabel = if (rightShowsDuration) fmtTime(durationSec.value.toLong() * 1000L)
+    else "-${fmtTime(remSec)}"
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            leftLabel,
-            color = Color.White.copy(alpha = 0.75f),
-            fontSize = fluidText(min = 11.sp, max = 13.sp),
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Start,
-            style = Tnum,
+        Column(
+            horizontalAlignment = Alignment.Start,
             modifier = Modifier
                 .widthIn(min = PlayerDimens.timeLabelMinW)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = ripple(bounded = false, radius = 24.dp, color = accent),
-                ) { showRemainingOnLeft = !showRemainingOnLeft }
-        )
+                ) { leftShowsRemaining = !leftShowsRemaining },
+        ) {
+            Text(
+                leftLabel,
+                color = Color(0xFFF8FAFC),
+                fontSize = fluidText(min = 11.sp, max = 13.sp),
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Start,
+                style = Tnum,
+            )
+            // 9sp status label under the numeral (mockup `.time small`) —
+            // tnum, dim2.
+            Text(
+                text = if (leftShowsRemaining) "left" else "elapsed",
+                color = Color(0xFF78787F),
+                fontSize = 9.sp,
+                letterSpacing = 0.5.sp,
+                style = Tnum,
+            )
+        }
         Box(Modifier.weight(1f).padding(horizontal = fluid(min = 6.dp, max = 12.dp))) {
             val visualPos by animateFloatAsState(
                 targetValue = when {
@@ -502,21 +530,32 @@ internal fun SeekBarRow(
                 )
             }
         }
-        Text(
-            rightLabel,
-            color = Color.White.copy(alpha = 0.75f),
-            fontSize = fluidText(min = 11.sp, max = 13.sp),
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.End,
-            style = Tnum,
+        Column(
+            horizontalAlignment = Alignment.End,
             modifier = Modifier
                 .widthIn(min = PlayerDimens.timeLabelMinW)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = ripple(bounded = false, radius = 24.dp, color = accent),
-                ) { showCurrentOnRight = !showCurrentOnRight }
-        )
+                ) { rightShowsDuration = !rightShowsDuration },
+        ) {
+            Text(
+                rightLabel,
+                color = Color(0xFFF8FAFC),
+                fontSize = fluidText(min = 11.sp, max = 13.sp),
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.End,
+                style = Tnum,
+            )
+            Text(
+                text = if (rightShowsDuration) "total" else "left",
+                color = Color(0xFF78787F),
+                fontSize = 9.sp,
+                letterSpacing = 0.5.sp,
+                style = Tnum,
+                textAlign = TextAlign.End,
+            )
+        }
     }
 }
 
@@ -574,7 +613,59 @@ private fun ScrubBubble(
     }
 }
 
-/* ── Transport row — [🔒]  ⏮  [◀◀ Ns] [▶/⏸ hero] [Ns ▶▶]  ⏭  [◫] [⤢] ── */
+/* ── Aspect chip (§4.9) — the CURRENT mode abbreviation in a hairline
+ * pill (mockup `.chip.deco`): tap cycles, long-press opens the picker.
+ * The visual is 30dp tall like the mockup; the touch cell stays 48dp. ── */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AspectTextChip(
+    abbreviation: String,
+    accent: Color,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.96f else 1f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow),
+        label = "aspectPress",
+    )
+    Box(
+        modifier = Modifier.size(48.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .graphicsLayer {
+                    scaleX = pressScale
+                    scaleY = pressScale
+                }
+                .height(30.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(Color.Black.copy(alpha = 0.35f))
+                .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
+                .combinedClickable(
+                    interactionSource = interactionSource,
+                    indication = ripple(bounded = false, radius = 24.dp, color = accent),
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                )
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = abbreviation,
+                color = Color(0xFFABABB2),
+                fontSize = 10.5.sp,
+                letterSpacing = 0.4.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+/* ── Transport row — [🔒]  ⏮  [◀◀ Ns] [▶/⏸ hero] [Ns ▶▶]  ⏭  [FIT] [⤢] ── */
 @Composable
 private fun TransportRow(
     accent: Color,
@@ -657,9 +748,8 @@ private fun TransportRow(
         ) {
             var aspectMenu by remember { mutableStateOf(false) }
             Box {
-                ControlChip(
-                    icon = Icons.Filled.AspectRatio,
-                    contentDescription = "Aspect ratio",
+                AspectTextChip(
+                    abbreviation = ZoomModes[actions.ui.zoomIdx.intValue].abbreviation,
                     accent = accent,
                     onClick = { actions.cycleAspect() },
                     onLongClick = { aspectMenu = true },

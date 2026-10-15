@@ -211,4 +211,20 @@ _Mandate: match `scratch/proposed_black_glass_player.html` 1:1 in every section,
 - Speed card: add tick rail + 0.25x/4.0x end labels (matches C).
 - Library card icons (user complaint, P2-A scope) stay queued for the Phase-2 library pass.
 
+**Round 2 render verdict (artifact `player-screens-60ee012`, run 38678768053, 7/7 tests green; judged side-by-side against mockup frames A–H on 2026-10-15):**
+- PASS: hairline sliders in all four homes (speed card, sync popover, subtitle drawer, settings Volume/Brightness); unselected ribbon disc borders gone; dark-glass hero; tech sub-line; glass discs; immersive fully black; every state recorded.
+- Residuals found (all fixed in round 3 below): Speed disc badge/X floated on the cell while the icon stayed (mockup `.disc .badge` is the disc's whole content, 9px/600, no icon); speed-card anatomy off §C (readout position, stepper cells, milestone set was 0.25/1/1.5/2/3/4 with no live chip and no filled primary, rounded-square chips instead of pills, no rail ticks, no footer reset chip/steps caption); dock times had no `elapsed`/`left` labels and defaulted the right side to duration (mockup A: `46:23 elapsed` / `-7:29 left`); aspect chip drew a glyph instead of the mode text (`FIT`); ribbon closed showed the fit-count (4 portrait / 6 landscape) with the chevron hugging the discs, cells 56dp (mockup: five-cap `nth-child(n+6)`, chevron pinned right, 48dp cells/4dp gap → Night rests visible in the full set); drawer scrim 45% vs the mockup's `.42`; top scrim 85% vs `.55`; dock gradient flat vs `.62@30% → .72`.
+- Known generation gap, queued Phase 2 (hub 7.2/7.3/6.6, S6): settings + playlist + subtitle drawers still carry the boxed-card anatomy (mockup E/F/D = flat rows/tiles, inline APPEARANCE in the subtitle drawer, watched checks, rich sub-lines); decoder seg labels show HW | HW+ | SW vs mockup HW+SW | APP | SW (S5 re-verify); the online-sub row stays ripped until P3 wires the full function (the mockup's own "coming with P3" chip acknowledges this).
+- Micro-deltas kept by design (documented): CC active = black-glass disc + ring (readable on busy video) vs the mockup's ring-only; resume pill lives INSIDE the dock (overlap-impossible, round 1).
+
+**Round 3 — exactness pass (committed at the end of this round; pushed for the confirming render):**
+- Speed disc: badge text 9sp/600 as the disc's whole content (icon-free already — size corrected to `.disc .badge`).
+- Ribbon: 48dp cells + 4dp gap (fixed width; labels 9sp/500 `#ABABB2`, white when lit); closed sleeve = first FIVE tools (Speed, Screenshot, Rotation, Mute, Night — exactly the mockup's resting set, superseding the v2-named-four candidate unless the user says otherwise); chevron pinned to the row's right edge; the sleeve clip animates open to the scrolling remainder.
+- Speed card rebuilt to §C (see list above) + rule-10 cleanup: the dead `onDismiss` parameter is gone; `closeSpeedCard()` is now wired to a real tap-outside scrim in PlayerScreen — a dismissal path that previously existed in name only.
+- Dock times: default = elapsed + −remaining with 9sp `elapsed`/`left` labels; tapping flips left `elapsed ⇄ left` and right `left ⇄ total`; numerals sans + tnum at `#F8FAFC` (dropped the legacy monospace).
+- Aspect chip: current mode's text (`FIT`/`CROP`/`STR`/`16:9`/`4:3`) in the `.chip.deco` hairline pill (30dp visual, 48dp touch); tap cycles, long-press picker kept.
+- Scrims to the CSS: drawer backdrop 0.42; top `.55`; dock `.62@30% → .72`. (Not judgeable in the black-bg render — CSS-derived; the phone feel-check confirms over video.)
+- Planned "sync pill min-width": verified unnecessary — the pill sizes intrinsically and has no ellipsis path; no constraint added that the mockup doesn't carry.
+- `PlayerScreenRenderTest` fixture: speed card now passes `accent` (dropped `onDismiss`); all 7 states unchanged otherwise.
+
 **Standing loop protocol:** convert → `recordRoborazziDebug` retry push → dispatch ui_render → download artifact → read every frame vs mockup → log verdicts here → repeat. A section is DONE only when a screenshot round shows 1:1 (or documented better-than-HTML delta).
