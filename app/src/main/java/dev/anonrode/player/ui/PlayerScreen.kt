@@ -3,6 +3,7 @@ package dev.anonrode.player.ui
 import android.app.Activity
 import android.content.Context
 import android.media.AudioManager
+import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -569,9 +570,18 @@ fun PlayerScreen(
     // correlation window and while a forced fingerprint is queued/running.
     // v0.7.3: the separate calibration banner is retired — the manual
     // calibration window keeps the SAME "Syncing…" state alive.
+    val syncHapticView = LocalView.current
     LaunchedEffect(subSyncRunning, isCalibrating, isSyncLocked) {
         quick.subSyncRunning.value = subSyncRunning || isCalibrating
+        // The lock moment (approved design §2.3): the app's single
+        // transition haptic. The mirror still holds the previous value here,
+        // so the rise is detected before it is overwritten — fires once per
+        // real lock, never on recomposition or chrome re-show.
+        val lockJustLanded = isSyncLocked && !quick.isSyncLocked.value
         quick.isSyncLocked.value = isSyncLocked
+        if (lockJustLanded) {
+            syncHapticView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        }
     }
     ZoomApplyEffect(ui.zoomIdx.intValue, ui)
     RotationLockEffect(activity, quick.rotateMode.value)

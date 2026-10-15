@@ -244,6 +244,8 @@ _Mandate: match `scratch/proposed_black_glass_player.html` 1:1 in every section,
 ## 16. REIMAGINATION — FEEL · VIBE · FLOW (whole-app proposal, awaiting sign-off)
 _User directive: reimagine the feel, vibe and flow "to everything" — whole app + shell, extending the pinned §0 language with the player chrome untouched; recorded in the interview that **subsync is the life of the app**. Design-only: nothing implements until sign-off (rules 15/16)._
 
+- **Status: approved** (user, 2026-10-15 — "proceed"; design commit `32a2c44`). Open-question leans accepted: graphite ground, lock moment haptic-only; History-as-4th-tab decided at the history-page build.
+- **Implementation batches (fold into §13 P2):** B1 landed — Thread + lock haptic + `portrait_sync_locked` render state (8 states now) + flat settings-hub rows. B2 next — library/series restyle + card-icon scale fix (P2-A), Watch History page, playlist reorder, then the harness states for the new screens.
 - Spec: `docs/design/FEEL_VIBE_FLOW.md` — identity system (palette + the **Thread** signature, type scale, posters), motion tokens + haptic vocabulary + handoff, journeys J1–J8, rip list, build mapping, 3 open questions.
 - Board (the judgeable artifact): `scratch/reimagined_feel_vibe_flow.html` (gitignored scratch, as with the player mockup) — 8 frames: vibe tokens · Home · Series hub · **the sync story ×3** · Watch History · Settings · motion/handoff · empty. Renders for review: `tools/_screen_ref/grabs/judge/reimagined_final*.png`.
 - Product record: `PRODUCT.md` at repo root (impeccable schema 1, platform android) — pinned commitments + subsync-as-life recorded.

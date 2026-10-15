@@ -163,6 +163,17 @@ class PlayerScreenRenderTest {
     }
 
     @Test
+    fun portrait_sync_locked() {
+        val actions = fixtureActions()
+        // Verified lock (design J3 beat 3): the pill reads "✓ Synced +0.12s",
+        // the Thread flattens to accent, and the tech line's synced segment
+        // ignites — all from the same state the host writes.
+        actions.quick.isSyncLocked.value = true
+        compose.setContent { Stage(false) { Chrome(actions, visible = true) } }
+        capture("portrait_sync_locked")
+    }
+
+    @Test
     fun portrait_immersive() {
         val actions = fixtureActions()
         compose.setContent { Stage(false) { Chrome(actions, visible = false) } }

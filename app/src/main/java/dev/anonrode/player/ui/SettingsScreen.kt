@@ -1562,34 +1562,37 @@ private fun SettingsFolderCard(
     previewColor: Color? = null,
     onClick: () -> Unit,
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapXs)
-    ) {
+    // Approved design board F: hub folders are FLAT rows — no card chrome.
+    // A hairline (inset to the text column) does the separating, the icon
+    // disc is the only shape, and the value is plain tnum text.
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 66.dp)
+                .height(1.dp)
+                .background(palette.rowLine.copy(alpha = 0.6f))
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(palette.rowBg)
-                .border(1.dp, palette.rowLine, RoundedCornerShape(16.dp))
                 .clickable(onClick = onClick)
-                .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapMd),
+                .padding(horizontal = Dimens.gapLg, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(palette.accent.copy(alpha = 0.12f))
-                    .border(1.dp, palette.accent.copy(alpha = 0.22f), RoundedCornerShape(12.dp)),
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(palette.surface.copy(alpha = 0.7f))
+                    .border(1.dp, palette.rowLine, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     folder.icon,
                     contentDescription = null,
-                    tint = palette.accent,
-                    modifier = Modifier.size(20.dp),
+                    tint = palette.textDim,
+                    modifier = Modifier.size(18.dp),
                 )
             }
             Spacer(Modifier.width(Dimens.gapMd))
@@ -1612,14 +1615,7 @@ private fun SettingsFolderCard(
             }
             Spacer(Modifier.width(Dimens.gapSm))
             if (badgeText.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(palette.surface)
-                        .border(1.dp, palette.surfaceLine.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     if (previewColor != null) {
                         Box(
                             modifier = Modifier
@@ -1645,7 +1641,7 @@ private fun SettingsFolderCard(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
                 tint = palette.textDim.copy(alpha = 0.6f),
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(18.dp),
             )
         }
     }

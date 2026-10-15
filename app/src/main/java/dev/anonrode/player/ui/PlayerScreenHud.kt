@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.height
@@ -785,6 +786,10 @@ internal fun SubSyncStatusHud(
         val offColor = Color(0xFF94A3B8)
         val view = LocalView.current
 
+        // The Thread (approved design §1.5): a 1dp pulse beneath the pill,
+        // drawn only where the engine has something true to say. Intrinsic
+        // width so the line measures exactly as wide as the pill above it.
+        Column(modifier = Modifier.width(IntrinsicSize.Max)) {
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(999.dp))
@@ -862,5 +867,50 @@ internal fun SubSyncStatusHud(
                 )
             }
         }
+        SyncThread(
+            syncEnabled = syncEnabled,
+            isSyncRunning = isSyncRunning,
+            isSyncLocked = isSyncLocked,
+            accent = accent,
+        )
+        }
     }
+}
+
+/**
+ * The Thread — the app's signature (approved design §1.5). A 1dp pulse that
+ * appears only where the engine has something true to say: it breathes at
+ * roughly 45% alpha while correlating, and flattens to a steady accent line
+ * at a verified lock. "Sync Off" has nothing to say, so no line is drawn.
+ * The lock's one-shot CLOCK_TICK haptic fires from PlayerScreen on the real
+ * state transition (never on recomposition or chrome re-show).
+ */
+@Composable
+private fun SyncThread(
+    syncEnabled: Boolean,
+    isSyncRunning: Boolean,
+    isSyncLocked: Boolean,
+    accent: Color,
+) {
+    if (!syncEnabled) return
+    val breathe = remember { Animatable(0.45f) }
+    LaunchedEffect(isSyncRunning, isSyncLocked) {
+        when {
+            isSyncLocked -> breathe.snapTo(0.9f)
+            isSyncRunning -> {
+                while (true) {
+                    breathe.animateTo(0.75f, tween(durationMillis = 950, easing = FastOutSlowInEasing))
+                    breathe.animateTo(0.30f, tween(durationMillis = 950, easing = FastOutSlowInEasing))
+                }
+            }
+            else -> breathe.animateTo(0.45f, tween(durationMillis = 240))
+        }
+    }
+    Box(
+        modifier = Modifier
+            .padding(top = 5.dp)
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(accent.copy(alpha = breathe.value)),
+    )
 }
