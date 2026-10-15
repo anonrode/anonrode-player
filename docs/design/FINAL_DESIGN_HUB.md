@@ -231,6 +231,12 @@ _Mandate: match `scratch/proposed_black_glass_player.html` 1:1 in every section,
 - PASS 1:1: speed card = frame C (readout + dim pen glyph left, −/+ 40dp rounds right, milestone set 0.25/0.5/1/1.25/1.37-filled/2/3/4, uniform white-20% rail + 7 ticks, 15dp haloed knob, 0.25×/4.0× ends, ↺ Reset 1× + steps caption); ribbon closed = five discs incl. Night (default order) with the chevron at the row's right edge, 48dp pitch, 9sp labels; landscape top = inline `title · tech`; FIT text chip + fullscreen render in landscape; scrims changed per CSS (unverifiable on black bg — phone check pending).
 - FAIL (fixed in 3.1): `−remaining` printed "-0:00" — `fmtTime()` takes ms and both flip labels fed it seconds (latent since the flip shipped; defaulting the right side to remaining exposed it); "Screenshot" ellipsized to "Screensh…" (label needed the mockup's 52px max-width); portrait transport right wing clipped — eight ≥44dp controls cannot fit 392dp (latent pre-3.0: fullscreen never rendered in portrait; the new FIT text chip degraded to "FI"). Portrait is now mockup-exact (six controls: lock, ‹10s, hero, 10s›, FIT, ⛶); prev/next are landscape-only — in portrait, episode switching = playlist rows + Up-Next auto-advance (flagged to the user).
 
-**Round 3.1 — corrective commit (pushed for the confirming render):** the three fixes above — ms conversion, 52dp label width, content-width transport wings with a self-centering middle and portrait-exact six.
+**Round 3.1 — corrective commit, confirming render PASS (artifact `player-screens-a289644`, run 38707382184, 7/7 green):**
+- ms conversion verified: `46:23 elapsed` / `-7:29 left` — the mockup's exact values.
+- "Screenshot" labels render whole at the 48dp pitch (52px max-width law).
+- Portrait transport = frame A's six controls with FIT + fullscreen both visible (the `FI` clip is gone).
+- Landscape keeps all eight (lock · ⏮ · ‹10s · hero · 10s› · ⏭ · FIT · ⛶ — measured column segments, not eyeballed).
+- Accepted micro-delta: the landscape hero sits ~25px left of true centre (content-width wings can never clip; the mockup's equal-flex wings centred it) — cosmetic, flagged to the user.
+- Round 3 + 3.1 state = converged for every modelled frame; the phone feel-check is the remaining gate. Build for the check: `android_build` run 38707353369 on a289644, artifact `debug-apks`.
 
 **Standing loop protocol:** convert → `recordRoborazziDebug` retry push → dispatch ui_render → download artifact → read every frame vs mockup → log verdicts here → repeat. A section is DONE only when a screenshot round shows 1:1 (or documented better-than-HTML delta).
