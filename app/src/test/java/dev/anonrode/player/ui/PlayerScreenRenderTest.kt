@@ -1,7 +1,14 @@
 package dev.anonrode.player.ui
 
+import android.content.ContentProvider
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
+import android.database.MatrixCursor
 import android.media.AudioManager
+import android.net.Uri
+import android.provider.MediaStore
 import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -23,8 +30,19 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.test.utils.TestExoPlayerBuilder
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.anonrode.player.EpisodeQueue
+import dev.anonrode.player.core.database.MediaDatabase
+import dev.anonrode.player.core.datastore.playerSettingsDataStore
+import dev.anonrode.player.core.media.library.MediaScanner
+import dev.anonrode.player.core.media.state.MediaStateStore
 import dev.anonrode.player.core.model.Video
 import dev.anonrode.player.core.ui.theme.PlayerAccentTokens
+import dev.anonrode.player.feature.library.LibraryViewModel
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import org.robolectric.shadows.ShadowContentResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -309,5 +327,143 @@ class PlayerScreenRenderTest {
         val actions = fixtureActions()
         compose.setContent { Stage(true) { Chrome(actions, visible = true) } }
         capture("landscape_chrome_on")
+    }
+
+    // ══════════════ LIBRARY RENDER STATES (B3) ══════════════
+    // These states run the library's REAL pipeline: a fake "media" provider
+    // feeds MediaScanner, MediaStateStore seeds watch positions, and
+    // LibraryViewModel's join produces the same UiState production builds.
+    // Only the media rows and positions are synthetic; every composable, the
+    // scan, the join and the grouping are the shipped code.
+
+    /** id, display name, durationMs, width, height, bytes, mtimeSeconds, path. */
+    private fun fakeVideoRows(): List<Array<Any>> = listOf(
+        arrayOf(1L, "download-house-of-the-dragon-2022-season-1-episode-1.mkv", 3_588_000L, 1920, 1080, 1_900_000_000L, 1_760_470_000L,
+            "/storage/emulated/0/Shows/House Of The Dragon/download-house-of-the-dragon-2022-season-1-episode-1.mkv"),
+        arrayOf(2L, "download-house-of-the-dragon-2022-season-1-episode-2.mkv", 3_232_000L, 1920, 1080, 1_850_000_000L, 1_760_500_000L,
+            "/storage/emulated/0/Shows/House Of The Dragon/download-house-of-the-dragon-2022-season-1-episode-2.mkv"),
+        arrayOf(3L, "download-house-of-the-dragon-2022-season-1-episode-3.mkv", 3_570_000L, 1920, 1080, 1_880_000_000L, 1_760_460_000L,
+            "/storage/emulated/0/Shows/House Of The Dragon/download-house-of-the-dragon-2022-season-1-episode-3.mkv"),
+        arrayOf(4L, "download-house-of-the-dragon-2022-season-1-episode-4.mkv", 3_500_000L, 1920, 1080, 1_840_000_000L, 1_760_450_000L,
+            "/storage/emulated/0/Shows/House Of The Dragon/download-house-of-the-dragon-2022-season-1-episode-4.mkv"),
+        arrayOf(5L, "The.Great.Protector.S01E04.540p.x265.AAC.mkv", 2_100_000L, 960, 540, 730_000_000L, 1_760_410_000L,
+            "/storage/emulated/0/Shows/The Great Protector/The.Great.Protector.S01E04.540p.x265.AAC.mkv"),
+        arrayOf(6L, "The.Great.Protector.S01E05.540p.x265.AAC.mkv", 2_080_000L, 960, 540, 720_000_000L, 1_760_400_000L,
+            "/storage/emulated/0/Shows/The Great Protector/The.Great.Protector.S01E05.540p.x265.AAC.mkv"),
+    )
+
+    /** A MatrixCursor-backed provider for authority "media", matching the
+     *  exact projection MediaScanner reads (columns copied from it verbatim). */
+    private fun installFakeMediaProvider() {
+        val provider = object : ContentProvider() {
+            override fun onCreate(): Boolean = true
+            override fun getType(uri: Uri): String? = null
+            override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+            override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+            override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+            override fun query(
+                uri: Uri,
+                projection: Array<out String>?,
+                selection: String?,
+                selectionArgs: Array<out String>?,
+                sortOrder: String?,
+            ): Cursor {
+                val cols = (projection ?: arrayOf("_id")).toList()
+                val cursor = MatrixCursor(cols.toTypedArray())
+                for (r in fakeVideoRows()) {
+                    val path = r[7] as String
+                    // Folder-scoped queries (videosInFolder) filter by DATA prefix.
+                    if (selection != null && selectionArgs != null && selection.contains("LIKE")) {
+                        val prefix = selectionArgs[0].removeSuffix("%")
+                        if (!path.startsWith(prefix)) continue
+                    }
+                    cursor.addRow(
+                        cols.map { col ->
+                            when (col) {
+                                "_id" -> r[0]
+                                "display_name" -> r[1]
+                                "duration" -> r[2]
+                                "width" -> r[3]
+                                "height" -> r[4]
+                                "_size" -> r[5]
+                                "date_modified" -> r[6]
+                                "_data" -> r[7]
+                                "is_pending" -> 0
+                                else -> null
+                            }
+                        }
+                    )
+                }
+                return cursor
+            }
+        }
+        ShadowContentResolver.registerProviderInternal("media", provider)
+    }
+
+    /** Watch positions through the SHIPPED store — the same writes the player
+     *  makes on pause. Two continue-watching items + one finished episode. */
+    private fun seedWatchProgress(context: Context) {
+        runBlocking(Dispatchers.IO) {
+            val store = MediaStateStore(MediaDatabase.get(context).mediaStateDao())
+            fun uriOf(id: Long): String =
+                ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id).toString()
+            store.updatePosition(uriOf(1L), 3_588_000L, 3_588_000L, finished = true)
+            store.updatePosition(uriOf(2L), 2_783_000L, 3_232_000L)
+            store.updatePosition(uriOf(5L), 826_000L, 2_100_000L)
+        }
+    }
+
+    private fun libraryFactory(context: Context): ViewModelProvider.Factory =
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                LibraryViewModel(
+                    scanner = MediaScanner(context),
+                    stateStore = MediaStateStore(MediaDatabase.get(context).mediaStateDao()),
+                    settings = context.playerSettingsDataStore,
+                ) as T
+        }
+
+    @Test
+    fun library_home() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<Context>()
+        installFakeMediaProvider()
+        seedWatchProgress(context)
+        val factory = libraryFactory(context)
+        compose.setContent {
+            Stage(false) {
+                LibraryScreen(
+                    viewModelFactory = factory,
+                    onOpenVideo = {},
+                )
+            }
+        }
+        compose.waitUntil(timeoutMillis = 20_000) {
+            compose.onAllNodesWithText("Continue watching", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        capture("library_home")
+    }
+
+    @Test
+    fun library_series() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<Context>()
+        installFakeMediaProvider()
+        seedWatchProgress(context)
+        val factory = libraryFactory(context)
+        compose.setContent {
+            Stage(false) {
+                LibraryScreen(
+                    viewModelFactory = factory,
+                    onOpenVideo = {},
+                    startDestination = LibraryStartDestination.Series,
+                )
+            }
+        }
+        compose.waitUntil(timeoutMillis = 20_000) {
+            compose.onAllNodesWithText("House Of The Dragon", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        capture("library_series")
     }
 }
