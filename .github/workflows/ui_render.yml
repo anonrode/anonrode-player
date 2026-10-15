@@ -32,7 +32,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Render player-screen states
-        run: ./gradlew :app:testDebugUnitTest --tests "dev.anonrode.player.ui.PlayerScreenRenderTest" --stacktrace
+        run: ./gradlew :app:testDebugUnitTest --tests "dev.anonrode.player.ui.PlayerScreenRenderTest" -Proborazzi.test.record=true --stacktrace
 
       - name: Upload rendered screens
         if: always()
