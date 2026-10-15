@@ -1373,7 +1373,7 @@ private fun ContinueCard(palette: SkinPalette, item: InProgressItem, onClick: ()
                     color = Color.Black.copy(alpha = 0.72f),
                 ) {
                     Text(
-                        text = fmtMin(item.positionMs) + " / " + fmtMin(item.durationMs),
+                        text = fmtTime(item.positionMs) + " / " + fmtTime(item.durationMs),
                         color = Color.White,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontFeatureSettings = "tnum",
