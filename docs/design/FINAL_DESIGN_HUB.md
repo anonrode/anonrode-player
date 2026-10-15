@@ -170,3 +170,40 @@ _Single source of truth for the player-screen redesign. Numbering inherits `docs
 4. Series hub priority vs online-sub download for P3 slot order
 
 _Maintainer: update verdicts/benchmarks by number; never renumber. Phase completion stamped here with commit hash._
+
+## 15. CONVERGENCE ROUND LOG — player screen vs the agreed HTML (overnight loop)
+_Mandate: match `scratch/proposed_black_glass_player.html` 1:1 in every section, then EXCEED it; the drawer must feel butter, never janky. Every round is rendered by the real app (ui_render workflow → Robolectric PNG artifacts, dispatch-only) and judged side-by-side against the mockup frames. User's phone recordings remain the final feel-check per converged round._
+
+**Why phase 1 drifted (root cause, honestly recorded):** the mockup was verified against the law, but the app was never verified against the MOCKUP — prose specs drifted. Countermeasure now live: `recordRoborazziDebug` on CI = hard visual evidence per round; every chrome constant defers to the mockup's exact values.
+
+**Round 0 — evidence (user recording screen-20261014-232847.mp4 + v0.9.12):**
+- FAIL resume pill floated dead-center ON the seekbar (activity-level overlay, bottom=88dp while dock ≈200px).
+- FAIL "Syncing…" pill cramped at the edge (no gutter; border carried accent instead of hairline).
+- FAIL top row: HW/HD chip duplicated decoder truth (mockup carries it in the tech sub-line).
+- FAIL speed disc = filled accent; law = ring + halo on dark glass.
+- FAIL transport chips = outline boxes; mockup = bare white icons.
+- FAIL press scales 0.88–0.90 (law 0.96).
+- FAIL motion missing: no reveal stagger/gravity — flat snaps ("clunky").
+
+**Round 1 — conversion (commit `6e990db`, push pending network recovery):**
+- ControlChip: no box unless STATEFUL (selected = black-glass disc + accent ring, tint accent; else bare white icon).
+- Ribbon discs: flat 42% black glass, selected = 1.5dp accent ring + 12% halo; labels white when lit; chevron handle = bare icon (was a boxed chip).
+- Hero: flat dark-glass circle 0xE616181B, white 12% hairline, white glyph; press 0.96.
+- Press 0.96 everywhere (chips, ribbon; was 0.88/0.90).
+- Sync pill: law glass 0.96 near-black, hairline white 8% border, fully-rounded; accent only on glyph/text.
+- Resume pill MOVED INSIDE the dock (PlayerScreenBottomBar renders it above the sync row from `resumePillMs`/`onStartOver` params; activity overlay deleted) — overlap structurally impossible.
+- Top bar: decoder chip removed (truth = tech sub-line + settings decoder segments).
+- Reveal motion (better-than-HTML): top slides −8dp, dock slides +10dp on the emphasized bezier, 40ms stagger.
+- Rule-10 cleanups: DecoderPill call removed (composable pending removal check), isSpeedPill param chain removed, fmtClock def removed (dead after pill move).
+
+**Round 1 render verdict:** _pending — push blocked by flaky network (remote hangups); retry queued._ Log every next verdict here.
+
+**Round 2 planned (apply + render after round 1 evidence):**
+- Drawer feel audit (explicit user demand): confirm 260–300ms emphasized-bezier + velocity dismiss (72dp / 800dp/s, spring 0.85) survive; panel = 0.96 flat glass, zero shadows/blur layers on the panel; drag uses graphicsLayer-only translation; scrim fades with the panel; add drawer CONTENT stagger (sections cascade 40–70ms) on first open only.
+- Sync pill: give it a min-width so "Syncing…" never computes an ellipsis; status text stays tnum.
+- Seek chips: chevrons white 90%, "Ns" label white 60% (verify vs render).
+- Sliders inside drawers: hairline 3dp fills (mockup E/D).
+- Speed card: add tick rail + 0.25x/4.0x end labels (matches C).
+- Library card icons (user complaint, P2-A scope) stay queued for the Phase-2 library pass.
+
+**Standing loop protocol:** convert → `recordRoborazziDebug` retry push → dispatch ui_render → download artifact → read every frame vs mockup → log verdicts here → repeat. A section is DONE only when a screenshot round shows 1:1 (or documented better-than-HTML delta).
