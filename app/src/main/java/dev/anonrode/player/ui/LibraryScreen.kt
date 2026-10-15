@@ -3,6 +3,7 @@ package dev.anonrode.player.ui
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -560,31 +561,34 @@ fun LibraryScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    "CONTINUE WATCHING",
-                                    color = palette.textDim,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp,
+                                    "Continue watching",
+                                    color = palette.text,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
                                 )
                                 TextButton(
                                     onClick = { showHistorySheet = true },
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                                 ) {
                                     Text(
-                                        "View all",
-                                        color = palette.accent,
-                                        style = MaterialTheme.typography.labelMedium,
+                                        "VIEW ALL",
+                                        color = palette.textDim,
+                                        style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.SemiBold,
+                                        letterSpacing = 1.sp,
                                     )
                                 }
                             }
                         }
                         item(key = "continue-row") {
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = Dimens.gapLg),
-                                horizontalArrangement = Arrangement.spacedBy(Dimens.gapMd),
+                            // J1 (approved): full-width stacked cards; the rail
+                            // became a column so each continue card is the
+                            // cinematic banner the mockup draws.
+                            Column(
+                                modifier = Modifier.padding(horizontal = Dimens.gapLg),
+                                verticalArrangement = Arrangement.spacedBy(18.dp),
                             ) {
-                                items(state.inProgress, key = { it.video.uri }) { item ->
+                                state.inProgress.forEach { item ->
                                     ContinueCard(palette, item, onClick = { onOpenVideo(item.video) })
                                 }
                             }
@@ -1305,22 +1309,29 @@ fun PosterArt(
                     .clip(RoundedCornerShape(cornerRadius)),
             )
         }
+        // Shared frame law (J1/J2): 1px white 10% outline over the art.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(cornerRadius)),
+        )
     }
 }
 
-/** Clean watched progress bar matching the active theme accent. */
+/** Clean watched progress hairline — the shared law (J1/J2): 3dp rail at
+ * white 16% with the theme accent as the fill. */
 @Composable
 private fun ProgressBar(palette: SkinPalette, fraction: Float, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(4.dp)
-            .background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(2.dp)),
+            .height(3.dp)
+            .background(Color.White.copy(alpha = 0.16f), RoundedCornerShape(2.dp)),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(fraction.coerceIn(0f, 1f))
-                .height(4.dp)
+                .height(3.dp)
                 .background(palette.accent, RoundedCornerShape(2.dp)),
         )
     }
@@ -1328,90 +1339,69 @@ private fun ProgressBar(palette: SkinPalette, fraction: Float, modifier: Modifie
 
 @Composable
 private fun ContinueCard(palette: SkinPalette, item: InProgressItem, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = palette.surface),
-        modifier = Modifier.width(216.dp),
+    // J1 (approved): full-width cinematic banner — the art wears the shared
+    // frame with the duration pill ("position / total") bottom-right, the
+    // progress hairline sits ON the art's bottom edge, and the meta below is
+    // plain text: title, sub-line, percent. No card box, no overlay badge,
+    // no vignette — the frame is the card.
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick),
     ) {
-        Column {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(118.dp)
-            ) {
-                PosterArt(
-                    title = item.video.title,
-                    modifier = Modifier.fillMaxSize(),
-                    cornerRadius = 0.dp,
-                    videoUri = item.video.uri,
-                    playbackPositionMs = item.positionMs,
-                    durationMs = item.durationMs,
-                )
-                // Dark vignette overlay so badge and play icon pop
-                Box(
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(158.dp)
+        ) {
+            PosterArt(
+                title = item.video.title,
+                modifier = Modifier.fillMaxSize(),
+                cornerRadius = 14.dp,
+                videoUri = item.video.uri,
+                playbackPositionMs = item.positionMs,
+                durationMs = item.durationMs,
+            )
+            // Duration pill bottom-right: position / total (J1).
+            if (item.positionMs > 0L && item.durationMs > 0L) {
+                Surface(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Transparent,
-                                    Color.Black.copy(alpha = 0.6f),
-                                )
-                            )
-                        )
-                )
-                // Centered play badge
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(36.dp)
-                        .background(Color.Black.copy(alpha = 0.55f), CircleShape),
-                    contentAlignment = Alignment.Center,
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color.Black.copy(alpha = 0.72f),
                 ) {
-                    Icon(
-                        Icons.Filled.PlayArrow,
-                        contentDescription = "Play",
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp),
+                    Text(
+                        text = fmtMin(item.positionMs) + " / " + fmtMin(item.durationMs),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFeatureSettings = "tnum",
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                     )
                 }
-                // Time position pill in top-right
-                if (item.positionMs > 0L) {
-                    Surface(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp),
-                        shape = RoundedCornerShape(6.dp),
-                        color = Color.Black.copy(alpha = 0.75f),
-                    ) {
-                        Text(
-                            text = fmtMin(item.positionMs),
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFeatureSettings = "tnum",
-                                fontWeight = FontWeight.Bold,
-                            ),
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                    }
-                }
-                // Progress bar along bottom of thumbnail
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                ) {
-                    ProgressBar(palette, item.fraction)
-                }
             }
-            Column(modifier = Modifier.padding(horizontal = Dimens.gapMd, vertical = Dimens.gapSm)) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+            ) {
+                ProgressBar(palette, item.fraction)
+            }
+        }
+        Row(
+            modifier = Modifier.padding(start = 2.dp, end = 2.dp, top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     item.video.title,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
                     color = palette.text,
                 )
                 Spacer(Modifier.height(2.dp))
@@ -1423,6 +1413,15 @@ private fun ContinueCard(palette: SkinPalette, item: InProgressItem, onClick: ()
                     color = palette.textDim,
                 )
             }
+            Spacer(Modifier.width(Dimens.gapMd))
+            Text(
+                text = ((item.fraction.coerceIn(0f, 1f) * 100f) + 0.5f).toInt().toString() + "%",
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontFeatureSettings = "tnum",
+                    fontWeight = FontWeight.SemiBold,
+                ),
+                color = palette.text,
+            )
         }
     }
 }

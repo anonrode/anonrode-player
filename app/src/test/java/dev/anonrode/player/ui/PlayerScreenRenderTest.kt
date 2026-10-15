@@ -174,6 +174,19 @@ class PlayerScreenRenderTest {
     }
 
     @Test
+    fun settings_hub() {
+        // The full Settings directory hub — flat rows per board F. Renders
+        // from DataStore defaults under Robolectric; the whole screen is
+        // self-contained (no player chrome behind it).
+        compose.setContent {
+            Stage(false) {
+                SettingsScreen(onBack = {})
+            }
+        }
+        capture("settings_hub")
+    }
+
+    @Test
     fun portrait_immersive() {
         val actions = fixtureActions()
         compose.setContent { Stage(false) { Chrome(actions, visible = false) } }
