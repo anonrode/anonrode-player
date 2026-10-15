@@ -22,6 +22,9 @@ _Permanent truth document. Read before touching anything. Never delete or replac
    fine; competing *product* names are not.
 5. **Ask before `git push` and before large architectural rewrites.** Commit
    locally is fine; pushing needs explicit confirmation.
+   **AMENDED 2026-10-15 (user, verbatim intent): "always push and render" — standing
+   approval granted for pushes of loop work and `ui_render` dispatches; no need to
+   ask per round. Tags and releases remain gated on explicit approval.**
 6. **Windows git SSL:** always `git -c http.sslBackend=openssl push origin <ref>`.
 7. **Keep the sync engine correct above all.** The subtitle-sync engine
    (`core/media/.../sync/`) is validated against real content and a synthetic
