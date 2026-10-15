@@ -52,6 +52,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -666,120 +667,153 @@ private fun HistorySheet(
         contentColor = palette.text,
         shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
     ) {
-        Column(
+        HistorySheetContent(
+            palette = palette,
+            items = items,
+            onOpenVideo = onOpenVideo,
+            onClearAll = onClearHistory,
+        )
+    }
+}
+
+/**
+ * The History surface itself — J2 (approved): flat rows on the panel, day
+ * grouping left to the caller's ordering, the percent as an honest tnum
+ * column, and the same 3dp progress hairline as everywhere else. Extracted
+ * from the modal wrapper so the render harness can capture it directly
+ * (a ModalBottomSheet lives in its own window and never lands in a root
+ * screenshot).
+ */
+@Composable
+internal fun HistorySheetContent(
+    palette: SkinPalette,
+    items: List<InProgressItem>,
+    onOpenVideo: (dev.anonrode.player.core.model.Video) -> Unit,
+    onClearAll: () -> Unit,
+) {
+    var confirmClear by remember { mutableStateOf(false) }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            containerColor = palette.surface,
+            titleContentColor = palette.text,
+            textContentColor = palette.textDim,
+            title = { Text("Clear watch history?", fontWeight = FontWeight.SemiBold) },
+            text = { Text("Continue-watching progress for every video is removed. This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    onClearAll()
+                }) {
+                    Text("Clear", color = Color(0xFFEF4444), fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) {
+                    Text("Keep", color = palette.textDim)
+                }
+            },
+        )
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(palette.surface)
+            .padding(bottom = Dimens.gapXl),
+    ) {
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = Dimens.gapXl),
+                .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapSm),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
+            Text(
+                "History",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = palette.text,
+            )
+            // Destructive, so it confirms (hub 8.2) — J2 draws it as plain
+            // caps text, not a loud button.
+            TextButton(
+                onClick = { confirmClear = true },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Text(
+                    "CLEAR ALL",
+                    color = palette.textDim,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.sp,
+                )
+            }
+        }
+        if (items.isEmpty()) {
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapSm),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(Dimens.gapXl),
+                contentAlignment = Alignment.Center,
             ) {
-                Column {
-                    Text(
-                        "Watch History",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = palette.text,
-                    )
-                    Text(
-                        "${items.size} videos in progress",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.textDim,
-                    )
-                }
-                TextButton(
-                    onClick = onClearHistory,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.DeleteSweep,
-                        contentDescription = null,
-                        tint = palette.accent,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "Clear History",
-                        color = palette.accent,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
+                Text(
+                    "No watch history",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = palette.textDim,
+                )
             }
-            Spacer(Modifier.height(Dimens.gapSm))
-            if (items.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(Dimens.gapXl),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        "No watch history",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = palette.textDim,
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 450.dp),
-                    contentPadding = PaddingValues(horizontal = Dimens.gapLg, vertical = Dimens.gapSm),
-                    verticalArrangement = Arrangement.spacedBy(Dimens.gapSm),
-                ) {
-                    items(items, key = { it.video.uri }) { item ->
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { onOpenVideo(item.video) },
-                            color = palette.rowBg,
-                            shape = RoundedCornerShape(12.dp),
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(Dimens.gapMd),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(Dimens.gapMd),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(44.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(palette.accent.copy(alpha = 0.15f)),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        Icons.Filled.PlayCircle,
-                                        contentDescription = null,
-                                        tint = palette.accent,
-                                        modifier = Modifier.size(24.dp),
-                                    )
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        item.video.title,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = palette.text,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        item.label,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.textDim,
-                                    )
-                                }
-                            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 450.dp),
+                contentPadding = PaddingValues(horizontal = Dimens.gapLg, vertical = Dimens.gapXs),
+            ) {
+                items(items, key = { it.video.uri }) { item ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onOpenVideo(item.video) }
+                            .padding(vertical = 8.dp, horizontal = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Dimens.gapMd),
+                    ) {
+                        PosterArt(
+                            title = item.video.title,
+                            modifier = Modifier.size(width = 64.dp, height = 40.dp),
+                            cornerRadius = 8.dp,
+                            videoUri = item.video.uri,
+                            playbackPositionMs = item.positionMs,
+                            durationMs = item.durationMs,
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                item.video.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.text,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                item.label,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.textDim,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            ProgressBar(palette, item.fraction)
                         }
+                        Spacer(Modifier.width(Dimens.gapSm))
+                        Text(
+                            text = ((item.fraction.coerceIn(0f, 1f) * 100f) + 0.5f).toInt().toString() + "%",
+                            style = MaterialTheme.typography.titleSmall.copy(
+                                fontFeatureSettings = "tnum",
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                            color = palette.text,
+                        )
                     }
                 }
             }

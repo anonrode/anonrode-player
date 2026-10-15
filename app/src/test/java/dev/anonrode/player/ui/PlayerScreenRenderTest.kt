@@ -36,6 +36,7 @@ import dev.anonrode.player.core.media.library.MediaScanner
 import dev.anonrode.player.core.media.state.MediaStateStore
 import dev.anonrode.player.core.model.Video
 import dev.anonrode.player.core.ui.theme.PlayerAccentTokens
+import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 import dev.anonrode.player.feature.library.LibraryViewModel
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.printToLog
@@ -545,5 +546,66 @@ class PlayerScreenRenderTest {
         }
         awaitOrDump("House Of The Dragon") { vmRef }
         capture("library_series")
+    }
+
+    /** A Video built from the fixture's row table (same values the scanner
+     *  would produce from a seeded row). */
+    private fun fakeVideo(id: Long): Video {
+        val r = fakeVideoRows().first { it[0] == id }
+        val path = r[7] as String
+        return Video(
+            uri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id).toString(),
+            path = path,
+            title = (r[1] as String).substringBeforeLast('.'),
+            durationMs = r[2] as Long,
+            width = r[3] as Int,
+            height = r[4] as Int,
+            sizeBytes = r[5] as Long,
+            lastModifiedMs = (r[6] as Long) * 1000L,
+            mediaStoreId = id,
+            parentPath = path.substringBeforeLast('/'),
+            displayName = r[1] as String,
+        )
+    }
+
+    @Test
+    fun library_history() {
+        // The J2 surface rendered directly — a ModalBottomSheet lives in its
+        // own window and would never land in a root screenshot. Items mirror
+        // what the seeded store produces (two in progress + one finished).
+        val items = listOf(
+            LibraryViewModel.InProgress(
+                video = fakeVideo(2L),
+                fraction = 2_783_000f / 3_232_000f,
+                label = "House Of The Dragon · 46:23 / 53:52",
+                positionMs = 2_783_000L,
+                durationMs = 3_232_000L,
+            ),
+            LibraryViewModel.InProgress(
+                video = fakeVideo(5L),
+                fraction = 826_000f / 2_100_000f,
+                label = "The Great Protector · 13:46 / 35:00",
+                positionMs = 826_000L,
+                durationMs = 2_100_000L,
+            ),
+            LibraryViewModel.InProgress(
+                video = fakeVideo(1L),
+                fraction = 1f,
+                label = "House Of The Dragon · Watched",
+                positionMs = 3_588_000L,
+                durationMs = 3_588_000L,
+            ),
+        )
+        compose.setContent {
+            Stage(false) {
+                HistorySheetContent(
+                    palette = rememberSkinPalette(),
+                    items = items,
+                    onOpenVideo = {},
+                    onClearAll = {},
+                )
+            }
+        }
+        capture("library_history")
     }
 }
