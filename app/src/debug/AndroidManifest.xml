@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- debug-only: the Robolectric render harness (ui_render workflow) launches
+     androidx.activity.ComponentActivity as its compose host; the class is on
+     the classpath via androidx.activity but is not a real screen, so it is
+     never exposed to users — this merge exists only for the debug build the
+     screenshots run against. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name="androidx.activity.ComponentActivity"
+            android:exported="true" />
+    </application>
+</manifest>
