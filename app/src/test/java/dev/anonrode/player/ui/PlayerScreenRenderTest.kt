@@ -46,6 +46,7 @@ import org.robolectric.shadows.ShadowContentResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -77,6 +78,15 @@ class PlayerScreenRenderTest {
 
     @get:Rule
     val compose = createComposeRule()
+
+    /** Every state renders on the owner's real skin (Obsidian), so frames
+     *  show the emerald language the phone shows — not the Cobalt default. */
+    @Before
+    fun pinObsidianSkin() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<Context>()
+        dev.anonrode.player.core.ui.theme.ThemePrefs.get(context)
+            .setSkin(dev.anonrode.player.core.ui.theme.Skin.OBSIDIAN)
+    }
 
     private val accent = PlayerAccentTokens(
         primary = Color(0xFF3DDBA8),

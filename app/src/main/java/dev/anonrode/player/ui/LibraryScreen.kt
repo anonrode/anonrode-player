@@ -586,7 +586,7 @@ fun LibraryScreen(
                             // cinematic banner the mockup draws.
                             Column(
                                 modifier = Modifier.padding(horizontal = Dimens.gapLg),
-                                verticalArrangement = Arrangement.spacedBy(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp),
                             ) {
                                 state.inProgress.forEach { item ->
                                     ContinueCard(palette, item, onClick = { onOpenVideo(item.video) })
@@ -1267,9 +1267,13 @@ fun PosterArt(
     durationMs: Long? = null,
 ) {
     val hue = remember(title) { posterHue(title) }
+    // MATURE, not muted (user directive): deep, rich, quiet tones at the
+    // J1/J2 frames' own palette — low value, moderate saturation. The old
+    // 0.42-brightness wash read garish; graying it out would read cheap.
+    // The accent remains the only saturated thing on screen.
     val brush = remember(hue) {
-        val c1 = Color.hsv(hue, 0.40f, 0.42f)
-        val c2 = Color.hsv((hue + 38f) % 360f, 0.48f, 0.22f)
+        val c1 = Color.hsv(hue, 0.34f, 0.30f)
+        val c2 = Color.hsv((hue + 38f) % 360f, 0.37f, 0.17f)
         Brush.linearGradient(listOf(c1, c2))
     }
     Box(
@@ -1347,18 +1351,18 @@ private fun ContinueCard(palette: SkinPalette, item: InProgressItem, onClick: ()
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(158.dp)
+                .height(116.dp)
         ) {
             PosterArt(
                 title = item.video.title,
                 modifier = Modifier.fillMaxSize(),
-                cornerRadius = 14.dp,
+                cornerRadius = 12.dp,
                 videoUri = item.video.uri,
                 playbackPositionMs = item.positionMs,
                 durationMs = item.durationMs,
