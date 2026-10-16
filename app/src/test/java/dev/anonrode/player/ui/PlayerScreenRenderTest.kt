@@ -232,13 +232,14 @@ class PlayerScreenRenderTest {
         }
         compose.onNodeWithText("Playback & Engine", substring = true).performClick()
         try {
+            // Wait on a row title (normal case) — SectionHeader uppercases.
             compose.waitUntil(timeoutMillis = 10_000) {
-                compose.onAllNodesWithText("Playback Preferences", substring = true)
+                compose.onAllNodesWithText("Resume position", substring = true)
                     .fetchSemanticsNodes().isNotEmpty()
             }
         } catch (t: Throwable) {
             println("RENDER-DIAG drill-in did not switch — tree follows")
-            compose.onRoot().printToLog("RENDER-DIAG")
+            println(compose.onRoot().printToString())
             throw t
         }
         capture("settings_playback")
