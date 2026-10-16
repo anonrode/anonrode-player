@@ -39,6 +39,8 @@ import dev.anonrode.player.core.ui.theme.PlayerAccentTokens
 import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 import dev.anonrode.player.feature.library.LibraryViewModel
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.printToLog
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -213,6 +215,27 @@ class PlayerScreenRenderTest {
             }
         }
         capture("settings_hub")
+    }
+
+    @Test
+    fun settings_playback() {
+        // One drill-in, reached by a REAL click on the hub row — evidence for
+        // the six sub-pages before they get the language pass.
+        compose.setContent {
+            Stage(false) {
+                SettingsScreen(onBack = {})
+            }
+        }
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithText("Playback & Engine", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Playback & Engine", substring = true).performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithText("Playback Preferences", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        capture("settings_playback")
     }
 
     @Test
