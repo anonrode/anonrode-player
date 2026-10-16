@@ -231,9 +231,15 @@ class PlayerScreenRenderTest {
                 .fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithText("Playback & Engine", substring = true).performClick()
-        compose.waitUntil(timeoutMillis = 10_000) {
-            compose.onAllNodesWithText("Playback Preferences", substring = true)
-                .fetchSemanticsNodes().isNotEmpty()
+        try {
+            compose.waitUntil(timeoutMillis = 10_000) {
+                compose.onAllNodesWithText("Playback Preferences", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+        } catch (t: Throwable) {
+            println("RENDER-DIAG drill-in did not switch — tree follows")
+            compose.onRoot().printToLog("RENDER-DIAG")
+            throw t
         }
         capture("settings_playback")
     }
