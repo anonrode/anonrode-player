@@ -87,9 +87,20 @@ object SyncFingerprint {
             .setConstraints(constraints)
             .addTag(WORK_TAG)
             .build()
+        // v0.9.13 (device-log fix): the extraction is RESUMABLE by design —
+        // a running pass for this uri must CONTINUE, never restart. The old
+        // rule (runNow -> REPLACE) made every automatic re-arm/toggle-open
+        // cancel the in-flight fingerprint ~20 ms after it rearmed (visible
+        // across the 10-16 device log as "rearmed live sync" -> "extraction
+        // cancelled/stopped by WorkManager" pairs), so full-file locks kept
+        // restarting and landed far later than designed. REPLACE now belongs
+        // to the explicit forced run only (user "Resync now", force=true);
+        // KEEP lets pending/running work survive, while a COMPLETED chain
+        // still admits the new request (WorkManager semantics). The
+        // correlator, gates and envelope are untouched.
         WorkManager.getInstance(context).enqueueUniqueWork(
             "$WORK_TAG-$videoUri",
-            if (runNow) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
+            if (force) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
             request,
         )
     }
