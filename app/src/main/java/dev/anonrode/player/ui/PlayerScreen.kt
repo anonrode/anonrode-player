@@ -134,6 +134,8 @@ fun PlayerScreen(
     upNextTitle: String? = null,
     /** Series/Folder sibling episode queue for playlist drawer. */
     episodeQueue: EpisodeQueue? = null,
+    /** Playlist drawer drag-reorder: (fromIndex, toIndex) inside the queue. */
+    onReorderQueue: (Int, Int) -> Unit = { _, _ -> },
     /** Callback when user selects an episode from the playlist drawer. */
     onSelectEpisode: (Video) -> Unit = {},
     /** Stable per-video id (content uri) for per-video preferences. */
@@ -851,6 +853,7 @@ fun PlayerScreen(
             accent = playerAccent,
             onSelectEpisode = { video -> onSelectEpisode(video) },
             onDismiss = { actions.closePlaylistDrawer() },
+            onReorder = onReorderQueue,
         )
 
         // 2. Subtitle Drawer

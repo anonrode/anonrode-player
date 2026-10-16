@@ -15,6 +15,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,7 +59,6 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
@@ -87,10 +88,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -526,6 +529,8 @@ internal fun PlayerPlaylistDrawer(
     onSelectEpisode: (Video) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Drag-reorder commit: (fromIndex, toIndex) inside the queue's episode list. */
+    onReorder: (Int, Int) -> Unit = { _, _ -> },
 ) {
     val episodes = queue?.episodes ?: emptyList()
     val currentIndex = queue?.currentIndex ?: -1
@@ -550,23 +555,32 @@ internal fun PlayerPlaylistDrawer(
                 )
             }
         } else {
+            // Drag-reorder state: the handle tracks the pull, the row floats
+            // under the pointer, and the drop commits through onReorder (the
+            // host persists the order per folder — QueueOrderStore).
+            val listState = rememberLazyListState()
+            val view = LocalView.current
+            var dragFrom by remember { mutableStateOf(-1) }
+            var dragAccum by remember { mutableStateOf(0f) }
+            var rowHeightPx by remember { mutableStateOf(0f) }
+
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                itemsIndexed(episodes) { index, video ->
+                itemsIndexed(episodes, key = { _, v -> v.uri }) { index, video ->
                     val isPlaying = index == currentIndex || video.uri == currentMediaUri
-                    val cardBg = if (isPlaying) accent.container else Color.White.copy(alpha = 0.04f)
-                    val cardBorder = if (isPlaying) accent.border else Color.White.copy(alpha = 0.07f)
-                    val textColor = if (isPlaying) accent.primary else Color(0xFFE2E8F0)
+                    val isDragged = dragFrom == index
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 58.dp)
+                            .graphicsLayer { translationY = if (isDragged) dragAccum else 0f }
+                            .zIndex(if (isDragged) 1f else 0f)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(cardBg)
-                            .border(1.dp, cardBorder, RoundedCornerShape(12.dp))
+                            .background(if (isPlaying) accent.container else Color.Transparent)
                             .clickable {
                                 onSelectEpisode(video)
                                 onDismiss()
@@ -574,95 +588,123 @@ internal fun PlayerPlaylistDrawer(
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Left active indicator
+                        // Left active indicator (flat rows, board C/F law).
                         if (isPlaying) {
                             Box(
                                 modifier = Modifier
-                                    .width(3.dp)
+                                    .width(2.5.dp)
                                     .height(36.dp)
                                     .clip(RoundedCornerShape(2.dp))
                                     .background(accent.primary)
                             )
                             Spacer(Modifier.width(8.dp))
+                        } else {
+                            Spacer(Modifier.width(10.5.dp))
                         }
 
-                        // Thumbnail badge placeholder with duration
-                        Box(
-                            modifier = Modifier
-                                .size(width = 68.dp, height = 42.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFF1E2530))
-                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(8.dp)),
-                            contentAlignment = Alignment.BottomEnd,
-                        ) {
+                        // Thumb: the shared hue-art frame with the duration
+                        // pill bottom-right (J1 law); equalizer when playing.
+                        Box(modifier = Modifier.size(width = 64.dp, height = 40.dp)) {
+                            PosterArt(
+                                title = video.title,
+                                modifier = Modifier.fillMaxSize(),
+                                cornerRadius = 8.dp,
+                                videoUri = video.uri,
+                                durationMs = video.durationMs,
+                            )
                             if (isPlaying) {
                                 Icon(
                                     imageVector = Icons.Filled.GraphicEq,
                                     contentDescription = "Playing",
                                     tint = accent.primary,
                                     modifier = Modifier
-                                        .size(18.dp)
-                                        .align(Alignment.Center)
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Filled.PlayArrow,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.5f),
-                                    modifier = Modifier
-                                        .size(18.dp)
-                                        .align(Alignment.Center)
+                                        .size(16.dp)
+                                        .align(Alignment.Center),
                                 )
                             }
-
                             if (video.durationMs > 0L) {
-                                Box(
+                                Text(
+                                    text = formatDuration(video.durationMs),
+                                    color = Color.White,
+                                    fontSize = 8.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    style = Tnum,
                                     modifier = Modifier
-                                        .padding(2.dp)
-                                        .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(4.dp))
-                                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                                ) {
-                                    Text(
-                                        text = formatDuration(video.durationMs),
-                                        color = Color.White,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontFamily = FontFamily.Monospace,
-                                        style = Tnum,
-                                    )
-                                }
+                                        .align(Alignment.BottomEnd)
+                                        .padding(3.dp)
+                                        .clip(RoundedCornerShape(5.dp))
+                                        .background(Color.Black.copy(alpha = 0.72f))
+                                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                                )
                             }
                         }
 
-                        Spacer(Modifier.width(10.dp))
+                        Spacer(Modifier.width(12.dp))
 
-                        // Title and index
                         Column(
                             modifier = Modifier.weight(1f)
                         ) {
                             Text(
                                 text = video.title,
-                                color = textColor,
-                                fontSize = 12.5.sp,
+                                color = if (isPlaying) accent.primary else Color(0xFFF8FAFC),
+                                fontSize = 13.sp,
                                 fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Medium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
                                 text = "Episode ${index + 1}",
-                                color = if (isPlaying) accent.primary.copy(alpha = 0.8f) else Color(0xFF64748B),
-                                fontSize = 11.sp,
+                                color = if (isPlaying) accent.primary.copy(alpha = 0.8f) else Color(0xFF78787F),
+                                fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Normal,
                             )
                         }
 
                         Spacer(Modifier.width(6.dp))
 
+                        // The drag handle — pull it to reorder the queue.
                         Icon(
                             imageVector = Icons.Filled.DragHandle,
-                            contentDescription = "Reorder",
-                            tint = Color.White.copy(alpha = 0.25f),
-                            modifier = Modifier.size(20.dp)
+                            contentDescription = "Reorder episode",
+                            tint = Color.White.copy(alpha = 0.35f),
+                            modifier = Modifier
+                                .size(22.dp)
+                                .pointerInput(video.uri) {
+                                    detectDragGestures(
+                                        onDragStart = {
+                                            dragFrom = index
+                                            dragAccum = 0f
+                                            val measured = listState.layoutInfo.visibleItemsInfo
+                                                .firstOrNull { it.index == index }?.size?.toFloat() ?: 0f
+                                            rowHeightPx = if (measured > 0f) {
+                                                measured + 8.dp.toPx()
+                                            } else {
+                                                58.dp.toPx() + 8.dp.toPx()
+                                            }
+                                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                        },
+                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            dragAccum += amount.y
+                                        },
+                                        onDragEnd = {
+                                            val steps = dragAccum / rowHeightPx
+                                            val target = (index + steps + (if (steps >= 0f) 0.5f else -0.5f))
+                                                .toInt()
+                                                .coerceIn(0, episodes.lastIndex)
+                                            if (target != index) {
+                                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                                onReorder(index, target)
+                                            }
+                                            dragFrom = -1
+                                            dragAccum = 0f
+                                        },
+                                        onDragCancel = {
+                                            dragFrom = -1
+                                            dragAccum = 0f
+                                        },
+                                    )
+                                },
                         )
                     }
                 }

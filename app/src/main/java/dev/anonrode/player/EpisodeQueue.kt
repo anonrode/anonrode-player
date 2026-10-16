@@ -27,6 +27,27 @@ data class EpisodeQueue(
     fun next(): Video? = episodes.getOrNull(currentIndex + 1)
     fun previous(): Video? = episodes.getOrNull(currentIndex - 1)
 
+    /**
+     * Reorder to a previously stored uri sequence (the playlist drawer's
+     * drag-reorder, persisted per folder). Known uris take the stored order;
+     * episodes the stored list never saw stay after them in their natural
+     * order, so a rescan that adds episodes never loses them. The current
+     * index follows the playing video.
+     */
+    fun reordered(order: List<String>): EpisodeQueue {
+        val byUri = episodes.associateBy { it.uri }
+        val known = order.mapNotNull { byUri[it] }
+        val knownUris = known.mapTo(HashSet()) { it.uri }
+        val rest = episodes.filter { it.uri !in knownUris }
+        val newList = known + rest
+        if (newList.isEmpty()) return this
+        val playing = current?.uri
+        return copy(
+            episodes = newList,
+            currentIndex = newList.indexOfFirst { it.uri == playing }.coerceAtLeast(0),
+        )
+    }
+
     companion object {
 
         /**

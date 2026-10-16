@@ -888,6 +888,24 @@ class PlayerActivity : ComponentActivity() {
                             // titles with internal dots ("Mr. Robot").
                             upNextTitle = episodeQueue?.next()?.title,
                             episodeQueue = episodeQueue,
+                            onReorderQueue = { from, to ->
+                                val q = episodeQueue
+                                if (q != null && from in q.episodes.indices &&
+                                    to in q.episodes.indices && from != to
+                                ) {
+                                    val list = q.episodes.toMutableList()
+                                    list.add(to, list.removeAt(from))
+                                    val playingUri = q.current?.uri ?: ""
+                                    episodeQueue = q.copy(
+                                        episodes = list,
+                                        currentIndex = list.indexOfFirst { it.uri == playingUri }
+                                            .coerceAtLeast(0),
+                                    )
+                                    q.episodes.firstOrNull()?.parentPath?.let { folder ->
+                                        QueueOrderStore.set(this@PlayerActivity, folder, list.map { it.uri })
+                                    }
+                                }
+                            },
                             onSelectEpisode = { v -> openVideo(v.uri, v.title) },
                             onOpenSettings = { settingsOpen = true },
                             liveOffsetMs = liveOffsetMs,
@@ -1462,11 +1480,20 @@ class PlayerActivity : ComponentActivity() {
                     snapshot = app.scanner.scan().videos
                     currentVideo = snapshot.firstOrNull { it.uri == uriStr }
                 }
+                // A custom drag-reorder for this folder (playlist drawer) is
+                // re-applied on every build so it survives restarts; the
+                // explicit multi-select queue keeps its picked order.
+                fun withStoredOrder(q: EpisodeQueue?): EpisodeQueue? {
+                    if (q == null) return null
+                    val folder = q.episodes.firstOrNull()?.parentPath ?: return q
+                    val stored = QueueOrderStore.get(this@PlayerActivity, folder) ?: return q
+                    return if (stored.isEmpty()) q else q.reordered(stored)
+                }
                 val queue = if (queueUris != null && queueUris.size > 1) {
                     EpisodeQueue.fromExplicitVideos(snapshot, queueUris, uriStr)
-                        ?: currentVideo?.let { EpisodeQueue.fromVideos(snapshot, it) }
+                        ?: withStoredOrder(currentVideo?.let { EpisodeQueue.fromVideos(snapshot, it) })
                 } else {
-                    currentVideo?.let { EpisodeQueue.fromVideos(snapshot, it) }
+                    withStoredOrder(currentVideo?.let { EpisodeQueue.fromVideos(snapshot, it) })
                 }
 
                 // Stale-open guard: re-check right before the commit AND on
