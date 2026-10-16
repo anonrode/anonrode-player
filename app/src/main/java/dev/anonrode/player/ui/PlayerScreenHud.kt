@@ -258,7 +258,7 @@ internal fun NextCountdownOverlay(
                 text = "Next episode in ${countdownSec}s…",
                 color = Color.White,
                 style = MaterialTheme.typography.titleMedium.copy(
-                style = Tnum,
+                    fontFeatureSettings = "tnum",
                     fontWeight = FontWeight.SemiBold,
                 ),
             )
