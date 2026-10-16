@@ -329,10 +329,6 @@ internal fun PlayerSlideInDrawer(
     subtitle: String? = null,
     headerTrailing: @Composable (() -> Unit)? = null,
     modifier: Modifier = Modifier,
-    /** Wrap plain content in a scroll column. Never for LazyColumn-backed
-     *  drawers — nesting them under verticalScroll is an infinite-height
-     *  crash. */
-    contentScrollable: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     if (!visible) return
@@ -510,19 +506,12 @@ internal fun PlayerSlideInDrawer(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Content Area
+                    // Content Area — the content owns its scrolling (the
+                    // subtitle drawer's root column already scrolls; list
+                    // drawers own their LazyColumn). Wrapping it here would
+                    // nest scrollables into an infinite-height crash.
                     Box(modifier = Modifier.weight(1f)) {
-                        if (contentScrollable) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState()),
-                            ) {
-                                content()
-                            }
-                        } else {
-                            content()
-                        }
+                        content()
                     }
                     } // Column
                 } // panel Box (drag gestures + glass)
@@ -857,7 +846,6 @@ internal fun PlayerSubtitleDrawer(
         visible = visible,
         onDismiss = onDismiss,
         title = "Subtitle",
-        contentScrollable = true,
         headerTrailing = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
