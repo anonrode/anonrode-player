@@ -508,13 +508,13 @@ internal fun PlayerSlideInDrawer(
 
                     // Content Area
                     Box(modifier = Modifier.weight(1f)) {
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .verticalScroll(rememberScrollState()),
-                    ) {
-                        content()
-                    }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            content()
+                        }
                     }
                     } // Column
                 } // panel Box (drag gestures + glass)
