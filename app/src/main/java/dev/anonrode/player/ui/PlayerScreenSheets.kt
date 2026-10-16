@@ -806,7 +806,7 @@ private fun SyncStepDisc(
                 color = Color(0xFFE2E8F0),
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
+                style = Tnum,
             )
         }
         Spacer(Modifier.height(4.dp))
@@ -815,7 +815,6 @@ private fun SyncStepDisc(
             color = Color(0xFF94A3B8),
             fontSize = 9.sp,
             fontWeight = FontWeight.Medium,
-            fontFamily = FontFamily.Monospace,
             style = Tnum,
         )
     }
@@ -1052,7 +1051,6 @@ internal fun PlayerSubtitleDrawer(
                             color = if (offsetMs != 0L) accent.primary else Color(0xFF94A3B8),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
                             style = Tnum,
                         )
                     }
@@ -1408,9 +1406,11 @@ internal fun PlayerSettingsDrawer(
                     .padding(3.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                listOf("HW", "HW+", "SW").forEach { dec ->
-                    val isDecSelected = decoderModeLabel.contains(dec, ignoreCase = true) ||
-                        (dec == "HW" && decoderModeLabel.startsWith("HW", ignoreCase = true) && !decoderModeLabel.contains("+"))
+                // The running pipeline labels, truth first (hub 1.4): the
+                // selected segment is an EXACT match — the old substring
+                // check lit several segments at once for "HW+SW".
+                listOf("HW+SW", "APP", "SW").forEach { dec ->
+                    val isDecSelected = decoderModeLabel.equals(dec, ignoreCase = true)
 
                     Box(
                         modifier = Modifier
@@ -1457,7 +1457,6 @@ internal fun PlayerSettingsDrawer(
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
                         style = Tnum,
                     )
                 }
@@ -1487,7 +1486,6 @@ internal fun PlayerSettingsDrawer(
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
                         style = Tnum,
                     )
                 }

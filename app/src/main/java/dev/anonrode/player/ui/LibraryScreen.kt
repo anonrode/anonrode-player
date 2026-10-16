@@ -645,6 +645,7 @@ fun LibraryScreen(
                     showHistorySheet = false
                     vm.clearHistory()
                 },
+                onRemove = { uri -> vm.removeFromHistory(uri) },
             )
         }
     }
@@ -658,6 +659,7 @@ private fun HistorySheet(
     onDismiss: () -> Unit,
     onOpenVideo: (dev.anonrode.player.core.model.Video) -> Unit,
     onClearHistory: () -> Unit,
+    onRemove: (String) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -672,6 +674,7 @@ private fun HistorySheet(
             items = items,
             onOpenVideo = onOpenVideo,
             onClearAll = onClearHistory,
+            onRemove = onRemove,
         )
     }
 }
@@ -690,6 +693,7 @@ internal fun HistorySheetContent(
     items: List<InProgressItem>,
     onOpenVideo: (dev.anonrode.player.core.model.Video) -> Unit,
     onClearAll: () -> Unit,
+    onRemove: (String) -> Unit = {},
 ) {
     var confirmClear by remember { mutableStateOf(false) }
     if (confirmClear) {
@@ -814,6 +818,23 @@ internal fun HistorySheetContent(
                             ),
                             color = palette.text,
                         )
+                        Spacer(Modifier.width(Dimens.gapXs))
+                        // Per-row remove (J2): drops this video's state row;
+                        // the history/continue feeds update themselves.
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .clickable { onRemove(item.video.uri) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = "Remove from history",
+                                tint = palette.textDim,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                     }
                 }
             }

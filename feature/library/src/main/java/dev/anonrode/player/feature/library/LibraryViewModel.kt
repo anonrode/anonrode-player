@@ -218,6 +218,13 @@ class LibraryViewModel(
         }
     }
 
+    /** Remove one video from watch history (the History sheet's per-row ✕). */
+    fun removeFromHistory(uri: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            stateStore.remove(uri)
+        }
+    }
+
     /** Live-filter the library as the user types (pure in-memory filter). */
     fun setQuery(raw: String) {
         query = raw

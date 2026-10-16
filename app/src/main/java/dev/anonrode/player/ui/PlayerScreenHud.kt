@@ -258,7 +258,7 @@ internal fun NextCountdownOverlay(
                 text = "Next episode in ${countdownSec}s…",
                 color = Color.White,
                 style = MaterialTheme.typography.titleMedium.copy(
-                    fontFamily = FontFamily.Monospace,
+                style = Tnum,
                     fontWeight = FontWeight.SemiBold,
                 ),
             )
@@ -394,7 +394,6 @@ internal fun VerticalGestureHudPill(
                 text = valueText,
                 color = Color.White,
                 fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 style = Tnum,
             )
@@ -463,7 +462,7 @@ internal fun SeekRippleOverlay(
                 text = "${if (side < 0) "−" else "+"}${seconds}s",
                 color = Color.Black.copy(alpha = 0.48f),
                 fontSize = 13.sp,
-                fontFamily = FontFamily.Monospace,
+                style = Tnum,
                 fontWeight = FontWeight.ExtraBold,
                 letterSpacing = 0.5.sp,
             )
@@ -521,7 +520,6 @@ internal fun DiscreteSpeedScrubHud(
                     text = "$formattedSpeed Speed Playing",
                     color = Color.White,
                     fontSize = 12.5.sp,
-                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     style = Tnum,
                 )
@@ -572,7 +570,7 @@ internal fun DiscreteSpeedScrubHud(
                                     color = if (isActive) Color.White else Color.White.copy(alpha = 0.38f),
                                     fontSize = if (isActive) 11.5.sp else 10.sp,
                                     fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Medium,
-                                    fontFamily = FontFamily.Monospace,
+                style = Tnum,
                                 )
                             }
                         }
@@ -636,7 +634,6 @@ internal fun DiscreteSpeedScrubHud(
                         color = Color.White,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        fontFamily = FontFamily.Monospace,
                         style = Tnum,
                     )
                     Text(

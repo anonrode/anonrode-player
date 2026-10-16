@@ -64,6 +64,12 @@ class MediaStateStore(private val dao: MediaStateDao) {
         dao.updateSubtitleDelayFields(uri, delayMs, System.currentTimeMillis())
     }
 
+    /** Remove one video's state row (the History sheet's per-row ✕). The
+     *  continue/history flows update themselves off the Room invalidation. */
+    suspend fun remove(uri: String) {
+        dao.delete(listOf(uri))
+    }
+
     /** Persist an auto-sync lock so re-watches start instantly in sync. */
     suspend fun updateAutoSyncSpeed(uri: String, speed: Float) {
         dao.ensureRow(uri)

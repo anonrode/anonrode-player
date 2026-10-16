@@ -38,6 +38,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -327,9 +333,34 @@ private fun MainNav(
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
+            // Screen changes glide (design feel law): fade-through — the
+            // outgoing surface leaves a step faster than the incoming one
+            // arrives, scaled a hair back so nothing teleports.
             NavHost(
                 navController = navController,
                 startDestination = AppTabRoutes[0], // "home"
+                enterTransition = {
+                    fadeIn(animationSpec = tween(210, easing = FastOutSlowInEasing)) +
+                        scaleIn(
+                            initialScale = 0.985f,
+                            animationSpec = tween(210, easing = FastOutSlowInEasing),
+                        )
+                },
+                exitTransition = {
+                    fadeOut(animationSpec = tween(90)) +
+                        scaleOut(targetScale = 0.985f, animationSpec = tween(90))
+                },
+                popEnterTransition = {
+                    fadeIn(animationSpec = tween(210, easing = FastOutSlowInEasing)) +
+                        scaleIn(
+                            initialScale = 0.985f,
+                            animationSpec = tween(210, easing = FastOutSlowInEasing),
+                        )
+                },
+                popExitTransition = {
+                    fadeOut(animationSpec = tween(90)) +
+                        scaleOut(targetScale = 0.985f, animationSpec = tween(90))
+                },
             ) {
                 composable(AppTabRoutes[0]) { // home
                     LibraryScreen(
