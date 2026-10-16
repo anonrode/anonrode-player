@@ -373,17 +373,30 @@ class SyncFingerprintJob(
                     val (denseStart, _) = findDensestDialogueCluster(cues, anchorSpan)
                     val anchorStart = (denseStart - 1.0).coerceAtLeast(0.0)
                     AppLog.d("SYNC_JOB", "Stage 0 dense cluster probe at %.1fs (span %.0fs)".format(anchorStart, anchorSpan))
+                    // v0.9.13 (device-log fix): the anchor probe ran
+                    // silencedetect-only, which finds NOTHING on
+                    // continuous-mix / silence-sparse content — the 10-16
+                    // Mandarin device log shows "0 onsets" on every probe,
+                    // so the sub-2s fast lock never fired there and the live
+                    // path boot-locked aliased offsets (-5.7s / -6.5s) for
+                    // roughly a minute until the full pass landed. The
+                    // hybrid union (silencedetect + Silero-VAD) is the
+                    // documented rescue for exactly this content; the
+                    // anchor takes it here like every later stage already
+                    // does. Same gate bars (8 onsets / 8 cues / recall
+                    // 0.65) — only the onset source is stronger.
                     val anchorPass = extractor.extractSources(
                         videoPath,
                         Uri.parse(videoUri),
                         resumeFromSec = anchorStart,
                         maxMediaDurationSec = anchorSpan,
-                        includeVad = false,
+                        includeVad = true,
                         isCancelled = { !coroutineContext.isActive || isStopped },
                     )
+                    val anchorOnsets = OnsetCache.mergeOnsets(anchorPass.silencedetect, anchorPass.vad)
                     val anchorStarts = starts.filter { it in (anchorStart - 30.0).coerceAtLeast(0.0)..(anchorStart + anchorSpan + 30.0) }
-                    if (anchorPass.silencedetect.size >= 8 && anchorStarts.size >= 8) {
-                        val candidate = attemptLock(anchorPass.silencedetect, anchorStarts, "cue-anchor")
+                    if (anchorOnsets.size >= 8 && anchorStarts.size >= 8) {
+                        val candidate = attemptLock(anchorOnsets, anchorStarts, "cue-anchor")
                         if (candidate != null && candidate.recall >= 0.65) {
                             sources = anchorPass
                             extractionComplete = false
@@ -403,7 +416,7 @@ class SyncFingerprintJob(
                                 applicationContext, videoUri, videoFile,
                                 OnsetCache.Entry(
                                     silencedetect = sources.silencedetect,
-                                    vad = emptyList(),
+                                    vad = sources.vad,
                                     envelope = FloatArray(0),
                                     coveredSec = extractor.lastCoveredSec,
                                     complete = false,
