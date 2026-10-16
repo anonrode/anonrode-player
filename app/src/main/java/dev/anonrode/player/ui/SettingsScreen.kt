@@ -260,8 +260,8 @@ fun SettingsScreen(
                             Text(
                                 "Settings",
                                 color = palette.text,
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
                             )
                             Text(
                                 "Preferences & engine controls",
@@ -388,8 +388,8 @@ fun SettingsScreen(
                             Text(
                                 activeFolder!!.title,
                                 color = palette.text,
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
                             )
                             Text(
                                 activeFolder!!.subtitle,
@@ -1433,29 +1433,36 @@ private fun SettingsRow(
     trailing: @Composable () -> Unit,
     onClick: () -> Unit = {},
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapXs)
-    ) {
+    // Flat rows per the language pass (same law as the hub): a hairline
+    // inset to the text column, an icon disc on the token scale, no card
+    // chrome. The disc is the only shape.
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 66.dp)
+                .height(1.dp)
+                .background(palette.rowLine.copy(alpha = 0.6f))
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(palette.rowBg)
-                .border(1.dp, palette.rowLine, RoundedCornerShape(12.dp))
                 .clickable(onClick = onClick)
-                .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapMd),
+                .padding(horizontal = Dimens.gapLg, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                modifier = Modifier.size(24.dp),
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(palette.surface.copy(alpha = 0.7f))
+                    .border(1.dp, palette.rowLine, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     icon, null,
-                    tint = palette.accent,
-                    modifier = Modifier.size(20.dp),
+                    tint = palette.textDim,
+                    modifier = Modifier.size(18.dp),
                 )
             }
             Spacer(Modifier.width(Dimens.gapMd))
