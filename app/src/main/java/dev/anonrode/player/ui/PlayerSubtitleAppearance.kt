@@ -24,92 +24,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.util.UnstableApi
-import dev.anonrode.player.audio.SubtitleColor
-import dev.anonrode.player.audio.SubtitlePosition
-import dev.anonrode.player.audio.SubtitleSize
-import dev.anonrode.player.audio.SubtitleStyle
 import dev.anonrode.player.core.media.log.AppLog
 
-/* ── Inline subtitle style tray — v0.9 "Single-Plane Chrome" ───────────────
- * The 09-19 device log records ~40 subtitle-style edits in ONE session
- * (position, size, colour, weight) — the single most-touched control in the
- * whole player — yet it lived behind a MODAL bottom sheet that covered the
- * frame the subtitles render on. Tuning subtitles while unable to see them
- * is the definition of a dead-end UI.
- *
- * This tray replaces [dev.anonrode.player.audio.SubtitleStyleSheet]'s modal:
- * it expands IN PLACE inside the bottom zone, keeps the live cue visible
- * above it, and exposes all four dimensions at once (no paging, no
- * scrolling). It mutates the same host-owned [SubtitleStyle] through
- * [onStyleChanged], so persistence and the live-subtitle re-application are
- * byte-for-byte the code path the sheet already used — only the surface
- * moved.
+/* ── Subtitle appearance chips ─────────────────────────────────────────────
+ * v0.9.1: the style controls live INSIDE the subtitle drawer now (hub 6.6
+ * merge + design frame D) — this file is all that remains of the old inline
+ * tray: the labelled chip row. The drawer renders four of these (Position,
+ * Size, Colour, Weight) directly on its panel; there is no separate surface
+ * to open and no second surface to keep in sync.
  * ------------------------------------------------------------------------- */
 
-@UnstableApi
-@Composable
-internal fun SubtitleStyleTray(
-    style: SubtitleStyle,
-    accent: Color,
-    onStyleChanged: (SubtitleStyle) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF0C0D12).copy(alpha = 0.94f))
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
-            .padding(horizontal = 13.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-        TrayRow(
-            label = "Position",
-            accent = accent,
-            options = SubtitlePosition.entries.map { it.label },
-            selectedLabel = style.position.label,
-            onSelect = { label ->
-                val match = SubtitlePosition.entries.firstOrNull { it.label == label }
-                if (match != null) onStyleChanged(style.copy(position = match))
-            },
-        )
-        TrayRow(
-            label = "Size",
-            accent = accent,
-            options = SubtitleSize.entries.map { it.label },
-            selectedLabel = style.size.label,
-            onSelect = { label ->
-                val match = SubtitleSize.entries.firstOrNull { it.label == label }
-                if (match != null) onStyleChanged(style.copy(size = match))
-            },
-        )
-        TrayRow(
-            label = "Colour",
-            accent = accent,
-            options = SubtitleColor.entries.map { it.label },
-            selectedLabel = style.color.label,
-            onSelect = { label ->
-                val match = SubtitleColor.entries.firstOrNull { it.label == label }
-                if (match != null) onStyleChanged(style.copy(color = match))
-            },
-        )
-        TrayRow(
-            label = "Weight",
-            accent = accent,
-            options = listOf("Bold", "Regular"),
-            selectedLabel = if (style.bold) "Bold" else "Regular",
-            onSelect = { label -> onStyleChanged(style.copy(bold = label == "Bold")) },
-        )
-    }
-}
 /**
- * One labelled segmented row. Same shape as the old sheet's [StyleRow] but
- * horizontally scrollable when it doesn't fit, and with a 34dp hit area
- * (above the 32dp the sheet used, so every option is a real touch target).
+ * One labelled chip row. Every option is a real touch target (34dp) and the
+ * selected chip carries the accent — state, never decoration.
  */
 @UnstableApi
 @Composable
-private fun TrayRow(
+internal fun TrayRow(
     label: String,
     accent: Color,
     options: List<String>,

@@ -610,7 +610,6 @@ fun PlayerScreen(
         isPlaying = ui.isPlaying.value,
         locked = ui.locked.value,
         stayAwake = overflowOpen.value || quick.showSyncPopover.value ||
-            quick.showStyleTray.value ||
             gestures.subStyleMenuOpen.value || hostSheetOpen ||
             ui.threeDotsMenuOpen.value || ui.playlistDrawerOpen.value || ui.subtitleDrawerOpen.value ||
             ui.equalizerSheetOpen.value ||
@@ -868,7 +867,8 @@ fun PlayerScreen(
             onResetOffset = { actions.nudgeSubtitle(-liveOffsetMs) },
             onResync = { actions.resyncNow() },
             onOpenLocalFile = onOpenSubtitlePicker,
-            onSubtitleStyle = { actions.openStyleTray() },
+            style = subtitleStyle,
+            onStyleChanged = { newStyle -> onSubtitleStyleChanged(newStyle) },
             onDismiss = { actions.closeSubtitleDrawer() },
         )
 
@@ -953,10 +953,9 @@ fun PlayerScreen(
             onCaptureFrame = { actions.captureFrame() },
             onDecoder = { actions.cycleDecoderMode() },
             onSubtitleSource = onOpenSubtitlePicker,
-            // v0.9: subtitle style now tunes IN PLACE (the inline tray) rather
-            // than handing off to the host's modal sheet, so the cue the user
-            // is styling stays on screen the whole time.
-            onSubtitleStyle = { actions.openStyleTray() },
+            // v0.9.1: subtitle style tunes IN the subtitle drawer itself now
+            // (hub 6.6 merge) — this shortcut opens that drawer.
+            onSubtitleStyle = { actions.toggleSubtitleDrawer() },
             // v0.7.2: shares the device's own sync decisions (see SyncLogShare).
             onShareSyncLog = onShareSyncLog,
             onOpenSettings = onOpenSettings,
@@ -1015,27 +1014,6 @@ fun PlayerScreen(
             )
         }
 
-        // ── v0.9 inline subtitle-style tray — replaces the host's MODAL
-        //    SubtitleStyleSheet. The 09-19 log records ~40 style edits in one
-        //    session; they were happening behind a sheet that covered the very
-        //    frame the subtitles render on. This renders in place, anchored
-        //    above the transport (same slot the sync popover uses), so the
-        //    live cue stays visible while every dimension is tuned. ──
-        if (quick.showStyleTray.value && !isPipMode) {
-            SubtitleStyleTray(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = bottomAnchor + PlayerDimens.gapMd)
-                    .widthIn(max = 420.dp)
-                    .padding(horizontal = PlayerDimens.gapLg),
-                style = subtitleStyle,
-                accent = accent,
-                onStyleChanged = { newStyle ->
-                    onSubtitleStyleChanged(newStyle)
-                },
-            )
-        }
-
         // ── sync popover (nudge / re-sync / style) — opens ONLY from the
         //    hero chip in the dock, so it anchors directly above that row.
         //    The old top-left SYNCED chip + calibration banner layers are
@@ -1057,7 +1035,7 @@ fun PlayerScreen(
                 },
                 onStyle = {
                     actions.closeSyncPopover()
-                    actions.openStyleTray()
+                    actions.toggleSubtitleDrawer()
                 },
                 onToggleSync = { enabled ->
                     actions.closeSyncPopover()

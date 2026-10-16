@@ -508,7 +508,13 @@ internal fun PlayerSlideInDrawer(
 
                     // Content Area
                     Box(modifier = Modifier.weight(1f)) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
                         content()
+                    }
                     }
                     } // Column
                 } // panel Box (drag gestures + glass)
@@ -832,7 +838,10 @@ internal fun PlayerSubtitleDrawer(
     onResetOffset: () -> Unit,
     onResync: () -> Unit,
     onOpenLocalFile: () -> Unit,
-    onSubtitleStyle: () -> Unit,
+    /** Subtitle appearance (hub 6.6 merge): tuned inline, persisted by the
+     *  host through [onStyleChanged] — same path the retired tray used. */
+    style: SubtitleStyle = SubtitleStyle(),
+    onStyleChanged: (SubtitleStyle) -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1166,32 +1175,59 @@ internal fun PlayerSubtitleDrawer(
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color(0xFF64748B), modifier = Modifier.size(16.dp))
             }
 
-            // Subtitle Style & Font
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.04f))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                    .clickable {
-                        onSubtitleStyle()
-                        onDismiss()
-                    }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.FontDownload, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text("Subtitle Style & Font", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Size, colors, background styling", color = Color(0xFF64748B), fontSize = 10.5.sp)
-                    }
-                }
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color(0xFF64748B), modifier = Modifier.size(16.dp))
-            }
+            // ── APPEARANCE (hub 6.6 merge + design D): the style controls
+            //    live IN the drawer now — the separate inline tray is
+            //    retired, so the cue stays visible while every dimension is
+            //    tuned and there is no second surface to open.
+            Text(
+                text = "APPEARANCE",
+                color = Color(0xFF78787F),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.4.sp,
+                modifier = Modifier.padding(top = 18.dp, bottom = 6.dp),
+            )
+            TrayRow(
+                label = "Position",
+                accent = accent.primary,
+                options = SubtitlePosition.entries.map { it.label },
+                selectedLabel = style.position.label,
+                onSelect = { label ->
+                    SubtitlePosition.entries.firstOrNull { it.label == label }
+                        ?.let { onStyleChanged(style.copy(position = it)) }
+                },
+            )
+            Spacer(Modifier.height(10.dp))
+            TrayRow(
+                label = "Size",
+                accent = accent.primary,
+                options = SubtitleSize.entries.map { it.label },
+                selectedLabel = style.size.label,
+                onSelect = { label ->
+                    SubtitleSize.entries.firstOrNull { it.label == label }
+                        ?.let { onStyleChanged(style.copy(size = it)) }
+                },
+            )
+            Spacer(Modifier.height(10.dp))
+            TrayRow(
+                label = "Colour",
+                accent = accent.primary,
+                options = SubtitleColor.entries.map { it.label },
+                selectedLabel = style.color.label,
+                onSelect = { label ->
+                    SubtitleColor.entries.firstOrNull { it.label == label }
+                        ?.let { onStyleChanged(style.copy(color = it)) }
+                },
+            )
+            Spacer(Modifier.height(10.dp))
+            TrayRow(
+                label = "Weight",
+                accent = accent.primary,
+                options = listOf("Bold", "Regular"),
+                selectedLabel = if (style.bold) "Bold" else "Regular",
+                onSelect = { label -> onStyleChanged(style.copy(bold = label == "Bold")) },
+            )
+            Spacer(Modifier.height(8.dp))
         }
     }
 }

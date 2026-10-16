@@ -292,7 +292,6 @@ class PlayerScreenRenderTest {
                         onResetOffset = {},
                         onResync = {},
                         onOpenLocalFile = {},
-                        onSubtitleStyle = {},
                         onDismiss = {},
                     )
                 }

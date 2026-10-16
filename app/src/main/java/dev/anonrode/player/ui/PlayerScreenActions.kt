@@ -223,7 +223,6 @@ internal class PlayerScreenActions(
         ui.closeTier2And3()
         quick.closeRibbonCustomise()
         closeSyncPopover()
-        closeStyleTray()
     }
 
     fun togglePlayPause() {
@@ -535,28 +534,11 @@ internal class PlayerScreenActions(
     }
 
     fun openSyncPopover() {
-        // v0.9: only one tray may cover the transport at a time.
-        quick.showStyleTray.value = false
         quick.showSyncPopover.value = true
     }
 
     fun closeSyncPopover() {
         quick.showSyncPopover.value = false
-    }
-
-    /**
-     * v0.9 "Single-Plane Chrome": open the inline subtitle-style tray. This
-     * is where subtitle tuning lives now — in-place, over the transport,
-     * cue still visible — instead of the host's modal bottom sheet that
-     * covered the frame the subtitles render on.
-     */
-    fun openStyleTray() {
-        quick.showSyncPopover.value = false
-        quick.showStyleTray.value = true
-    }
-
-    fun closeStyleTray() {
-        quick.showStyleTray.value = false
     }
 
     fun toggleEqualizer() {
