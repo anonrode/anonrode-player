@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -656,10 +657,8 @@ fun PlayerScreen(
     val topAnchor = with(density) { ui.topBarHeightPx.intValue.toDp() } + PlayerDimens.gapSm
     val bottomAnchor = with(density) { ui.bottomBarHeightPx.intValue.toDp() } + PlayerDimens.gapSm
 
-    Box(
+    PlayerScreenLayout(
         modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black)
             .onSizeChanged {
                 gestures.scrW.floatValue = it.width.toFloat()
                 gestures.scrH.floatValue = it.height.toFloat()
@@ -672,417 +671,432 @@ fun PlayerScreen(
                 swipeToSeekEnabled = swipeToSeekEnabled,
                 volumeGestureEnabled = volumeGestureEnabled,
                 brightnessGestureEnabled = brightnessGestureEnabled,
+            ),
+        videoSurfaceSlot = {
+            // ── video + first-frame poster ──
+            PlayerVideoSurface(
+                player = livePlayer,
+                zoomMode = ZoomModes[ui.zoomIdx.intValue],
+                poster = ui.posterBitmap.value,
+                onPlayerView = { ui.playerViewRef.value = it },
             )
-    ) {
-        // ── video + first-frame poster ──
-        PlayerVideoSurface(
-            player = livePlayer,
-            zoomMode = ZoomModes[ui.zoomIdx.intValue],
-            poster = ui.posterBitmap.value,
-            onPlayerView = { ui.playerViewRef.value = it },
-        )
 
-        // ── night mode eye-comfort scrim ──
-        if (ui.nightMode.value) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0x40FF9800))
-            )
-        }
-
-        // ── aspect ratio transient badge (top-right) ──
-        if (ui.aspectBadge.value != null && !isPipMode) {
-            AspectBadgeOverlay(
-                badgeText = ui.aspectBadge.value ?: "",
-                accent = accent,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .displayCutoutPadding()
-                    .padding(top = 16.dp, end = 16.dp),
-            )
-        }
-
-        // ── subtitle: high-contrast outline, draggable (visible in both normal and PiP modes) ──
-        if (ui.showCC.value) {
-            cueText?.let { txt ->
-                PlayerSubtitleOverlay(
-                    modifier = Modifier.align(if (isPipMode) Alignment.BottomCenter else Alignment.Center),
-                    text = txt,
-                    style = subtitleStyle,
-                    accent = accent,
-                    showCC = ui.showCC.value,
-                    gestures = gestures,
-                    mediaId = mediaId,
-                    isPipMode = isPipMode,
-                    bottomBarHeightPx = if (ui.controlsVisible.value) ui.bottomBarHeightPx.intValue.toFloat() else 0f,
-                    onStyleChanged = onSubtitleStyleChanged,
+            // ── night mode eye-comfort scrim ──
+            if (ui.nightMode.value) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0x40FF9800))
                 )
             }
-        }
 
-        // ── seek ripple overlay (double-tap seek) ──
-        if (ui.seekRippleSide.intValue != 0 && !isPipMode) {
-            SeekRippleOverlay(
-                side = ui.seekRippleSide.intValue,
-                seconds = ui.seekRippleSeconds.intValue,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+            // ── aspect ratio transient badge (top-right) ──
+            if (ui.aspectBadge.value != null && !isPipMode) {
+                AspectBadgeOverlay(
+                    badgeText = ui.aspectBadge.value ?: "",
+                    accent = accent,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .displayCutoutPadding()
+                        .padding(top = 16.dp, end = 16.dp),
+                )
+            }
 
-        // ── double-tap flash (fallback) ──
-        if (ui.flashSide.value != 0 && !isPipMode && ui.seekRippleSide.intValue == 0) {
-            DoubleTapFlash(
-                modifier = Modifier.align(
-                    if (ui.flashSide.value < 0) Alignment.CenterStart else Alignment.CenterEnd
-                ),
-                side = ui.flashSide.value,
-                seekIncrementSec = seekIncrementSec,
-            )
-        }
+            // ── subtitle: high-contrast outline, draggable (visible in both normal and PiP modes) ──
+            if (ui.showCC.value) {
+                cueText?.let { txt ->
+                    PlayerSubtitleOverlay(
+                        modifier = Modifier.align(if (isPipMode) Alignment.BottomCenter else Alignment.Center),
+                        text = txt,
+                        style = subtitleStyle,
+                        accent = accent,
+                        showCC = ui.showCC.value,
+                        gestures = gestures,
+                        mediaId = mediaId,
+                        isPipMode = isPipMode,
+                        bottomBarHeightPx = if (ui.controlsVisible.value) ui.bottomBarHeightPx.intValue.toFloat() else 0f,
+                        onStyleChanged = onSubtitleStyleChanged,
+                    )
+                }
+            }
+        },
+        gestureOverlaySlot = {
+            // ── seek ripple overlay (double-tap seek) ──
+            if (ui.seekRippleSide.intValue != 0 && !isPipMode) {
+                SeekRippleOverlay(
+                    side = ui.seekRippleSide.intValue,
+                    seconds = ui.seekRippleSeconds.intValue,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
 
-        // ── gesture HUD pill (top-center, never covers subtitles) ──
-        if (hud.visible.value && !isPipMode) {
-            GestureHudPill(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .displayCutoutPadding()
-                    .padding(top = 16.dp),
-                icon = hud.icon.value,
-                text = hud.text.value,
-            )
-        }
+            // ── double-tap flash (fallback) ──
+            if (ui.flashSide.value != 0 && !isPipMode && ui.seekRippleSide.intValue == 0) {
+                DoubleTapFlash(
+                    modifier = Modifier.align(
+                        if (ui.flashSide.value < 0) Alignment.CenterStart else Alignment.CenterEnd
+                    ),
+                    side = ui.flashSide.value,
+                    seekIncrementSec = seekIncrementSec,
+                )
+            }
 
-        // ── vertical gesture HUD pill (Volume on right, Brightness on left) ──
-        if (ui.verticalHudVisible.value && !isPipMode) {
-            VerticalGestureHudPill(
-                type = ui.verticalHudType.value,
-                progress = ui.verticalHudProgress.floatValue,
-                valueText = ui.verticalHudValueText.value,
+            // ── gesture HUD pill (top-center, never covers subtitles) ──
+            if (hud.visible.value && !isPipMode) {
+                GestureHudPill(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .displayCutoutPadding()
+                        .padding(top = 16.dp),
+                    icon = hud.icon.value,
+                    text = hud.text.value,
+                )
+            }
+
+            // ── vertical gesture HUD pill (Volume on right, Brightness on left) ──
+            if (ui.verticalHudVisible.value && !isPipMode) {
+                VerticalGestureHudPill(
+                    type = ui.verticalHudType.value,
+                    progress = ui.verticalHudProgress.floatValue,
+                    valueText = ui.verticalHudValueText.value,
+                    accent = accent,
+                    modifier = Modifier
+                        .align(if (ui.verticalHudType.value == VerticalHudType.VOLUME) Alignment.CenterEnd else Alignment.CenterStart)
+                        .padding(horizontal = 24.dp),
+                )
+            }
+
+            // ── discrete speed scrub HUD (hold-to-boost & horizontal discrete slide) ──
+            if (ui.speedScrubHudVisible.value && !isPipMode) {
+                DiscreteSpeedScrubHud(
+                    visible = ui.speedScrubHudVisible.value,
+                    isSliding = ui.speedScrubExpanded.value,
+                    stepIndex = ui.discreteScrubIndex.intValue,
+                    milestones = actions.discreteMilestones,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .displayCutoutPadding()
+                        .padding(top = 16.dp),
+                )
+            }
+
+            // ── buffering spinner (center, undecorated) ──
+            if (ui.isBuffering.value && !isPipMode) {
+                BufferingSpinner(modifier = Modifier.align(Alignment.Center), accent = accent)
+            }
+
+            // ── camera flash white overlay (screenshot capture) ──
+            if (ui.screenshotFlash.value) {
+                CameraFlashOverlay(modifier = Modifier.fillMaxSize())
+            }
+
+            // ── lock scrim overlay ──
+            if (ui.locked.value && ui.lockScrimVisible.value && !isPipMode) {
+                LockScrimOverlay(
+                    accent = accent,
+                    onUnlock = { actions.unlockControls() },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+
+            // ── lock badge ──
+            if (ui.locked.value && !isPipMode) {
+                LockBadge(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .statusBarsPadding()
+                        .displayCutoutPadding(),
+                    accent = accent,
+                    onUnlock = { actions.unlockControls() },
+                )
+            }
+        },
+        hudControlsSlot = {
+            // ── controls overlay ──
+            PlayerControlsOverlay(
+                visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
+                showSeekBar = !ui.locked.value && !isPipMode,
+                title = title,
                 accent = accent,
-                modifier = Modifier
-                    .align(if (ui.verticalHudType.value == VerticalHudType.VOLUME) Alignment.CenterEnd else Alignment.CenterStart)
-                    .padding(horizontal = 24.dp),
+                positionSec = positionSec,
+                durationSec = durationSec,
+                bufferedSec = bufferedSec,
+                localSeek = ui.localSeek,
+                isPlaying = ui.isPlaying.value,
+                hasPreviousEpisode = hasPreviousEpisode,
+                hasNextEpisode = hasNextEpisode,
+                videoWidth = videoLineWidth.intValue,
+                videoHeight = videoLineHeight.intValue,
+                videoFps = videoLineFps.intValue,
+                hasSubtitleTrack = hasSubtitleTrack,
+                liveOffsetMs = liveOffsetMs,
+                resumePillMs = resumePillMs,
+                onStartOver = onStartOver,
+                actions = actions,
+                onBack = onBack,
+                onPlayPrevious = onPlayPrevious,
+                onPlayNext = onPlayNext,
+                onMore = { actions.toggleThreeDotsMenu() },
             )
-        }
 
-        // ── discrete speed scrub HUD (hold-to-boost & horizontal discrete slide) ──
-        if (ui.speedScrubHudVisible.value && !isPipMode) {
-            DiscreteSpeedScrubHud(
-                visible = ui.speedScrubHudVisible.value,
-                isSliding = ui.speedScrubExpanded.value,
-                stepIndex = ui.discreteScrubIndex.intValue,
-                milestones = actions.discreteMilestones,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .displayCutoutPadding()
-                    .padding(top = 16.dp),
+            // ── A-B repeat chip (tap advances the cycle: set B / clear) ──
+            if (!isPipMode && abStartMs != null) {
+                AbRepeatChip(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = topAnchor),
+                    abStartMs = abStartMs,
+                    abEndMs = abEndMs,
+                    accent = accent,
+                    onTap = onAbRepeatTap,
+                )
+            }
+
+            // ── Up Next pill (final 30 s of an episode) ──
+            if (!isPipMode && hasNextEpisode && durationSec.value > 0f &&
+                durationSec.value - positionSec.value <= NEXT_BUTTON_WINDOW_SEC && nextCountdownSec < 0
+            ) {
+                UpNextPill(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = bottomAnchor),
+                    upNextTitle = upNextTitle,
+                    accent = accent,
+                    onClick = onPlayNext,
+                )
+            }
+
+            // ── auto-advance countdown overlay ("Next episode in N...") ──
+            if (!isPipMode && nextCountdownSec > 0) {
+                NextCountdownOverlay(
+                    modifier = Modifier.align(Alignment.Center),
+                    countdownSec = nextCountdownSec,
+                    accent = accent,
+                    onCancel = onCancelNext,
+                    onPlayNow = onPlayNext,
+                )
+            }
+
+            // ── sync popover (nudge / re-sync / style) ──
+            if (quick.showSyncPopover.value && !isPipMode) {
+                SyncPopover(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = bottomAnchor + PlayerDimens.gapMd)
+                        .widthIn(max = 360.dp)
+                        .padding(horizontal = PlayerDimens.gapLg),
+                    offsetMs = liveOffsetMs,
+                    accent = accent,
+                    syncEnabled = quick.subSyncEnabled.value,
+                    onNudge = { actions.nudgeSubtitle(it) },
+                    onResync = {
+                        actions.closeSyncPopover()
+                        actions.resyncNow()
+                    },
+                    onStyle = {
+                        actions.closeSyncPopover()
+                        actions.toggleSubtitleDrawer()
+                    },
+                    onToggleSync = { enabled ->
+                        actions.closeSyncPopover()
+                        actions.setSubSyncEnabled(enabled)
+                    },
+                    onDismiss = { actions.closeSyncPopover() },
+                )
+            }
+
+            // ── precision speed control card (tap speed pill in ribbon) ──
+            if (ui.speedCardOpen.value && !isPipMode) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { actions.closeSpeedCard() },
+                )
+                PrecisionSpeedCard(
+                    visible = ui.speedCardOpen.value,
+                    currentSpeed = ui.currentPlaybackSpeed.floatValue,
+                    onStep = { actions.stepSpeed(it) },
+                    onSetSpeed = { actions.setArbitrarySpeed(it) },
+                    onReset = { actions.resetSpeedToDefault() },
+                    accent = accent,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = bottomAnchor + PlayerDimens.gapMd)
+                        .widthIn(max = 380.dp)
+                        .padding(horizontal = PlayerDimens.gapLg),
+                )
+            }
+
+            // ── transient toast (in-overlay feedback) ──
+            if (hud.transientToast.value != null && !isPipMode) {
+                PlayerOverlayToast(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = topAnchor),
+                    message = hud.transientToast.value,
+                    accent = accent,
+                )
+            }
+        },
+        sideDrawerSlot = {
+            val playerAccent = rememberPlayerAccent()
+
+            // 1. Folder Sibling / Playlist Drawer
+            PlayerPlaylistDrawer(
+                visible = ui.playlistDrawerOpen.value && !isPipMode,
+                queue = episodeQueue,
+                currentMediaUri = mediaId,
+                accent = playerAccent,
+                onSelectEpisode = { video -> onSelectEpisode(video) },
+                onDismiss = { actions.closePlaylistDrawer() },
+                onReorder = onReorderQueue,
             )
-        }
 
-        // ── buffering spinner (center, undecorated) ──
-        if (ui.isBuffering.value && !isPipMode) {
-            BufferingSpinner(modifier = Modifier.align(Alignment.Center), accent = accent)
-        }
-
-        // ── camera flash white overlay (screenshot capture) ──
-        if (ui.screenshotFlash.value) {
-            CameraFlashOverlay(modifier = Modifier.fillMaxSize())
-        }
-
-        // ── lock scrim overlay ──
-        if (ui.locked.value && ui.lockScrimVisible.value && !isPipMode) {
-            LockScrimOverlay(
-                accent = accent,
-                onUnlock = { actions.unlockControls() },
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-
-        // ── lock badge ──
-        if (ui.locked.value && !isPipMode) {
-            LockBadge(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .statusBarsPadding()
-                    .displayCutoutPadding(),
-                accent = accent,
-                onUnlock = { actions.unlockControls() },
-            )
-        }
-
-        // ── controls overlay ──
-        PlayerControlsOverlay(
-            visible = ui.controlsVisible.value && !ui.locked.value && !isPipMode,
-            showSeekBar = !ui.locked.value && !isPipMode,
-            title = title,
-            accent = accent,
-            positionSec = positionSec,
-            durationSec = durationSec,
-            bufferedSec = bufferedSec,
-            localSeek = ui.localSeek,
-            isPlaying = ui.isPlaying.value,
-            hasPreviousEpisode = hasPreviousEpisode,
-            hasNextEpisode = hasNextEpisode,
-            videoWidth = videoLineWidth.intValue,
-            videoHeight = videoLineHeight.intValue,
-            videoFps = videoLineFps.intValue,
-            hasSubtitleTrack = hasSubtitleTrack,
-            liveOffsetMs = liveOffsetMs,
-            resumePillMs = resumePillMs,
-            onStartOver = onStartOver,
-            actions = actions,
-            onBack = onBack,
-            onPlayPrevious = onPlayPrevious,
-            onPlayNext = onPlayNext,
-            onMore = { actions.toggleThreeDotsMenu() },
-        )
-
-        // ── Tier 2: Slide-in Right Drawers (v5) ──
-        val playerAccent = rememberPlayerAccent()
-
-        // 1. Folder Sibling / Playlist Drawer
-        PlayerPlaylistDrawer(
-            visible = ui.playlistDrawerOpen.value && !isPipMode,
-            queue = episodeQueue,
-            currentMediaUri = mediaId,
-            accent = playerAccent,
-            onSelectEpisode = { video -> onSelectEpisode(video) },
-            onDismiss = { actions.closePlaylistDrawer() },
-            onReorder = onReorderQueue,
-        )
-
-        // 2. Subtitle Drawer
-        PlayerSubtitleDrawer(
-            visible = ui.subtitleDrawerOpen.value && !isPipMode,
-            showCC = ui.showCC.value,
-            currentChoiceLabel = subtitleChoiceLabel,
-            offsetMs = liveOffsetMs,
-            accent = playerAccent,
-            onToggleShowCC = { actions.toggleShowCC() },
-            onNudge = { deltaMs -> actions.nudgeSubtitle(deltaMs) },
-            onResetOffset = { actions.nudgeSubtitle(-liveOffsetMs) },
-            onResync = { actions.resyncNow() },
-            onOpenLocalFile = onOpenSubtitlePicker,
-            style = subtitleStyle,
-            onStyleChanged = { newStyle -> onSubtitleStyleChanged(newStyle) },
-            onDismiss = { actions.closeSubtitleDrawer() },
-        )
-
-        // 3. Three-Dots Settings Drawer
-        PlayerSettingsDrawer(
-            visible = ui.threeDotsMenuOpen.value && !isPipMode,
-            accent = playerAccent,
-            abActive = (abStartMs ?: ui.abStartMs.value) != null,
-            nightMode = ui.nightMode.value,
-            backgroundPlay = ui.backgroundPlayOn.value,
-            volumeBoost = volumeBoostPct,
-            sleepMinutes = ui.sleepMinutes.intValue,
-            equalizerOn = quick.equalizerOn.value,
-            repeatModeLabel = ui.repeatMode.value.name,
-            decoderModeLabel = decoderModeLabel,
-            currentVolume = (gestures.startVol.intValue /
-                audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat())
-                .coerceIn(0f, 1f),
-            currentBrightness = gestures.startBri.floatValue.coerceIn(0f, 1f),
-            onAbRepeat = { actions.cycleAbRepeat(); onAbRepeatTap() },
-            onNightMode = { actions.toggleNightMode() },
-            onBackgroundPlay = { actions.toggleBackgroundPlay() },
-            onVolumeBoost = onVolumeBoostCycle,
-            onLockScreen = { actions.lockControls() },
-            onSleepTimer = { actions.selectSleep(SleepOptions.first { it.minutes == 30 }) },
-            onScreenshot = { actions.captureFrame() },
-            onEqualizer = { actions.toggleEqualizer() },
-            onCycleRepeat = { actions.cycleRepeatLoopMode() },
-            onCycleDecoder = { actions.cycleDecoderMode() },
-            onVolumeChange = { v ->
-                gestures.startVol.intValue = (v * audioManager
-                    .getStreamMaxVolume(AudioManager.STREAM_MUSIC)).toInt()
-                actions.updateVolumeGesture(0f)
-            },
-            onBrightnessChange = { b ->
-                gestures.startBri.floatValue = b
-                actions.updateBrightnessGesture(0f)
-            },
-            onOpenFullSettings = onOpenSettings,
-            onDismiss = { actions.closeThreeDotsMenu() },
-        )
-
-        // ── Control Center (was the flat overflow sheet; v0.7.3 sectioned
-        //    hub with live values + the wired dead ends). Single "more"
-        //    destination: the top bar's ⋮.
-        PlayerControlCenterSheet(
-            visible = overflowOpen.value,
-            state = ControlCenterState(
-                abStartMs = abStartMs ?: ui.abStartMs.value,
-                abEndMs = abEndMs ?: ui.abEndMs.value,
-                sleep = sleep,
-                skipIncrementSec = seekIncrementSec,
-                equalizerOn = quick.equalizerOn.value,
-                castRouteName = castRouteName,
-                subtitleChoiceLabel = subtitleChoiceLabel,
-                // Read the same host-mirrored value the dock chip uses, not the
-                // engine directly: two surfaces reading two sources is how they
-                // came to disagree in the first place.
-                decoderModeLabel = decoderModeLabel,
-                rebuildingDecoder = isRebuildingDecoder,
-                volumeBoostPct = volumeBoostPct,
-            ),
-            accent = accent,
-            onDismiss = { overflowOpen.value = false },
-            onAbRepeat = {
-                actions.cycleAbRepeat()
-                onAbRepeatTap()
-            },
-            onSkipLengthCycle = {
-                // Same ladder as the Settings screen. Stays open so
-                // the pill's value visibly advances.
-                val steps = listOf(5, 10, 15, 30, 60)
-                val next = steps.firstOrNull { it > seekIncrementSec } ?: steps.first()
-                onSkipLengthChanged(next)
-            },
-            onSleepOption = { opt -> actions.selectSleep(opt) },
-            onEqualizerToggle = { actions.toggleEqualizer() },
-            onOpenEqPanel = onOpenEqPanel,
-            onAudioTrack = { actions.pickAudioTrack() },
-            onAudioOutput = { actions.openCastPicker() },
-            onVolumeBoost = onVolumeBoostCycle,
-            onCaptureFrame = { actions.captureFrame() },
-            onDecoder = { actions.cycleDecoderMode() },
-            onSubtitleSource = onOpenSubtitlePicker,
-            // v0.9.1: subtitle style tunes IN the subtitle drawer itself now
-            // (hub 6.6 merge) — this shortcut opens that drawer.
-            onSubtitleStyle = { actions.toggleSubtitleDrawer() },
-            // v0.7.2: shares the device's own sync decisions (see SyncLogShare).
-            onShareSyncLog = onShareSyncLog,
-            onOpenSettings = onOpenSettings,
-        )
-
-        // ── Ribbon customise sheet — backs the ribbon's "Customise" tool.
-        //    A sheet (not an inline tray) because reordering needs a tall
-        //    scrollable list; the video keeps playing behind it.
-        RibbonCustomiseSheet(
-            visible = quick.showRibbonCustomise.value,
-            actions = actions,
-            accent = accent,
-            onDismiss = { /* state is already closed by the action */ },
-        )
-
-        // ── A-B repeat chip (tap advances the cycle: set B / clear) ──
-        if (!isPipMode && abStartMs != null) {
-            AbRepeatChip(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = topAnchor),
-                abStartMs = abStartMs,
-                abEndMs = abEndMs,
-                accent = accent,
-                onTap = onAbRepeatTap,
-            )
-        }
-
-        // ── Up Next pill (final 30 s of an episode) ──
-        // Reads the position STATE: recomposes only in the final 30s window
-        // (the condition itself gates it — Compose skips until the boolean
-        // flips, not on every tick). Anchored off the measured dock height,
-        // never a magic 140dp again.
-        if (!isPipMode && hasNextEpisode && durationSec.value > 0f &&
-            durationSec.value - positionSec.value <= NEXT_BUTTON_WINDOW_SEC && nextCountdownSec < 0
-        ) {
-            UpNextPill(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = bottomAnchor),
-                upNextTitle = upNextTitle,
-                accent = accent,
-                onClick = onPlayNext,
-            )
-        }
-
-        // ── auto-advance countdown overlay ("Next episode in N...") ──
-        if (!isPipMode && nextCountdownSec > 0) {
-            NextCountdownOverlay(
-                modifier = Modifier.align(Alignment.Center),
-                countdownSec = nextCountdownSec,
-                accent = accent,
-                onCancel = onCancelNext,
-                onPlayNow = onPlayNext,
-            )
-        }
-
-        // ── sync popover (nudge / re-sync / style) — opens ONLY from the
-        //    hero chip in the dock, so it anchors directly above that row.
-        //    The old top-left SYNCED chip + calibration banner layers are
-        //    retired: the chip IS the status now. ──
-        if (quick.showSyncPopover.value && !isPipMode) {
-            SyncPopover(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = bottomAnchor + PlayerDimens.gapMd)
-                    .widthIn(max = 360.dp)
-                    .padding(horizontal = PlayerDimens.gapLg),
+            // 2. Subtitle Drawer
+            PlayerSubtitleDrawer(
+                visible = ui.subtitleDrawerOpen.value && !isPipMode,
+                showCC = ui.showCC.value,
+                currentChoiceLabel = subtitleChoiceLabel,
                 offsetMs = liveOffsetMs,
-                accent = accent,
-                syncEnabled = quick.subSyncEnabled.value,
-                onNudge = { actions.nudgeSubtitle(it) },
-                onResync = {
-                    actions.closeSyncPopover()
-                    actions.resyncNow()
-                },
-                onStyle = {
-                    actions.closeSyncPopover()
-                    actions.toggleSubtitleDrawer()
-                },
-                onToggleSync = { enabled ->
-                    actions.closeSyncPopover()
-                    actions.setSubSyncEnabled(enabled)
-                },
-                onDismiss = { actions.closeSyncPopover() },
+                accent = playerAccent,
+                onToggleShowCC = { actions.toggleShowCC() },
+                onNudge = { deltaMs -> actions.nudgeSubtitle(deltaMs) },
+                onResetOffset = { actions.nudgeSubtitle(-liveOffsetMs) },
+                onResync = { actions.resyncNow() },
+                onOpenLocalFile = onOpenSubtitlePicker,
+                style = subtitleStyle,
+                onStyleChanged = { newStyle -> onSubtitleStyleChanged(newStyle) },
+                onDismiss = { actions.closeSubtitleDrawer() },
             )
-        }
 
-        // ── precision speed control card (tap speed pill in ribbon) ──
-        if (ui.speedCardOpen.value && !isPipMode) {
-            // Tap-outside dismissal — the mockup card carries no close
-            // affordance, so this invisible scrim IS the close path (the
-            // card consumes taps inside its own bounds).
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { actions.closeSpeedCard() },
+            // 3. Three-Dots Settings Drawer
+            PlayerSettingsDrawer(
+                visible = ui.threeDotsMenuOpen.value && !isPipMode,
+                accent = playerAccent,
+                abActive = (abStartMs ?: ui.abStartMs.value) != null,
+                nightMode = ui.nightMode.value,
+                backgroundPlay = ui.backgroundPlayOn.value,
+                volumeBoost = volumeBoostPct,
+                sleepMinutes = ui.sleepMinutes.intValue,
+                equalizerOn = quick.equalizerOn.value,
+                repeatModeLabel = ui.repeatMode.value.name,
+                decoderModeLabel = decoderModeLabel,
+                currentVolume = (gestures.startVol.intValue /
+                    audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat())
+                    .coerceIn(0f, 1f),
+                currentBrightness = gestures.startBri.floatValue.coerceIn(0f, 1f),
+                onAbRepeat = { actions.cycleAbRepeat(); onAbRepeatTap() },
+                onNightMode = { actions.toggleNightMode() },
+                onBackgroundPlay = { actions.toggleBackgroundPlay() },
+                onVolumeBoost = onVolumeBoostCycle,
+                onLockScreen = { actions.lockControls() },
+                onSleepTimer = { actions.selectSleep(SleepOptions.first { it.minutes == 30 }) },
+                onScreenshot = { actions.captureFrame() },
+                onEqualizer = { actions.toggleEqualizer() },
+                onCycleRepeat = { actions.cycleRepeatLoopMode() },
+                onCycleDecoder = { actions.cycleDecoderMode() },
+                onVolumeChange = { v ->
+                    gestures.startVol.intValue = (v * audioManager
+                        .getStreamMaxVolume(AudioManager.STREAM_MUSIC)).toInt()
+                    actions.updateVolumeGesture(0f)
+                },
+                onBrightnessChange = { b ->
+                    gestures.startBri.floatValue = b
+                    actions.updateBrightnessGesture(0f)
+                },
+                onOpenFullSettings = onOpenSettings,
+                onDismiss = { actions.closeThreeDotsMenu() },
             )
-            PrecisionSpeedCard(
-                visible = ui.speedCardOpen.value,
-                currentSpeed = ui.currentPlaybackSpeed.floatValue,
-                onStep = { actions.stepSpeed(it) },
-                onSetSpeed = { actions.setArbitrarySpeed(it) },
-                onReset = { actions.resetSpeedToDefault() },
-                accent = accent,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = bottomAnchor + PlayerDimens.gapMd)
-                    .widthIn(max = 380.dp)
-                    .padding(horizontal = PlayerDimens.gapLg),
-            )
-        }
 
-        // ── transient toast (in-overlay feedback) ──
-        if (hud.transientToast.value != null && !isPipMode) {
-            PlayerOverlayToast(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = topAnchor),
-                message = hud.transientToast.value,
+            // 4. Control Center Sheet
+            PlayerControlCenterSheet(
+                visible = overflowOpen.value,
+                state = ControlCenterState(
+                    abStartMs = abStartMs ?: ui.abStartMs.value,
+                    abEndMs = abEndMs ?: ui.abEndMs.value,
+                    sleep = sleep,
+                    skipIncrementSec = seekIncrementSec,
+                    equalizerOn = quick.equalizerOn.value,
+                    castRouteName = castRouteName,
+                    subtitleChoiceLabel = subtitleChoiceLabel,
+                    decoderModeLabel = decoderModeLabel,
+                    rebuildingDecoder = isRebuildingDecoder,
+                    volumeBoostPct = volumeBoostPct,
+                ),
                 accent = accent,
+                onDismiss = { overflowOpen.value = false },
+                onAbRepeat = {
+                    actions.cycleAbRepeat()
+                    onAbRepeatTap()
+                },
+                onSkipLengthCycle = {
+                    val steps = listOf(5, 10, 15, 30, 60)
+                    val next = steps.firstOrNull { it > seekIncrementSec } ?: steps.first()
+                    onSkipLengthChanged(next)
+                },
+                onSleepOption = { opt -> actions.selectSleep(opt) },
+                onEqualizerToggle = { actions.toggleEqualizer() },
+                onOpenEqPanel = onOpenEqPanel,
+                onAudioTrack = { actions.pickAudioTrack() },
+                onAudioOutput = { actions.openCastPicker() },
+                onVolumeBoost = onVolumeBoostCycle,
+                onCaptureFrame = { actions.captureFrame() },
+                onDecoder = { actions.cycleDecoderMode() },
+                onSubtitleSource = onOpenSubtitlePicker,
+                onSubtitleStyle = { actions.toggleSubtitleDrawer() },
+                onShareSyncLog = onShareSyncLog,
+                onOpenSettings = onOpenSettings,
+            )
+
+            // 5. Ribbon Customise Sheet
+            RibbonCustomiseSheet(
+                visible = quick.showRibbonCustomise.value,
+                actions = actions,
+                accent = accent,
+                onDismiss = { },
             )
         }
+    )
+}
+
+/**
+ * 4-Slot Architecture container for PlayerScreen per AGENT.md Section 2.2:
+ * 1. [videoSurfaceSlot]: Bottom layer (SurfaceView / PlayerSurface + background scrims)
+ * 2. [gestureOverlaySlot]: Middle layer (gestures, ripples, HUD pills, buffering)
+ * 3. [hudControlsSlot]: Main controls (top bar, ribbons, timeline scrubber, transport)
+ * 4. [sideDrawerSlot]: Topmost modal side drawers (Subtitles, Playlist, Settings)
+ */
+@Composable
+fun PlayerScreenLayout(
+    videoSurfaceSlot: @Composable BoxScope.() -> Unit,
+    gestureOverlaySlot: @Composable BoxScope.() -> Unit,
+    hudControlsSlot: @Composable BoxScope.() -> Unit,
+    sideDrawerSlot: @Composable BoxScope.() -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black),
+    ) {
+        // Layer 0: Video surface & background scrims
+        videoSurfaceSlot()
+
+        // Layer 1: Gesture interception & transient HUD feedback
+        gestureOverlaySlot()
+
+        // Layer 2: Main HUD controls, top bar, ribbons, scrubber timeline
+        hudControlsSlot()
+
+        // Layer 3: Topmost modal side drawers (Subtitles, Playlist, Settings)
+        sideDrawerSlot()
     }
 }

@@ -422,7 +422,11 @@ fun LibraryScreen(
                         )
                     }
                 } else {
-                    items(folderEpisodes, key = { "ep-" + it.video.uri }) { ep ->
+                    items(
+                        items = folderEpisodes,
+                        key = { "ep-" + it.video.uri },
+                        contentType = { "episode_row" },
+                    ) { ep ->
                         EpisodeRow(
                             palette = palette,
                             video = ep.video,
@@ -471,7 +475,11 @@ fun LibraryScreen(
                     item(key = "search-header") {
                         SectionLabel(palette, "RESULTS · ${state.searchHits.size}")
                     }
-                    items(state.searchHits, key = { "hit-" + it.video.uri }) { hit ->
+                    items(
+                        items = state.searchHits,
+                        key = { "hit-" + it.video.uri },
+                        contentType = { "search_hit" },
+                    ) { hit ->
                         val folderEps = state.episodesByFolder[hit.video.parentPath]
                         EpisodeRow(
                             palette = palette,
@@ -515,7 +523,7 @@ fun LibraryScreen(
 
                 // ── SERIES DESTINATION (EPISODIC SPECIALIST) ───────────────────
                 if (startDestination == LibraryStartDestination.Series) {
-                    item(key = "series-header") {
+                    item(key = "series-header", contentType = "header") {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -539,9 +547,13 @@ fun LibraryScreen(
                         }
                     }
 
-                    items(state.series, key = { "series-hero-" + it.folderPath }) { s ->
+                    items(
+                        items = state.series,
+                        key = { "series-card-" + it.folderPath },
+                        contentType = { "series_card" },
+                    ) { s ->
                         val eps = state.episodesByFolder[s.folderPath] ?: emptyList()
-                        SeriesHeroCard(
+                        SeriesCard(
                             palette = palette,
                             series = s,
                             episodes = eps,
@@ -551,13 +563,13 @@ fun LibraryScreen(
                     }
                 } else {
                     // ── HOME DESTINATION (UNIVERSAL MEDIA DASHBOARD) ─────────
-                    // Continue watching
+                    // Continue watching (Compact Horizontal Strip)
                     if (state.inProgress.isNotEmpty()) {
-                        item(key = "header-continue") {
+                        item(key = "header-continue", contentType = "header") {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(start = Dimens.gapLg, end = Dimens.gapLg, top = Dimens.gapMd, bottom = Dimens.gapXs),
+                                    .padding(start = Dimens.gapLg, end = Dimens.gapLg, top = Dimens.gapMd, bottom = 8.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -581,15 +593,19 @@ fun LibraryScreen(
                                 }
                             }
                         }
-                        item(key = "continue-row") {
-                            // J1 (approved): full-width stacked cards; the rail
-                            // became a column so each continue card is the
-                            // cinematic banner the mockup draws.
-                            Column(
-                                modifier = Modifier.padding(horizontal = Dimens.gapLg),
-                                verticalArrangement = Arrangement.spacedBy(14.dp),
+                        item(key = "continue-row", contentType = "continue_strip") {
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = Dimens.gapLg),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = Dimens.gapSm),
                             ) {
-                                state.inProgress.forEach { item ->
+                                items(
+                                    items = state.inProgress,
+                                    key = { "continue-${it.video.uri}" },
+                                    contentType = { "continue_card" },
+                                ) { item ->
                                     ContinueCard(palette, item, onClick = { onOpenVideo(item.video) })
                                 }
                             }
@@ -598,7 +614,7 @@ fun LibraryScreen(
 
                     // All Folders across the entire device
                     if (state.series.isNotEmpty()) {
-                        item(key = "folders-header") {
+                        item(key = "folders-header", contentType = "header") {
                             FolderSectionHeader(
                                 palette = palette,
                                 count = state.series.size,
@@ -606,7 +622,11 @@ fun LibraryScreen(
                                 onSortSelected = { vm.setSort(it) },
                             )
                         }
-                        items(state.series, key = { "folder-" + it.folderPath }) { s ->
+                        items(
+                            items = state.series,
+                            key = { "folder-" + it.folderPath },
+                            contentType = { "folder_row" },
+                        ) { s ->
                             FolderRow(
                                 palette = palette,
                                 s = s,
@@ -773,7 +793,11 @@ internal fun HistorySheetContent(
                     .heightIn(max = 450.dp),
                 contentPadding = PaddingValues(horizontal = Dimens.gapLg, vertical = Dimens.gapXs),
             ) {
-                items(items, key = { it.video.uri }) { item ->
+                items(
+                    items = items,
+                    key = { it.video.uri },
+                    contentType = { "history_row" },
+                ) { item ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1398,96 +1422,86 @@ private fun ProgressBar(palette: SkinPalette, fraction: Float, modifier: Modifie
 
 @Composable
 private fun ContinueCard(palette: SkinPalette, item: InProgressItem, onClick: () -> Unit) {
-    // J1 (approved): full-width cinematic banner — the art wears the shared
-    // frame with the duration pill ("position / total") bottom-right, the
-    // progress hairline sits ON the art's bottom edge, and the meta below is
-    // plain text: title, sub-line, percent. No card box, no overlay badge,
-    // no vignette — the frame is the card.
     Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .width(140.dp)
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(116.dp)
+                .width(140.dp)
+                .height(80.dp)
+                .clip(RoundedCornerShape(8.dp)),
         ) {
             PosterArt(
                 title = item.video.title,
                 modifier = Modifier.fillMaxSize(),
-                cornerRadius = 12.dp,
+                cornerRadius = 8.dp,
                 videoUri = item.video.uri,
                 playbackPositionMs = item.positionMs,
                 durationMs = item.durationMs,
             )
-            // Duration pill bottom-right: position / total (J1).
-            if (item.positionMs > 0L && item.durationMs > 0L) {
+            // Duration pill bottom-left: ▶ duration (AGENT.md 4.1).
+            val timeText = if (item.positionMs > 0L) fmtTime(item.positionMs) else fmtTime(item.durationMs)
+            if (timeText.isNotEmpty()) {
                 Surface(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(8.dp),
-                    shape = RoundedCornerShape(6.dp),
-                    color = Color.Black.copy(alpha = 0.72f),
+                        .align(Alignment.BottomStart)
+                        .padding(start = 6.dp, bottom = 7.dp),
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color.Black.copy(alpha = 0.68f),
                 ) {
-                    Text(
-                        text = fmtTime(item.positionMs) + " / " + fmtTime(item.durationMs),
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFeatureSettings = "tnum",
-                            fontWeight = FontWeight.SemiBold,
-                        ),
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "▶",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                            ),
+                            modifier = Modifier.padding(end = 3.dp),
+                        )
+                        Text(
+                            text = timeText,
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 11.sp,
+                                fontFeatureSettings = "tnum",
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                        )
+                    }
                 }
             }
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
+                    .fillMaxWidth(),
             ) {
                 ProgressBar(palette, item.fraction)
             }
         }
-        Row(
-            modifier = Modifier.padding(start = 2.dp, end = 2.dp, top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    item.video.title,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = palette.text,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    item.label,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
-                    color = palette.textDim,
-                )
-            }
-            Spacer(Modifier.width(Dimens.gapMd))
-            Text(
-                text = ((item.fraction.coerceIn(0f, 1f) * 100f) + 0.5f).toInt().toString() + "%",
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontFeatureSettings = "tnum",
-                    fontWeight = FontWeight.SemiBold,
-                ),
-                color = palette.text,
-            )
-        }
+        Text(
+            text = item.video.title,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+            ),
+            color = palette.text,
+            modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
+        )
     }
 }
 
-/** Cinematic Show Hero Card with 1-Tap Up Next resume action chip. */
+/** High-density compact horizontal row card (~88.dp–96.dp height) fitting 5–6 per viewport. */
 @Composable
-private fun SeriesHeroCard(
+private fun SeriesCard(
     palette: SkinPalette,
     series: Series,
     episodes: List<EpisodeItem>,
@@ -1497,152 +1511,121 @@ private fun SeriesHeroCard(
     val nextEp = episodes.firstOrNull { !it.finished } ?: episodes.firstOrNull()
     val progressPct = if (series.totalEpisodes > 0) (series.totalWatched * 100 / series.totalEpisodes) else 0
 
-    Card(
+    Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = palette.surface),
+        shape = RoundedCornerShape(12.dp),
+        color = palette.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = Dimens.gapLg, vertical = Dimens.gapXs),
+            .height(92.dp)
+            .padding(horizontal = Dimens.gapLg, vertical = 4.dp),
     ) {
-        Column {
-            // 2:1 Cinematic Backdrop Hero
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 1. Left Thumbnail (112.dp × 68.dp, RoundedCornerShape(8.dp))
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(136.dp)
+                    .size(width = 112.dp, height = 68.dp)
+                    .clip(RoundedCornerShape(8.dp)),
             ) {
                 PosterArt(
                     title = series.name,
                     modifier = Modifier.fillMaxSize(),
-                    cornerRadius = 0.dp,
+                    cornerRadius = 8.dp,
                     videoUri = nextEp?.video?.uri ?: series.videos.firstOrNull()?.uri,
                     playbackPositionMs = 0L,
                     durationMs = nextEp?.video?.durationMs,
                 )
-                // 180° Cinematic Vignette overlay for 100% text contrast
-                Box(
+                // Episode count pill
+                Surface(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Black.copy(alpha = 0.25f),
-                                    Color.Black.copy(alpha = 0.85f),
-                                )
-                            )
-                        )
-                )
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.SpaceBetween,
+                        .align(Alignment.BottomEnd)
+                        .padding(4.dp),
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color.Black.copy(alpha = 0.68f),
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = Color.Black.copy(alpha = 0.65f),
-                    ) {
-                        Text(
-                            text = if (series.totalEpisodes > 1) "SERIES · ${series.totalEpisodes} EPISODES" else "SERIES",
-                            color = palette.accent,
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        )
-                    }
                     Text(
-                        text = series.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.ExtraBold,
+                        text = "${series.totalEpisodes} EP${if (series.totalEpisodes != 1) "S" else ""}",
                         color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 9.sp,
+                            fontFeatureSettings = "tnum",
+                            fontWeight = FontWeight.Bold,
+                        ),
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                     )
                 }
             }
 
-            // Body: Progress tracking & 1-Tap Up Next
+            Spacer(Modifier.width(12.dp))
+
+            // 2. Center Metadata (3-Line Layout)
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(Dimens.gapMd),
-                verticalArrangement = Arrangement.spacedBy(Dimens.gapSm),
+                    .weight(1f),
+                verticalArrangement = Arrangement.Center,
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Watched: ${series.totalWatched} / ${series.totalEpisodes} Episodes",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.textDim,
-                    )
-                    Text(
-                        text = "$progressPct%",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            fontFeatureSettings = "tnum",
-                        ),
-                        color = palette.accent,
-                    )
-                }
+                // Line 1: Series Title
+                Text(
+                    text = series.name,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                    color = palette.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(3.dp))
+                // Line 2: Watched Progress
+                Text(
+                    text = "Watched: ${series.totalWatched}/${series.totalEpisodes} • $progressPct%",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 12.sp,
+                        fontFeatureSettings = "tnum",
+                    ),
+                    color = palette.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(2.dp))
+                // Line 3: Next Up
+                val nextTitle = nextEp?.video?.title
+                Text(
+                    text = if (nextTitle != null) "Up Next: $nextTitle" else "All watched",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 11.sp,
+                    ),
+                    color = if (nextEp != null) palette.accent else palette.textDim.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
 
-                val frac = if (series.totalEpisodes > 0) series.totalWatched.toFloat() / series.totalEpisodes else 0f
-                ProgressBar(palette = palette, fraction = frac)
+            Spacer(Modifier.width(8.dp))
 
-                // 1-Tap Up Next Button Chip
-                if (nextEp != null) {
-                    Surface(
-                        onClick = { onPlayNext(nextEp.video) },
-                        shape = RoundedCornerShape(12.dp),
-                        color = palette.rowBg,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, palette.accent.copy(alpha = 0.35f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(
-                                    text = "UP NEXT · 1-TAP RESUME",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        letterSpacing = 0.6.sp,
-                                    ),
-                                    color = palette.accent,
-                                )
-                                Text(
-                                    text = nextEp.video.title,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                    color = palette.text,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .background(palette.accent, CircleShape),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    Icons.Filled.PlayArrow,
-                                    contentDescription = "Play Next",
-                                    tint = Color.Black,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-                        }
-                    }
-                }
+            // 3. Right Action: Circular 38.dp 1-Tap Quick Resume play button
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .background(palette.accent, CircleShape)
+                    .clickable {
+                        val target = nextEp?.video ?: series.videos.firstOrNull()
+                        if (target != null) onPlayNext(target)
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Play Next",
+                    tint = Color.Black,
+                    modifier = Modifier.size(22.dp),
+                )
             }
         }
     }
