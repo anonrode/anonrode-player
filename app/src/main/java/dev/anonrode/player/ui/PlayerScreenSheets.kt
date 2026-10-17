@@ -8,6 +8,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -644,3 +647,125 @@ private fun DrawerNavRow(
         }
     }
 }
+
+/**
+ * §8.5 Floating Optical Precision Speed Card (330dp wide, centered overlay).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun PrecisionSpeedCard(
+    visible: Boolean,
+    ui: PlayerUiState,
+    onApplySpeed: (Float) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!visible) return
+    val current = ui.currentPlaybackSpeed.floatValue.coerceIn(0.25f, 4.0f)
+
+    Box(
+        modifier = modifier
+            .width(330.dp)
+            .opticalGlass(
+                shape = RoundedCornerShape(22.dp),
+                baseColor = OpticalGlassTokens.SmokedHudPillBase,
+            )
+            .padding(16.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}, // Consume click inside
+            ),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            // Row 1: Header / Readout and Steppers
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = String.format(java.util.Locale.US, "%.2f×", current),
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    style = Tnum,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .opticalGlass(shape = CircleShape)
+                            .clickable {
+                                val next = (current - 0.05f).coerceIn(0.25f, 4.0f)
+                                ui.currentPlaybackSpeed.floatValue = next
+                                onApplySpeed(next)
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("−", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .opticalGlass(shape = CircleShape)
+                            .clickable {
+                                val next = (current + 0.05f).coerceIn(0.25f, 4.0f)
+                                ui.currentPlaybackSpeed.floatValue = next
+                                onApplySpeed(next)
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("+", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            // Row 2: Milestone chips
+            val milestones = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f)
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                milestones.forEach { chipSpeed ->
+                    val isActive = abs(current - chipSpeed) < 0.02f
+                    OpticalGlassChip(
+                        label = "${chipSpeed}x",
+                        isActive = isActive,
+                        onClick = {
+                            ui.currentPlaybackSpeed.floatValue = chipSpeed
+                            onApplySpeed(chipSpeed)
+                        },
+                    )
+                }
+            }
+
+            // Row 3: Reset Chip & Close affordance
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OpticalGlassChip(
+                    label = "Reset (1.0x)",
+                    isActive = abs(current - 1.0f) < 0.02f,
+                    onClick = {
+                        ui.currentPlaybackSpeed.floatValue = 1.0f
+                        onApplySpeed(1.0f)
+                    },
+                )
+                Text(
+                    text = "Close",
+                    color = Color.White.copy(alpha = 0.65f),
+                    fontSize = 12.sp,
+                    modifier = Modifier.clickable { onDismiss() },
+                )
+            }
+        }
+    }
+}
+
