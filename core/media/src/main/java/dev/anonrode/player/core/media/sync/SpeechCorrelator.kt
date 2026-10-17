@@ -257,8 +257,7 @@ object SpeechCorrelator {
         // Minimum dialogue mass check: reject sparse window hits
         if (sBPk < 15 && abs(bestShift) > 150) return Outcome.NoMatch
 
-        val nEff = minOf(n.toDouble(), hard.toDouble(), sBPk.toDouble()).coerceAtLeast(1.0)
-        val z = peak * sqrt(nEff)
+        val z = peak * sqrt(n.toDouble())
         val zFloor = if (n <= 160) Z_SMALL else Z_SMALL - (Z_SMALL - Z_LARGE) * minOf(1.0, (n - 160.0) / 120.0)
 
         // Standard gate: peak, margin, containment (restored from v0.6), and z-score

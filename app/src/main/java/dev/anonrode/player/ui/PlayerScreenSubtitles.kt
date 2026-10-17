@@ -144,7 +144,7 @@ fun PlayerSubtitleOverlay(
                                 (ui.subtitleFontSizeSp.floatValue * zoom).coerceIn(14f, 42f)
                         }
                     }
-                }
+                },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             OutlinedSubtitleText(
