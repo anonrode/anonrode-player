@@ -289,75 +289,14 @@ internal fun PlayerScreenTopBar(
                     .weight(1f)
                     .padding(horizontal = 6.dp),
             ) {
-                // ── Tech sub-line (hub 1.3): dim 10sp tnum, composed ONLY
-                //    from live engine values — resolution + fps come from the
-                //    player's video track (VideoTechLineEffect), the decoder
-                //    label from the running engine, the sync offset from the
-                //    same host state the dock's sync chip reads. A segment
-                //    with no live source is omitted, never faked (AGENTS
-                //    rule 11).
-                val offsetLocked = actions.quick.isSyncLocked.value
-                val syncedLabel = "synced " + (if (liveOffsetMs >= 0) "+" else "") +
-                    String.format(java.util.Locale.US, "%.2f", liveOffsetMs / 1000.0) + "s"
-                val techLine = buildAnnotatedString {
-                    if (videoWidth > 0 && videoHeight > 0) {
-                        // "1080p" convention: the shorter coded side names the
-                        // line count, correct for rotated videos too.
-                        append("${minOf(videoWidth, videoHeight)}p · ")
-                    }
-                    if (videoFps > 0) {
-                        append("${videoFps}fps · ")
-                    }
-                    append(actions.decoderModeLabel)
-                    if (offsetLocked) {
-                        withStyle(SpanStyle(color = accent)) { append(" · $syncedLabel") }
-                    }
-                }
-                if (isLandscape) {
-                    // Landscape (mockup H): "title · tech" on ONE ellipsized
-                    // line — the tech segments inline in dim, the synced
-                    // tail still accent.
-                    Text(
-                        text = buildAnnotatedString {
-                            append(title)
-                            withStyle(
-                                SpanStyle(
-                                    color = Color(0xFFABABB2),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Normal,
-                                )
-                            ) {
-                                append(" · ")
-                                append(techLine)
-                            }
-                        },
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                } else {
-                    // Portrait: filename over the tech sub-line (mockup A).
-                    Text(
-                        text = title,
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = techLine,
-                        color = Color(0xFFABABB2),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Normal,
-                        style = Tnum,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 1.dp),
-                    )
-                }
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -392,113 +331,87 @@ internal fun PlayerScreenTopBar(
             }
         }
 
-        // ── Row 2: Elastic Drawer Quick Ribbon ──
-        //
-        // The mockup's closed sleeve (`.ribbon.closed` hides
-        // `nth-child(n+6)`): the first FIVE tools rest visible — in the
-        // default order Speed, Screenshot, Rotation, Mute, Night, exactly
-        // the mockup's resting set — with the chevron pinned to the row's
-        // right edge. Tap the chevron to animate the sleeve clip open,
-        // revealing the same horizontally scrolling track (all enabled
-        // tools); collapsing scrolls back to offset 0. When the controls
-        // auto-hide, the drawer resets to its resting width and offset.
+        // ── Row 2: Collapsible Quick-Action Ribbon (> / < Toggle) ──
         val ribbonOrder = actions.quick.ribbonOrder
-        val restingToolCount = 5
-        val toolCellWidth = RIBBON_CELL_WIDTH_DP.dp
-        val toolSpacing = 4.dp
-        val restingWidthDp = (restingToolCount * toolCellWidth.value + (restingToolCount - 1) * toolSpacing.value).dp
+        var ribbonExpanded by remember { mutableStateOf(false) }
+        val view = LocalView.current
 
-        BoxWithConstraints(
+        LaunchedEffect(actions.ui.controlsVisible.value) {
+            if (!actions.ui.controlsVisible.value) {
+                ribbonExpanded = false
+            }
+        }
+
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 4.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            val density = LocalDensity.current
-            val coroutineScope = rememberCoroutineScope()
-            val view = LocalView.current
-            val handleReserve = 36.dp // 32dp chevron + 4dp gap
-            val maxAvailableWidthDp = (maxWidth - handleReserve).coerceAtLeast(restingWidthDp)
-            val restingWidthPx = with(density) { restingWidthDp.toPx() }
-            val maxWidthPx = with(density) { maxAvailableWidthDp.toPx() }
-
-            val isExpanded = actions.quick.ribbonExpanded.value
-            val drawerWidthAnim = remember { Animatable(restingWidthPx) }
-
-            // Sync anim with isExpanded
-            LaunchedEffect(isExpanded, restingWidthPx, maxWidthPx) {
-                val target = if (isExpanded) maxWidthPx else restingWidthPx
-                drawerWidthAnim.animateTo(
-                    targetValue = target,
-                    animationSpec = tween(durationMillis = 240, easing = LinearOutSlowInEasing),
-                )
-            }
-
-            // Auto-hide reset: when controls fade, automatically collapse drawer and reset scroll
-            LaunchedEffect(actions.ui.controlsVisible.value) {
-                if (!actions.ui.controlsVisible.value) {
-                    actions.quick.ribbonExpanded.value = false
-                    drawerWidthAnim.snapTo(restingWidthPx)
-                    actions.quick.ribbonScroll.scrollTo(0)
-                }
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Sleeve: the Row always reserves everything but the chevron
-                // so the handle sits at the row's right edge like the mockup;
-                // the animated width below is the CLIP — collapsed it shows
-                // exactly the five resting cells, expanded it uncovers the
-                // rest of the scrolling track.
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clipToBounds(),
+            if (!ribbonExpanded) {
+                // Collapsed (Default): Render first 5 quick actions (36.dp, icon-only) + '>' chevron button
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .width(with(density) { drawerWidthAnim.value.toDp() })
-                            .horizontalScroll(actions.quick.ribbonScroll, enabled = true),
-                        horizontalArrangement = Arrangement.spacedBy(toolSpacing),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        ribbonOrder.forEach { tool ->
-                            key(tool.name) {
-                                RibbonToolSlot(tool = tool, accent = accent, actions = actions)
-                            }
+                    ribbonOrder.take(5).forEach { tool ->
+                        key(tool.name) {
+                            RibbonToolSlot(tool = tool, accent = accent, actions = actions, showLabel = false)
                         }
                     }
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
+                            .clickable {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                ribbonExpanded = true
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ChevronRight,
+                            contentDescription = "Expand tools ribbon",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
-
-                // Chevron handle: bare icon per the mockup (`›` unboxed,
-                // white 60%) — a boxed chip here is exactly the clutter the
-                // design law strips out.
-                Box(
+            } else {
+                // Expanded: Full horizontally scrollable track + '<' collapse button
+                Row(
                     modifier = Modifier
-                        .padding(start = 4.dp)
-                        .size(width = 32.dp, height = 44.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = ripple(bounded = false, radius = 20.dp, color = accent),
-                            onClick = {
-                                view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                                val willExpand = !actions.quick.ribbonExpanded.value
-                                actions.quick.ribbonExpanded.value = willExpand
-                                if (!willExpand) {
-                                    coroutineScope.launch {
-                                        actions.quick.ribbonScroll.animateScrollTo(0)
-                                    }
-                                }
-                            }
-                        ),
-                    contentAlignment = Alignment.Center,
+                        .fillMaxWidth()
+                        .horizontalScroll(actions.quick.ribbonScroll),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        imageVector = if (isExpanded) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight,
-                        contentDescription = if (isExpanded) "Collapse tools ribbon" else "Expand tools ribbon",
-                        tint = Color.White.copy(alpha = 0.65f),
-                        modifier = Modifier.size(20.dp),
-                    )
+                    ribbonOrder.forEach { tool ->
+                        key(tool.name) {
+                            RibbonToolSlot(tool = tool, accent = accent, actions = actions, showLabel = true)
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
+                            .clickable {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                ribbonExpanded = false
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ChevronLeft,
+                            contentDescription = "Collapse tools ribbon",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
         }
@@ -515,6 +428,7 @@ private fun RibbonToolSlot(
     tool: RibbonTool,
     accent: Color,
     actions: PlayerScreenActions,
+    showLabel: Boolean = true,
 ) {
     val ui = actions.ui
     val quick = actions.quick
@@ -524,6 +438,7 @@ private fun RibbonToolSlot(
             label = "Night",
             accent = accent,
             selected = ui.nightMode.value,
+            showLabel = showLabel,
             onClick = { actions.toggleNightMode() },
         )
 
@@ -532,6 +447,7 @@ private fun RibbonToolSlot(
             label = "Customise",
             accent = accent,
             selected = quick.showRibbonCustomise.value,
+            showLabel = showLabel,
             onClick = { actions.openRibbonCustomise() },
         )
 
@@ -540,6 +456,7 @@ private fun RibbonToolSlot(
             label = "Shuffle",
             accent = accent,
             selected = ui.shuffleOn.value,
+            showLabel = showLabel,
             onClick = { actions.toggleShuffle() },
         )
 
@@ -549,6 +466,7 @@ private fun RibbonToolSlot(
             label = if (ui.repeatMode.value == RepeatLoopMode.ONE) "Loop 1" else "Loop",
             accent = accent,
             selected = ui.repeatMode.value != RepeatLoopMode.OFF,
+            showLabel = showLabel,
             onClick = { actions.cycleRepeatLoopMode() },
         )
 
@@ -558,6 +476,7 @@ private fun RibbonToolSlot(
             label = if (ui.isMuted.value) "Muted" else "Mute",
             accent = accent,
             selected = ui.isMuted.value,
+            showLabel = showLabel,
             onClick = { actions.toggleMute() },
         )
 
@@ -568,6 +487,7 @@ private fun RibbonToolSlot(
                 label = if (mins > 0) "${mins}m" else "Timer",
                 accent = accent,
                 selected = mins > 0 || actions.sleep.active,
+                showLabel = showLabel,
                 onClick = { actions.cycleSleepTimer() },
             )
         }
@@ -581,9 +501,8 @@ private fun RibbonToolSlot(
             },
             accent = accent,
             selected = ui.abStartMs.value != null,
-            // Amber active dot is the A-B status hue (hub 2.3: dot ONLY for
-            // A-B) — every other tool states its state via ring + label.
             hasActiveDot = ui.abStartMs.value != null,
+            showLabel = showLabel,
             onClick = { actions.cycleAbRepeat() },
         )
 
@@ -592,6 +511,7 @@ private fun RibbonToolSlot(
             label = "Effect",
             accent = accent,
             selected = ui.audioEffectOn.value,
+            showLabel = showLabel,
             onClick = { actions.toggleAudioEffect() },
         )
 
@@ -600,6 +520,7 @@ private fun RibbonToolSlot(
             label = "Equalizer",
             accent = accent,
             selected = quick.equalizerOn.value,
+            showLabel = showLabel,
             onClick = { actions.toggleEqualizer() },
         )
 
@@ -611,6 +532,7 @@ private fun RibbonToolSlot(
                 label = "Speed",
                 accent = accent,
                 selected = abs(curSpeed - 1f) > 0.05f,
+                showLabel = showLabel,
                 onClick = { actions.toggleSpeedCard() },
                 onLongClick = { actions.resetSpeedToDefault() },
             )
@@ -621,6 +543,7 @@ private fun RibbonToolSlot(
             label = "Screenshot",
             accent = accent,
             selected = false,
+            showLabel = showLabel,
             onClick = { actions.captureScreenshot() },
         )
 
@@ -629,6 +552,7 @@ private fun RibbonToolSlot(
             label = "Background",
             accent = accent,
             selected = ui.backgroundPlayOn.value,
+            showLabel = showLabel,
             onClick = { actions.toggleBackgroundPlay() },
         )
 
@@ -637,28 +561,12 @@ private fun RibbonToolSlot(
             label = "Rotation",
             accent = accent,
             selected = quick.rotateMode.value != RotateMode.SENSOR,
+            showLabel = showLabel,
             onClick = { actions.cycleRotateMode() },
         )
     }
 }
 
-/**
- * Width of one Quick Access Ribbon cell, in dp — the mockup's `.disc` cell
- * (48px) exactly, with a 4dp gap between neighbours (mockup `gap:4px`):
- *
- *     13 * 48 + 12 * 4 = 672dp of track
- *
- * The closed sleeve shows the first five cells (`nth-child(n+6)` hidden);
- * the same horizontally scrolling track holds the rest, and the chevron
- * animates the clip open to reveal it. On wider windows the track can FIT:
- * `ScrollState.maxValue` stays 0 and the persisted scroll offset simply
- * never gets restored, which [QuickRowUiState.tryRestoreRibbonScroll]
- * already treats as the normal no-op case. Persistence cannot work on a
- * track that cannot scroll; nothing here pretends otherwise.
- *
- * 48dp is the minimum touch-target width, so the pitch costs nothing
- * ergonomically.
- */
 private const val RIBBON_CELL_WIDTH_DP = 48
 
 /** Individual circular tool in the Quick Access Ribbon with text label underneath. */
@@ -672,13 +580,11 @@ internal fun RibbonToolItem(
     accent: Color,
     selected: Boolean = false,
     hasActiveDot: Boolean = false,
+    showLabel: Boolean = true,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
     val view = LocalView.current
-    // Press feel: 0.96 spring per the mockup law (`.disc:active`).
-    // The scale lives on the VISUAL only — the cell keeps its full ≥48dp
-    // touch footprint for the whole gesture.
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
@@ -691,13 +597,12 @@ internal fun RibbonToolItem(
     )
     Column(
         modifier = modifier
-            .width(RIBBON_CELL_WIDTH_DP.dp)
-            .heightIn(min = 48.dp)
+            .width(if (showLabel) 52.dp else 40.dp)
             .then(
                 if (onLongClick == null) {
                     Modifier.clickable(
                         interactionSource = interactionSource,
-                        indication = ripple(bounded = false, radius = 24.dp, color = accent),
+                        indication = ripple(bounded = false, radius = 20.dp, color = accent),
                         onClick = {
                             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                             onClick()
@@ -706,7 +611,7 @@ internal fun RibbonToolItem(
                 } else {
                     Modifier.combinedClickable(
                         interactionSource = interactionSource,
-                        indication = ripple(bounded = false, radius = 24.dp, color = accent),
+                        indication = ripple(bounded = false, radius = 20.dp, color = accent),
                         onClick = {
                             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                             onClick()
@@ -718,103 +623,68 @@ internal fun RibbonToolItem(
                     )
                 }
             )
-            .padding(vertical = 4.dp),
+            .padding(vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        // ══ Disc (hub 2.3 active-state law) ══
-        // Flat dark glass — rgba(0,0,0,.42) — never a gradient. The ACTIVE
-        // state is the accent RING (1.5dp) + a 12%-alpha accent halo
-        // (`.disc.on .dn { border-color; box-shadow: 0 0 0 3px accent-dim }`
-        // in the approved mockup), with the accent-tinted icon.
-        // Never color-only: ring + label state together.
-        val discModifier =
-            Modifier.background(color = Color.Black.copy(alpha = 0.42f), shape = CircleShape)
-
-        // Unselected discs carry NO border (mockup: `border: 1px transparent`
-        // — the 42% glass alone separates them from the video); selected
-        // earns the 1.5dp accent ring.
-        val borderColor = if (selected) accent else Color.Transparent
-        val borderWidth = if (selected) 1.5.dp else 1.dp
-
-        // 44dp disc + 3dp halo band = 50dp stack, so the glow reads OUTSIDE
-        // the ring like the mockup's halo; the wrapper keeps every cell's
-        // geometry identical whether or not it is lit.
+        val discBg = if (selected) accent else Color.Black.copy(alpha = 0.55f)
         Box(
-            modifier = Modifier.size(50.dp),
+            modifier = Modifier
+                .size(36.dp)
+                .graphicsLayer {
+                    scaleX = pressScale
+                    scaleY = pressScale
+                }
+                .clip(CircleShape)
+                .background(discBg)
+                .border(
+                    width = 1.dp,
+                    color = if (selected) accent else Color.White.copy(alpha = 0.15f),
+                    shape = CircleShape,
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            if (selected) {
-                Box(
-                    Modifier
-                        .size(50.dp)
-                        .background(accent.copy(alpha = 0.12f), CircleShape)
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = Color.White,
+                    modifier = Modifier.size(19.dp),
+                )
+            } else if (badgeText != null) {
+                Text(
+                    text = badgeText,
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    style = Tnum,
                 )
             }
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .graphicsLayer {
-                        scaleX = pressScale
-                        scaleY = pressScale
-                    }
-                    .clip(CircleShape)
-                    .then(discModifier)
-                    .border(
-                        width = borderWidth,
-                        color = borderColor,
-                        shape = CircleShape,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (icon != null) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = label,
-                        tint = if (selected) accent else Color(0xFFE2E8F0),
-                        modifier = Modifier.size(22.dp),
-                    )
-                } else if (badgeText != null) {
-                    // Live tnum badge as the disc's whole content (mockup
-                    // `.disc .badge` 9sp/600 — the Speed disc never shows
-                    // an icon).
-                    Text(
-                        text = badgeText,
-                        color = Color.White,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        style = Tnum,
-                    )
-                }
-                if (hasActiveDot) {
-                    // Amber status hue reserved for A-B (AbMarkAmber is the
-                    // same amber the scrubber's A/B pins wear).
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .align(Alignment.TopEnd)
-                            .offset(x = (-2).dp, y = 2.dp)
-                            .background(AbMarkAmber, CircleShape)
-                            .border(1.dp, Color.Black.copy(alpha = 0.6f), CircleShape)
-                    )
-                }
+            if (hasActiveDot) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .align(Alignment.TopEnd)
+                        .offset(x = (-2).dp, y = 2.dp)
+                        .background(AbMarkAmber, CircleShape)
+                        .border(1.dp, Color.Black.copy(alpha = 0.6f), CircleShape)
+                )
             }
         }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = label,
-            // Mockup `.lbl` carries a 52px max-width — 2dp wider than the
-            // 48dp cell on each side (the row's 4dp gaps absorb the bleed),
-            // so words like "Screenshot" render whole instead of ellipsizing.
-            color = if (selected) Color.White else Color(0xFFABABB2),
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Medium,
-            letterSpacing = 0.3.sp,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.requiredWidth(52.dp),
-        )
+        if (showLabel) {
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = label,
+                color = Color.White,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 0.2.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.requiredWidth(52.dp),
+            )
+        }
     }
 }
 

@@ -987,21 +987,36 @@ fun PlayerScreen(
                 volumeBoost = volumeBoostPct,
                 sleepMinutes = ui.sleepMinutes.intValue,
                 equalizerOn = quick.equalizerOn.value,
+                shuffleOn = ui.shuffleOn.value,
                 repeatModeLabel = ui.repeatMode.value.name,
                 decoderModeLabel = decoderModeLabel,
+                currentSpeed = ui.currentPlaybackSpeed.floatValue,
                 currentVolume = (gestures.startVol.intValue /
                     audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat())
                     .coerceIn(0f, 1f),
                 currentBrightness = gestures.startBri.floatValue.coerceIn(0f, 1f),
-                onAbRepeat = { actions.cycleAbRepeat(); onAbRepeatTap() },
-                onNightMode = { actions.toggleNightMode() },
+                onAudioTrack = { actions.pickAudioTrack() },
+                onSubtitle = {
+                    actions.closeThreeDotsMenu()
+                    actions.toggleSubtitleDrawer()
+                },
                 onBackgroundPlay = { actions.toggleBackgroundPlay() },
-                onVolumeBoost = onVolumeBoostCycle,
+                onPip = {
+                    actions.closeThreeDotsMenu()
+                    actions.enterPip()
+                },
+                onScreenRotate = { actions.cycleRotateMode() },
+                onScreenshot = { actions.captureFrame() },
                 onLockScreen = { actions.lockControls() },
                 onSleepTimer = { actions.selectSleep(SleepOptions.first { it.minutes == 30 }) },
-                onScreenshot = { actions.captureFrame() },
+                onAbRepeat = { actions.cycleAbRepeat(); onAbRepeatTap() },
                 onEqualizer = { actions.toggleEqualizer() },
+                onNightMode = { actions.toggleNightMode() },
+                onVolumeBoost = onVolumeBoostCycle,
+                onShuffle = { actions.toggleShuffle() },
                 onCycleRepeat = { actions.cycleRepeatLoopMode() },
+                onSpeedChange = { actions.setArbitrarySpeed(it) },
+                onResetSpeed = { actions.resetSpeedToDefault() },
                 onCycleDecoder = { actions.cycleDecoderMode() },
                 onVolumeChange = { v ->
                     gestures.startVol.intValue = (v * audioManager

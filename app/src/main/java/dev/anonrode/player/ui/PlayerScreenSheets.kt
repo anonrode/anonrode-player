@@ -45,12 +45,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Equalizer
@@ -63,6 +67,8 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.DropdownMenu
@@ -315,7 +321,7 @@ private const val DRAWER_DISMISS_DISPLACEMENT_DP = 72f
 private const val DRAWER_DISMISS_VELOCITY_DPS = 800f
 
 /** Max panel width — dragging past it guarantees a full off-screen exit. */
-private const val DRAWER_PANEL_MAX_WIDTH_DP = 380f
+private const val DRAWER_PANEL_MAX_WIDTH_DP = 350f
 
 /**
  * Common Right Slide-In Drawer Shell with buttery cubic-bezier physics,
@@ -328,6 +334,7 @@ internal fun PlayerSlideInDrawer(
     title: String,
     subtitle: String? = null,
     headerTrailing: @Composable (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -390,9 +397,9 @@ internal fun PlayerSlideInDrawer(
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
-                        .widthIn(min = 320.dp, max = 380.dp)
+                        .width(350.dp)
                         .clip(RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
-                        .background(Color(0xFF0C1017).copy(alpha = 0.98f))
+                        .background(Color(0xD60E1117))
                         .border(
                             1.dp,
                             Color.White.copy(alpha = 0.10f),
@@ -464,24 +471,43 @@ internal fun PlayerSlideInDrawer(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = title,
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            if (subtitle != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            if (onBack != null) {
+                                IconButton(
+                                    onClick = onBack,
+                                    modifier = Modifier.size(36.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Column {
                                 Text(
-                                    text = subtitle,
-                                    color = Color(0xFF94A3B8),
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.Medium,
+                                    text = title,
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                                if (subtitle != null) {
+                                    Text(
+                                        text = subtitle,
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
 
@@ -580,19 +606,19 @@ internal fun PlayerPlaylistDrawer(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 58.dp)
+                            .height(60.dp)
                             .graphicsLayer { translationY = if (isDragged) dragAccum else 0f }
                             .zIndex(if (isDragged) 1f else 0f)
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(10.dp))
                             .background(if (isPlaying) accent.container else Color.Transparent)
                             .clickable {
                                 onSelectEpisode(video)
                                 onDismiss()
                             }
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Left active indicator (flat rows, board C/F law).
+                        // Left active indicator
                         if (isPlaying) {
                             Box(
                                 modifier = Modifier
@@ -601,18 +627,17 @@ internal fun PlayerPlaylistDrawer(
                                     .clip(RoundedCornerShape(2.dp))
                                     .background(accent.primary)
                             )
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(6.dp))
                         } else {
-                            Spacer(Modifier.width(10.5.dp))
+                            Spacer(Modifier.width(8.5.dp))
                         }
 
-                        // Thumb: the shared hue-art frame with the duration
-                        // pill bottom-right (J1 law); equalizer when playing.
-                        Box(modifier = Modifier.size(width = 64.dp, height = 40.dp)) {
+                        // Thumb: 72.dp x 42.dp (16:9) with duration pill bottom-right
+                        Box(modifier = Modifier.size(width = 72.dp, height = 42.dp)) {
                             PosterArt(
                                 title = video.title,
                                 modifier = Modifier.fillMaxSize(),
-                                cornerRadius = 8.dp,
+                                cornerRadius = 6.dp,
                                 videoUri = video.uri,
                                 durationMs = video.durationMs,
                             )
@@ -635,15 +660,15 @@ internal fun PlayerPlaylistDrawer(
                                     style = Tnum,
                                     modifier = Modifier
                                         .align(Alignment.BottomEnd)
-                                        .padding(3.dp)
-                                        .clip(RoundedCornerShape(5.dp))
+                                        .padding(2.dp)
+                                        .clip(RoundedCornerShape(4.dp))
                                         .background(Color.Black.copy(alpha = 0.72f))
-                                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                                        .padding(horizontal = 4.dp, vertical = 1.dp),
                                 )
                             }
                         }
 
-                        Spacer(Modifier.width(12.dp))
+                        Spacer(Modifier.width(10.dp))
 
                         Column(
                             modifier = Modifier.weight(1f)
@@ -651,15 +676,16 @@ internal fun PlayerPlaylistDrawer(
                             Text(
                                 text = video.title,
                                 color = if (isPlaying) accent.primary else Color(0xFFF8FAFC),
-                                fontSize = 13.sp,
+                                fontSize = 12.sp,
                                 fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Medium,
-                                maxLines = 1,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
+                                lineHeight = 15.sp,
                             )
                             Text(
                                 text = "Episode ${index + 1}",
                                 color = if (isPlaying) accent.primary.copy(alpha = 0.8f) else Color(0xFF78787F),
-                                fontSize = 10.5.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Normal,
                             )
                         }
@@ -683,7 +709,7 @@ internal fun PlayerPlaylistDrawer(
                                             rowHeightPx = if (measured > 0f) {
                                                 measured + 8.dp.toPx()
                                             } else {
-                                                58.dp.toPx() + 8.dp.toPx()
+                                                60.dp.toPx() + 8.dp.toPx()
                                             }
                                             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                                         },
@@ -823,6 +849,89 @@ private fun SyncStepDisc(
     }
 }
 
+private enum class SubDrawerPage { MAIN, TRACKS, ADJUSTMENT, STYLE }
+
+@Composable
+private fun SubtitleNavRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    accent: PlayerAccentTokens,
+    trailingText: String? = null,
+    trailingTextColor: Color = Color.White,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.04f))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.4f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = subtitle,
+                    color = Color(0xFF94A3B8),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (trailingText != null) {
+                Text(
+                    text = trailingText,
+                    color = trailingTextColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    style = Tnum,
+                    modifier = Modifier.padding(end = 6.dp),
+                )
+            }
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = Color(0xFF64748B),
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
 @Composable
 internal fun PlayerSubtitleDrawer(
     visible: Boolean,
@@ -842,10 +951,20 @@ internal fun PlayerSubtitleDrawer(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var currentPage by remember(visible) { mutableStateOf(SubDrawerPage.MAIN) }
+
+    val drawerTitle = when (currentPage) {
+        SubDrawerPage.MAIN -> "Subtitle"
+        SubDrawerPage.TRACKS -> "Subtitle Tracks"
+        SubDrawerPage.ADJUSTMENT -> "Subtitle Adjustment"
+        SubDrawerPage.STYLE -> "Subtitle Style"
+    }
+
     PlayerSlideInDrawer(
         visible = visible,
         onDismiss = onDismiss,
-        title = "Subtitle",
+        title = drawerTitle,
+        onBack = if (currentPage != SubDrawerPage.MAIN) { { currentPage = SubDrawerPage.MAIN } } else null,
         headerTrailing = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -873,409 +992,446 @@ internal fun PlayerSubtitleDrawer(
         },
         modifier = modifier,
     ) {
-        val scrollState = rememberScrollState()
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            // Section 1: CURRENT SUBTITLE TRACKS
-            Text(
-                text = "CURRENT SUBTITLE",
-                color = Color(0xFF64748B),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp,
-            )
-
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                // Active Track Radio Row — the label is the host's real
-                // subtitle-source choice; a neutral placeholder when no
-                // label is known (never a fabricated track name).
-                val activeTrackText = currentChoiceLabel?.takeIf { it.isNotBlank() }
-                    ?: "Selected subtitle track"
-                Row(
+        when (currentPage) {
+            SubDrawerPage.MAIN -> {
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 46.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (showCC) accent.container else Color.White.copy(alpha = 0.04f))
-                        .border(
-                            1.dp,
-                            if (showCC) accent.border else Color.White.copy(alpha = 0.08f),
-                            RoundedCornerShape(10.dp)
-                        )
-                        .clickable { if (!showCC) onToggleShowCC() }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clip(CircleShape)
-                                .border(1.5.dp, if (showCC) accent.primary else Color(0xFF64748B), CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (showCC) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(accent.primary)
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            text = activeTrackText,
-                            color = if (showCC) accent.primary else Color(0xFFE2E8F0),
-                            fontSize = 12.5.sp,
-                            fontWeight = if (showCC) FontWeight.SemiBold else FontWeight.Normal,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                    val activeTrackText = if (showCC) {
+                        currentChoiceLabel?.takeIf { it.isNotBlank() } ?: "Selected subtitle track"
+                    } else {
+                        "None (Off)"
                     }
+                    val offsetSec = abs(offsetMs) / 1000f
+                    val sign = if (offsetMs > 0L) "+" else if (offsetMs < 0L) "-" else ""
+                    val offsetText = "${sign}%.2fs".format(offsetSec)
 
-                    if (showCC) {
-                        Icon(
-                            imageVector = Icons.Filled.Check,
-                            contentDescription = "Selected",
-                            tint = accent.primary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
+                    // 1. Current subtitle
+                    SubtitleNavRow(
+                        title = "Current subtitle",
+                        subtitle = activeTrackText,
+                        icon = Icons.Filled.ClosedCaption,
+                        accent = accent,
+                        onClick = { currentPage = SubDrawerPage.TRACKS },
+                    )
 
-                // None (Off) Row
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 44.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (!showCC) accent.container else Color.White.copy(alpha = 0.04f))
-                        .border(
-                            1.dp,
-                            if (!showCC) accent.border else Color.White.copy(alpha = 0.08f),
-                            RoundedCornerShape(10.dp)
-                        )
-                        .clickable { if (showCC) onToggleShowCC() }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clip(CircleShape)
-                                .border(1.5.dp, if (!showCC) accent.primary else Color(0xFF64748B), CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (!showCC) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(accent.primary)
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            text = "None (Off)",
-                            color = if (!showCC) accent.primary else Color(0xFF94A3B8),
-                            fontSize = 12.5.sp,
-                            fontWeight = if (!showCC) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                    }
+                    // 2. Open file
+                    SubtitleNavRow(
+                        title = "Open file",
+                        subtitle = ".srt, .ass, .vtt sidecars",
+                        icon = Icons.Filled.FolderOpen,
+                        accent = accent,
+                        onClick = {
+                            onOpenLocalFile()
+                            onDismiss()
+                        },
+                    )
 
-                    if (!showCC) {
-                        Icon(
-                            imageVector = Icons.Filled.Check,
-                            contentDescription = "Selected",
-                            tint = accent.primary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
+                    // 3. Online download / Auto-Sync
+                    SubtitleNavRow(
+                        title = "Online download / Auto-Sync",
+                        subtitle = "Fingerprint audio & online search",
+                        icon = Icons.Filled.Sync,
+                        accent = accent,
+                        onClick = { onResync() },
+                    )
+
+                    // 4. Adjustment
+                    SubtitleNavRow(
+                        title = "Adjustment",
+                        subtitle = "Sync calibration & offset",
+                        trailingText = offsetText,
+                        trailingTextColor = if (offsetMs != 0L) accent.primary else Color(0xFF94A3B8),
+                        icon = Icons.Filled.GraphicEq,
+                        accent = accent,
+                        onClick = { currentPage = SubDrawerPage.ADJUSTMENT },
+                    )
+
+                    // 5. Subtitle style
+                    SubtitleNavRow(
+                        title = "Subtitle style",
+                        subtitle = "Size, color, position, weight",
+                        icon = Icons.Filled.FontDownload,
+                        accent = accent,
+                        onClick = { currentPage = SubDrawerPage.STYLE },
+                    )
                 }
             }
+            SubDrawerPage.TRACKS -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = "AVAILABLE TRACKS",
+                        color = Color(0xFF64748B),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp,
+                    )
 
-            // Section 2: SYNC (the law: sync section comes FIRST, before any
-            // file/open or style actions — design hub 6.2/7.4)
-            Text(
-                text = "SYNC",
-                color = Color(0xFF64748B),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp,
-            )
+                    val activeTrackText = currentChoiceLabel?.takeIf { it.isNotBlank() }
+                        ?: "Selected subtitle track"
 
-            // Sync Subtitle Card (audio-fingerprint calibration). The live
-            // offset readout is the same host wiring the dock HUD reads
-            // (PlayerScreen passes [offsetMs] from liveOffsetMs) — one
-            // source of truth, never a second one.
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color.White.copy(alpha = 0.04f))
-                    .border(1.dp, accent.border.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                    .padding(12.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Active Track Radio Row
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (showCC) accent.container else Color.White.copy(alpha = 0.04f))
+                            .border(
+                                1.dp,
+                                if (showCC) accent.border else Color.White.copy(alpha = 0.08f),
+                                RoundedCornerShape(10.dp)
+                            )
+                            .clickable { if (!showCC) onToggleShowCC() }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clip(CircleShape)
+                                    .border(1.5.dp, if (showCC) accent.primary else Color(0xFF64748B), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (showCC) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(accent.primary)
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = activeTrackText,
+                                color = if (showCC) accent.primary else Color(0xFFE2E8F0),
+                                fontSize = 12.5.sp,
+                                fontWeight = if (showCC) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+
+                        if (showCC) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = "Selected",
+                                tint = accent.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    // None (Off) Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (!showCC) accent.container else Color.White.copy(alpha = 0.04f))
+                            .border(
+                                1.dp,
+                                if (!showCC) accent.border else Color.White.copy(alpha = 0.08f),
+                                RoundedCornerShape(10.dp)
+                            )
+                            .clickable { if (showCC) onToggleShowCC() }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Filled.Sync,
-                                contentDescription = null,
-                                tint = accent.primary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clip(CircleShape)
+                                    .border(1.5.dp, if (!showCC) accent.primary else Color(0xFF64748B), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (!showCC) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(accent.primary)
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(10.dp))
                             Text(
-                                text = "Sync Subtitle",
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                text = "None (Off)",
+                                color = if (!showCC) accent.primary else Color(0xFF94A3B8),
+                                fontSize = 12.5.sp,
+                                fontWeight = if (!showCC) FontWeight.SemiBold else FontWeight.Normal,
                             )
                         }
 
-                        val sign = if (offsetMs > 0L) "+" else if (offsetMs < 0L) "-" else ""
-                        val offsetSec = abs(offsetMs) / 1000f
-                        Text(
-                            text = "${sign}%.2fs".format(offsetSec),
-                            color = if (offsetMs != 0L) accent.primary else Color(0xFF94A3B8),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            style = Tnum,
-                        )
+                        if (!showCC) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = "Selected",
+                                tint = accent.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
 
-                    // Round steppers [-0.1s] / [+0.1s] — one nudge per tap,
-                    // hold 400ms then repeat every 150ms until release
-                    // (see SyncStepDisc). Manual offset stays the user's
-                    // absolute authority; the engine itself is untouched.
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally),
+                    Spacer(Modifier.height(12.dp))
+
+                    // Open local file button
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(10.dp))
+                            .clickable {
+                                onOpenLocalFile()
+                                onDismiss()
+                            },
+                        contentAlignment = Alignment.Center,
                     ) {
-                        SyncStepDisc(
-                            glyph = "−",
-                            label = "−0.1s",
-                            accentColor = accent.primary,
-                            onStep = { onNudge(-100L) },
-                        )
-                        SyncStepDisc(
-                            glyph = "+",
-                            label = "+0.1s",
-                            accentColor = accent.primary,
-                            onStep = { onNudge(100L) },
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.FolderOpen, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Open local file...", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+                        }
                     }
+                }
+            }
+            SubDrawerPage.ADJUSTMENT -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.White.copy(alpha = 0.04f))
+                            .border(1.dp, accent.border.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                            .padding(14.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Sync,
+                                        contentDescription = null,
+                                        tint = accent.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "Sync Subtitle",
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
 
-                    // Continuous Slider (-5.0s to +5.0s)
-                    HairlineSlider(
-                        value = (offsetMs / 1000f).coerceIn(-5f, 5f),
-                        onValueChange = { newVal ->
-                            val diff = (newVal * 1000f).toLong() - offsetMs
-                            onNudge(diff)
+                                val sign = if (offsetMs > 0L) "+" else if (offsetMs < 0L) "-" else ""
+                                val offsetSec = abs(offsetMs) / 1000f
+                                Text(
+                                    text = "${sign}%.2fs".format(offsetSec),
+                                    color = if (offsetMs != 0L) accent.primary else Color(0xFF94A3B8),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    style = Tnum,
+                                )
+                            }
+
+                            // Steppers [-0.1s] / [+0.1s]
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally),
+                            ) {
+                                SyncStepDisc(
+                                    glyph = "−",
+                                    label = "−0.1s",
+                                    accentColor = accent.primary,
+                                    onStep = { onNudge(-100L) },
+                                )
+                                SyncStepDisc(
+                                    glyph = "+",
+                                    label = "+0.1s",
+                                    accentColor = accent.primary,
+                                    onStep = { onNudge(100L) },
+                                )
+                            }
+
+                            // Continuous Slider (-5.0s to +5.0s)
+                            HairlineSlider(
+                                value = (offsetMs / 1000f).coerceIn(-5f, 5f),
+                                onValueChange = { newVal ->
+                                    val diff = (newVal * 1000f).toLong() - offsetMs
+                                    onNudge(diff)
+                                },
+                                valueRange = -5f..5f,
+                                trackActive = accent.primary,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+
+                            // Reset & Resync buttons
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color.White.copy(alpha = 0.05f))
+                                        .clickable { onResetOffset() },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Filled.Refresh, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Reset (0s)", color = Color(0xFF94A3B8), fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+                                    }
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(accent.container)
+                                        .border(1.dp, accent.border, RoundedCornerShape(8.dp))
+                                        .clickable { onResync() },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Filled.Sync, null, tint = accent.primary, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Resync", color = accent.primary, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            SubDrawerPage.STYLE -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    TrayRow(
+                        label = "Position",
+                        accent = accent.primary,
+                        options = SubtitlePosition.entries.map { it.label },
+                        selectedLabel = style.position.label,
+                        onSelect = { label ->
+                            SubtitlePosition.entries.firstOrNull { it.label == label }
+                                ?.let { onStyleChanged(style.copy(position = it)) }
                         },
-                        valueRange = -5f..5f,
-                        trackActive = accent.primary,
-                        modifier = Modifier.fillMaxWidth(),
                     )
-
-                    // Reset & Resync
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(34.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.White.copy(alpha = 0.05f))
-                                .clickable { onResetOffset() },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Refresh, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Reset (0s)", color = Color(0xFF94A3B8), fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(34.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(accent.container)
-                                .border(1.dp, accent.border, RoundedCornerShape(8.dp))
-                                .clickable { onResync() },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Sync, null, tint = accent.primary, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Resync", color = accent.primary, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
+                    TrayRow(
+                        label = "Size",
+                        accent = accent.primary,
+                        options = SubtitleSize.entries.map { it.label },
+                        selectedLabel = style.size.label,
+                        onSelect = { label ->
+                            SubtitleSize.entries.firstOrNull { it.label == label }
+                                ?.let { onStyleChanged(style.copy(size = it)) }
+                        },
+                    )
+                    TrayRow(
+                        label = "Colour",
+                        accent = accent.primary,
+                        options = SubtitleColor.entries.map { it.label },
+                        selectedLabel = style.color.label,
+                        onSelect = { label ->
+                            SubtitleColor.entries.firstOrNull { it.label == label }
+                                ?.let { onStyleChanged(style.copy(color = it)) }
+                        },
+                    )
+                    TrayRow(
+                        label = "Weight",
+                        accent = accent.primary,
+                        options = listOf("Bold", "Regular"),
+                        selectedLabel = if (style.bold) "Bold" else "Regular",
+                        onSelect = { label -> onStyleChanged(style.copy(bold = label == "Bold")) },
+                    )
                 }
             }
-
-            // Section 3: OPEN & STYLE (after the SYNC section, per hub 6.2)
-            Text(
-                text = "OPEN & STYLE",
-                color = Color(0xFF64748B),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp,
-            )
-
-            // Open Local File
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.04f))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                    .clickable {
-                        onOpenLocalFile()
-                        onDismiss()
-                    }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.FolderOpen, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text("Open File", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        Text(".srt, .ass, .vtt sidecars", color = Color(0xFF64748B), fontSize = 10.5.sp)
-                    }
-                }
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color(0xFF64748B), modifier = Modifier.size(16.dp))
-            }
-
-            // ── APPEARANCE (hub 6.6 merge + design D): the style controls
-            //    live IN the drawer now — the separate inline tray is
-            //    retired, so the cue stays visible while every dimension is
-            //    tuned and there is no second surface to open.
-            Text(
-                text = "APPEARANCE",
-                color = Color(0xFF78787F),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.4.sp,
-                modifier = Modifier.padding(top = 18.dp, bottom = 6.dp),
-            )
-            TrayRow(
-                label = "Position",
-                accent = accent.primary,
-                options = SubtitlePosition.entries.map { it.label },
-                selectedLabel = style.position.label,
-                onSelect = { label ->
-                    SubtitlePosition.entries.firstOrNull { it.label == label }
-                        ?.let { onStyleChanged(style.copy(position = it)) }
-                },
-            )
-            Spacer(Modifier.height(10.dp))
-            TrayRow(
-                label = "Size",
-                accent = accent.primary,
-                options = SubtitleSize.entries.map { it.label },
-                selectedLabel = style.size.label,
-                onSelect = { label ->
-                    SubtitleSize.entries.firstOrNull { it.label == label }
-                        ?.let { onStyleChanged(style.copy(size = it)) }
-                },
-            )
-            Spacer(Modifier.height(10.dp))
-            TrayRow(
-                label = "Colour",
-                accent = accent.primary,
-                options = SubtitleColor.entries.map { it.label },
-                selectedLabel = style.color.label,
-                onSelect = { label ->
-                    SubtitleColor.entries.firstOrNull { it.label == label }
-                        ?.let { onStyleChanged(style.copy(color = it)) }
-                },
-            )
-            Spacer(Modifier.height(10.dp))
-            TrayRow(
-                label = "Weight",
-                accent = accent.primary,
-                options = listOf("Bold", "Regular"),
-                selectedLabel = if (style.bold) "Bold" else "Regular",
-                onSelect = { label -> onStyleChanged(style.copy(bold = label == "Bold")) },
-            )
-            Spacer(Modifier.height(8.dp))
         }
     }
 }
 
-private data class GridActionItem(
-    val title: String,
-    val icon: ImageVector,
-    val active: Boolean,
-    val onClick: () -> Unit,
-)
-
 @Composable
-private fun SettingsGridTile(
-    item: GridActionItem,
+private fun SettingsCircleTool(
+    icon: ImageVector,
+    label: String,
+    active: Boolean = false,
     accent: PlayerAccentTokens,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val bg = if (item.active) accent.container else Color.White.copy(alpha = 0.05f)
-    val border = if (item.active) accent.border else Color.White.copy(alpha = 0.08f)
-    val tint = if (item.active) accent.primary else Color(0xFFE2E8F0)
-
-    Box(
+    Column(
         modifier = modifier
-            .height(64.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(bg)
-            .border(1.dp, border, RoundedCornerShape(12.dp))
-            .clickable { item.onClick() }
-            .padding(8.dp),
-        contentAlignment = Alignment.Center,
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (active) accent.primary else Color.Black.copy(alpha = 0.55f))
+                .border(
+                    1.dp,
+                    if (active) accent.border else Color.White.copy(alpha = 0.12f),
+                    CircleShape,
+                ),
+            contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = item.icon,
-                contentDescription = item.title,
-                tint = tint,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = item.title,
-                color = tint,
-                fontSize = 11.sp,
-                fontWeight = if (item.active) FontWeight.Bold else FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                imageVector = icon,
+                contentDescription = label,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp),
             )
         }
+        Spacer(Modifier.height(5.dp))
+        Text(
+            text = label,
+            color = if (active) accent.primary else Color(0xFFCBD5E1),
+            fontSize = 11.sp,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -1283,11 +1439,13 @@ private fun SettingsGridTile(
  * Tier 2: Player v5 Settings Drawer (replacing the old floating popup).
  *
  * Full-height right slide-in sheet with:
- * - 4x2 Quick Action Grid (A-B Repeat, Night Mode, Background Play, Audio Boost, Screen Lock, Sleep Timer, Screenshot, Equalizer)
- * - Playback Mode / Loop Switcher (Off | All | One)
- * - Audio Decoder Pipeline (HW | HW+ | SW)
- * - Volume & Brightness precision sliders
- * - Full App Settings link (→)
+ * - 4x2 Quick Action Grid (Audio Track, Subtitle, Background, PiP / Float, Screen Rotate, Screenshot, Screen Lock, Sleep Timer)
+ * - 4x1 Play option Grid (A-B Repeat, Equalizer, Night Mode, Audio Boost)
+ * - Repeat Mode & Shuffle compact inline row
+ * - Speed Slider (0.25x - 4.0x) + preset chips + Reset
+ * - Compact single-line Volume and Brightness sliders
+ * - Audio Decoder Pipeline (HW+SW | HW | SW)
+ * - Full App Settings button
  */
 @Composable
 internal fun PlayerSettingsDrawer(
@@ -1299,19 +1457,28 @@ internal fun PlayerSettingsDrawer(
     volumeBoost: Int = 0,
     sleepMinutes: Int = 0,
     equalizerOn: Boolean = false,
+    shuffleOn: Boolean = false,
     repeatModeLabel: String = "OFF",
     decoderModeLabel: String = "HW+SW",
+    currentSpeed: Float = 1.0f,
     currentVolume: Float = 0.7f,
     currentBrightness: Float = 0.5f,
-    onAbRepeat: () -> Unit = {},
-    onNightMode: () -> Unit = {},
+    onAudioTrack: () -> Unit = {},
+    onSubtitle: () -> Unit = {},
     onBackgroundPlay: () -> Unit = {},
-    onVolumeBoost: () -> Unit = {},
+    onPip: () -> Unit = {},
+    onScreenRotate: () -> Unit = {},
+    onScreenshot: () -> Unit = {},
     onLockScreen: () -> Unit = {},
     onSleepTimer: () -> Unit = {},
-    onScreenshot: () -> Unit = {},
+    onAbRepeat: () -> Unit = {},
     onEqualizer: () -> Unit = {},
+    onNightMode: () -> Unit = {},
+    onVolumeBoost: () -> Unit = {},
+    onShuffle: () -> Unit = {},
     onCycleRepeat: () -> Unit = {},
+    onSpeedChange: (Float) -> Unit = {},
+    onResetSpeed: () -> Unit = {},
     onCycleDecoder: () -> Unit = {},
     onVolumeChange: (Float) -> Unit = {},
     onBrightnessChange: (Float) -> Unit = {},
@@ -1330,217 +1497,425 @@ internal fun PlayerSettingsDrawer(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // Section 1: 4x2 Quick Action Grid
+            // 1. Top Quick-Tools Grid (4 Columns x 2 Rows)
             Text(
-                text = "QUICK ACTIONS",
+                text = "QUICK TOOLS",
                 color = Color(0xFF64748B),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.8.sp,
             )
 
-            val gridItems = listOf(
-                GridActionItem("A-B Repeat", Icons.Filled.RepeatOne, abActive) { onAbRepeat() },
-                GridActionItem("Night Mode", Icons.Filled.Bedtime, nightMode) { onNightMode() },
-                GridActionItem("Background", Icons.Filled.Headphones, backgroundPlay) { onBackgroundPlay() },
-                GridActionItem(if (volumeBoost > 0) "+$volumeBoost% Boost" else "Audio Boost", Icons.AutoMirrored.Filled.VolumeUp, volumeBoost > 0) { onVolumeBoost() },
-                GridActionItem("Screen Lock", Icons.Filled.Lock, false) { onLockScreen(); onDismiss() },
-                GridActionItem(if (sleepMinutes > 0) "${sleepMinutes}m Sleep" else "Sleep Timer", Icons.Filled.Timer, sleepMinutes > 0) { onSleepTimer() },
-                GridActionItem("Screenshot", Icons.Filled.PhotoCamera, false) { onScreenshot(); onDismiss() },
-                GridActionItem("Equalizer", Icons.Filled.Equalizer, equalizerOn) { onEqualizer() },
+            // Row 1: Audio Track | Subtitle | Background | PiP / Float
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                SettingsCircleTool(
+                    icon = Icons.Filled.GraphicEq,
+                    label = "Audio Track",
+                    accent = accent,
+                    onClick = onAudioTrack,
+                    modifier = Modifier.weight(1f),
+                )
+                SettingsCircleTool(
+                    icon = Icons.Filled.ClosedCaption,
+                    label = "Subtitle",
+                    accent = accent,
+                    onClick = onSubtitle,
+                    modifier = Modifier.weight(1f),
+                )
+                SettingsCircleTool(
+                    icon = Icons.Filled.Headphones,
+                    label = "Background",
+                    active = backgroundPlay,
+                    accent = accent,
+                    onClick = onBackgroundPlay,
+                    modifier = Modifier.weight(1f),
+                )
+                SettingsCircleTool(
+                    icon = Icons.Filled.CropFree,
+                    label = "PiP / Float",
+                    accent = accent,
+                    onClick = onPip,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            // Row 2: Screen Rotate | Screenshot | Screen Lock | Sleep Timer
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                SettingsCircleTool(
+                    icon = Icons.Filled.ScreenRotation,
+                    label = "Rotate",
+                    accent = accent,
+                    onClick = onScreenRotate,
+                    modifier = Modifier.weight(1f),
+                )
+                SettingsCircleTool(
+                    icon = Icons.Filled.PhotoCamera,
+                    label = "Screenshot",
+                    accent = accent,
+                    onClick = {
+                        onScreenshot()
+                        onDismiss()
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                SettingsCircleTool(
+                    icon = Icons.Filled.Lock,
+                    label = "Lock",
+                    accent = accent,
+                    onClick = {
+                        onLockScreen()
+                        onDismiss()
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                SettingsCircleTool(
+                    icon = Icons.Filled.Timer,
+                    label = if (sleepMinutes > 0) "${sleepMinutes}m" else "Sleep",
+                    active = sleepMinutes > 0,
+                    accent = accent,
+                    onClick = onSleepTimer,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            // 2. Play option Row (4 Columns x 1 Row)
+            Text(
+                text = "Play option",
+                color = Color(0xFF64748B),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp,
             )
 
-            for (i in 0 until gridItems.size step 2) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                SettingsCircleTool(
+                    icon = Icons.Filled.RepeatOne,
+                    label = "A-B Repeat",
+                    active = abActive,
+                    accent = accent,
+                    onClick = onAbRepeat,
+                    modifier = Modifier.weight(1f),
+                )
+                SettingsCircleTool(
+                    icon = Icons.Filled.Equalizer,
+                    label = "Equalizer",
+                    active = equalizerOn,
+                    accent = accent,
+                    onClick = onEqualizer,
+                    modifier = Modifier.weight(1f),
+                )
+                SettingsCircleTool(
+                    icon = Icons.Filled.Bedtime,
+                    label = "Night Mode",
+                    active = nightMode,
+                    accent = accent,
+                    onClick = onNightMode,
+                    modifier = Modifier.weight(1f),
+                )
+                SettingsCircleTool(
+                    icon = Icons.AutoMirrored.Filled.VolumeUp,
+                    label = if (volumeBoost > 0) "+$volumeBoost% Boost" else "Boost",
+                    active = volumeBoost > 0,
+                    accent = accent,
+                    onClick = onVolumeBoost,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            // 3. Compact Sliders & Decoder Pills Below Grid
+            // Repeat & Shuffle Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Repeat Mode Segmented Control
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                        .padding(2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    listOf("OFF", "ALL", "ONE").forEach { mode ->
+                        val isModeSelected = repeatModeLabel.equals(mode, ignoreCase = true) ||
+                            (mode == "OFF" && (repeatModeLabel.isBlank() || repeatModeLabel.equals("OFF", ignoreCase = true)))
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isModeSelected) accent.primary else Color.Transparent)
+                                .clickable { onCycleRepeat() },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = mode,
+                                color = if (isModeSelected) accent.onAccent else Color(0xFF94A3B8),
+                                fontSize = 11.sp,
+                                fontWeight = if (isModeSelected) FontWeight.Bold else FontWeight.Medium,
+                            )
+                        }
+                    }
+                }
+
+                // Shuffle Chip
+                Box(
+                    modifier = Modifier
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (shuffleOn) accent.container else Color.White.copy(alpha = 0.05f))
+                        .border(
+                            1.dp,
+                            if (shuffleOn) accent.border else Color.White.copy(alpha = 0.08f),
+                            RoundedCornerShape(8.dp)
+                        )
+                        .clickable { onShuffle() }
+                        .padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.Shuffle,
+                            contentDescription = "Shuffle",
+                            tint = if (shuffleOn) accent.primary else Color(0xFF94A3B8),
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Shuffle",
+                            color = if (shuffleOn) accent.primary else Color(0xFF94A3B8),
+                            fontSize = 11.sp,
+                            fontWeight = if (shuffleOn) FontWeight.Bold else FontWeight.Medium,
+                        )
+                    }
+                }
+            }
+
+            // Speed Slider & Preset Chips
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    val item1 = gridItems[i]
-                    val item2 = gridItems.getOrNull(i + 1)
-
-                    SettingsGridTile(
-                        item = item1,
-                        accent = accent,
-                        modifier = Modifier.weight(1f)
+                    Text(
+                        text = "Speed",
+                        color = Color(0xFFCBD5E1),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
                     )
-
-                    if (item2 != null) {
-                        SettingsGridTile(
-                            item = item2,
-                            accent = accent,
-                            modifier = Modifier.weight(1f)
-                        )
-                    } else {
-                        Spacer(Modifier.weight(1f))
-                    }
-                }
-            }
-
-            // Section 2: Repeat Mode Segmented Control
-            Text(
-                text = "REPEAT MODE",
-                color = Color(0xFF64748B),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp,
-            )
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.White.copy(alpha = 0.05f))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(10.dp))
-                    .padding(3.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                listOf("OFF", "ALL", "ONE").forEach { mode ->
-                    val isModeSelected = repeatModeLabel.equals(mode, ignoreCase = true) ||
-                        (mode == "OFF" && (repeatModeLabel.isBlank() || repeatModeLabel.equals("OFF", ignoreCase = true)))
-
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (isModeSelected) accent.primary else Color.Transparent)
-                            .clickable { onCycleRepeat() },
-                        contentAlignment = Alignment.Center,
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = mode,
-                            color = if (isModeSelected) accent.onAccent else Color(0xFF94A3B8),
-                            fontSize = 11.5.sp,
-                            fontWeight = if (isModeSelected) FontWeight.Bold else FontWeight.Medium,
+                            text = "%.2fx".format(currentSpeed),
+                            color = accent.primary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            style = Tnum,
                         )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Reset",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.White.copy(alpha = 0.06f))
+                                .clickable { onResetSpeed() }
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+
+                HairlineSlider(
+                    value = currentSpeed.coerceIn(0.25f, 4.0f),
+                    onValueChange = onSpeedChange,
+                    valueRange = 0.25f..4.0f,
+                    trackActive = accent.primary,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    listOf(0.5f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { preset ->
+                        val isSelected = abs(currentSpeed - preset) < 0.04f
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(28.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isSelected) accent.container else Color.White.copy(alpha = 0.04f))
+                                .border(
+                                    1.dp,
+                                    if (isSelected) accent.border else Color.White.copy(alpha = 0.06f),
+                                    RoundedCornerShape(6.dp)
+                                )
+                                .clickable { onSpeedChange(preset) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "${preset}x",
+                                color = if (isSelected) accent.primary else Color(0xFF94A3B8),
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                style = Tnum,
+                            )
+                        }
                     }
                 }
             }
 
-            // Section 3: Audio Decoder Pipeline
-            Text(
-                text = "DECODER PROFILE",
-                color = Color(0xFF64748B),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp,
-            )
+            // Compact single-line Volume and Brightness
+            // Volume
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = null,
+                    tint = Color(0xFF94A3B8),
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = "Vol",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.width(24.dp),
+                )
+                Box(modifier = Modifier.weight(1f)) {
+                    HairlineSlider(
+                        value = currentVolume.coerceIn(0f, 1f),
+                        onValueChange = onVolumeChange,
+                        valueRange = 0f..1f,
+                        trackActive = accent.primary,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Text(
+                    text = "${(currentVolume * 100).toInt()}%",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    style = Tnum,
+                    modifier = Modifier.width(36.dp),
+                )
+            }
+
+            // Brightness
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Brightness6,
+                    contentDescription = null,
+                    tint = Color(0xFF94A3B8),
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = "Bri",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.width(24.dp),
+                )
+                Box(modifier = Modifier.weight(1f)) {
+                    HairlineSlider(
+                        value = currentBrightness.coerceIn(0f, 1f),
+                        onValueChange = onBrightnessChange,
+                        valueRange = 0f..1f,
+                        trackActive = accent.primary,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Text(
+                    text = "${(currentBrightness * 100).toInt()}%",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    style = Tnum,
+                    modifier = Modifier.width(36.dp),
+                )
+            }
+
+            // Decoder Selector
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "DECODER",
+                    color = Color(0xFF64748B),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.8.sp,
+                )
+            }
 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(Color.White.copy(alpha = 0.05f))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(10.dp))
-                    .padding(3.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                    .padding(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                // The running pipeline labels, truth first (hub 1.4): the
-                // selected segment is an EXACT match — the old substring
-                // check lit several segments at once for "HW+SW".
-                listOf("HW+SW", "APP", "SW").forEach { dec ->
-                    val isDecSelected = decoderModeLabel.equals(dec, ignoreCase = true)
+                listOf("HW+SW", "HW", "SW").forEach { dec ->
+                    val isSelected = decoderModeLabel.equals(dec, ignoreCase = true) ||
+                        (dec == "HW" && decoderModeLabel.equals("APP", ignoreCase = true))
 
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (isDecSelected) accent.primary else Color.Transparent)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isSelected) accent.primary else Color.Transparent)
                             .clickable { onCycleDecoder() },
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             text = dec,
-                            color = if (isDecSelected) accent.onAccent else Color(0xFF94A3B8),
-                            fontSize = 11.5.sp,
-                            fontWeight = if (isDecSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSelected) accent.onAccent else Color(0xFF94A3B8),
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                         )
                     }
                 }
             }
 
-            // Section 4: Volume & Brightness Sliders
-            Text(
-                text = "AUDIO & DISPLAY",
-                color = Color(0xFF64748B),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp,
-            )
-
-            // Volume Slider
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.AutoMirrored.Filled.VolumeUp, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Volume", color = Color(0xFFCBD5E1), fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    }
-                    Text(
-                        text = "${(currentVolume * 100).toInt()}%",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        style = Tnum,
-                    )
-                }
-                HairlineSlider(
-                    value = currentVolume.coerceIn(0f, 1f),
-                    onValueChange = onVolumeChange,
-                    valueRange = 0f..1f,
-                    trackActive = accent.primary,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-
-            // Brightness Slider
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Brightness6, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Brightness", color = Color(0xFFCBD5E1), fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    }
-                    Text(
-                        text = "${(currentBrightness * 100).toInt()}%",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        style = Tnum,
-                    )
-                }
-                HairlineSlider(
-                    value = currentBrightness.coerceIn(0f, 1f),
-                    onValueChange = onBrightnessChange,
-                    valueRange = 0f..1f,
-                    trackActive = accent.primary,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-
-            Spacer(Modifier.height(4.dp))
-
-            // Section 5: Full App Settings Link
+            // Full App Settings
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 46.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(accent.container)
-                    .border(1.dp, accent.border, RoundedCornerShape(12.dp))
+                    .border(1.dp, accent.border, RoundedCornerShape(10.dp))
                     .clickable {
                         onOpenFullSettings()
                         onDismiss()
@@ -1556,14 +1931,14 @@ internal fun PlayerSettingsDrawer(
                     Text(
                         text = "Full App Settings",
                         color = accent.primary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
                     )
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                         contentDescription = null,
                         tint = accent.primary,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(16.dp),
                     )
                 }
             }

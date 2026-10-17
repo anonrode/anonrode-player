@@ -1422,84 +1422,67 @@ private fun ProgressBar(palette: SkinPalette, fraction: Float, modifier: Modifie
 
 @Composable
 private fun ContinueCard(palette: SkinPalette, item: InProgressItem, onClick: () -> Unit) {
-    Column(
+    Box(
         modifier = Modifier
             .width(140.dp)
+            .height(80.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
     ) {
-        Box(
-            modifier = Modifier
-                .width(140.dp)
-                .height(80.dp)
-                .clip(RoundedCornerShape(8.dp)),
-        ) {
-            PosterArt(
-                title = item.video.title,
-                modifier = Modifier.fillMaxSize(),
-                cornerRadius = 8.dp,
-                videoUri = item.video.uri,
-                playbackPositionMs = item.positionMs,
-                durationMs = item.durationMs,
-            )
-            // Duration pill bottom-left: ▶ duration (AGENT.md 4.1).
-            val timeText = if (item.positionMs > 0L) fmtTime(item.positionMs) else fmtTime(item.durationMs)
-            if (timeText.isNotEmpty()) {
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(start = 6.dp, bottom = 7.dp),
-                    shape = RoundedCornerShape(4.dp),
-                    color = Color.Black.copy(alpha = 0.68f),
+        PosterArt(
+            title = item.video.title,
+            modifier = Modifier.fillMaxSize(),
+            cornerRadius = 8.dp,
+            videoUri = item.video.uri,
+            playbackPositionMs = item.positionMs,
+            durationMs = item.durationMs,
+        )
+        // Duration pill bottom-left: ▶ duration (AGENT.md 4.1).
+        val timeText = if (item.positionMs > 0L) fmtTime(item.positionMs) else fmtTime(item.durationMs)
+        if (timeText.isNotEmpty()) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 6.dp, bottom = 7.dp),
+                shape = RoundedCornerShape(4.dp),
+                color = Color.Black.copy(alpha = 0.68f),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "▶",
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
-                            modifier = Modifier.padding(end = 3.dp),
-                        )
-                        Text(
-                            text = timeText,
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 11.sp,
-                                fontFeatureSettings = "tnum",
-                                fontWeight = FontWeight.SemiBold,
-                            ),
-                        )
-                    }
+                    Text(
+                        text = "▶",
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                        modifier = Modifier.padding(end = 3.dp),
+                    )
+                    Text(
+                        text = timeText,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 11.sp,
+                            fontFeatureSettings = "tnum",
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
                 }
             }
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth(),
-            ) {
-                ProgressBar(palette, item.fraction)
-            }
         }
-        Text(
-            text = item.video.title,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-            ),
-            color = palette.text,
-            modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
-        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(),
+        ) {
+            ProgressBar(palette, item.fraction)
+        }
     }
 }
 
-/** High-density compact horizontal row card (~88.dp–96.dp height) fitting 5–6 per viewport. */
+/** High-density compact horizontal row card (~88.dp height) fitting 5–6 per viewport. */
 @Composable
 private fun SeriesCard(
     palette: SkinPalette,
@@ -1515,11 +1498,11 @@ private fun SeriesCard(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
         color = palette.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, palette.text.copy(alpha = 0.08f)),
         modifier = Modifier
             .fillMaxWidth()
-            .height(92.dp)
-            .padding(horizontal = Dimens.gapLg, vertical = 4.dp),
+            .padding(horizontal = Dimens.gapLg, vertical = 4.dp)
+            .height(88.dp),
     ) {
         Row(
             modifier = Modifier
@@ -1559,6 +1542,12 @@ private fun SeriesCard(
                         ),
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                     )
+                }
+                // Watched progress bar along bottom edge
+                if (series.totalEpisodes > 0 && series.totalWatched > 0) {
+                    Box(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                        ProgressBar(palette, series.totalWatched.toFloat() / series.totalEpisodes.toFloat())
+                    }
                 }
             }
 
@@ -1623,7 +1612,7 @@ private fun SeriesCard(
                 Icon(
                     imageVector = Icons.Filled.PlayArrow,
                     contentDescription = "Play Next",
-                    tint = Color.Black,
+                    tint = Color.White,
                     modifier = Modifier.size(22.dp),
                 )
             }

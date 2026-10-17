@@ -40,13 +40,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -185,72 +188,87 @@ internal fun PlayerScreenBottomBar(
                 if (it.height > 0) actions.ui.bottomBarHeightPx.intValue = it.height
             },
     ) {
-        // ── Non-blocking Resume Pill (hub 8.1) — rendered INSIDE the dock:
-        // it sits above the sync row and can never cover the scrubber again
-        // (the old activity-level overlay sat dead-center on the track). ──
+        // ── Inline Resume Prompt Pill: transient auto-hiding after 5 seconds ──
+        var resumePromptDismissed by remember(resumePillMs) { mutableStateOf(false) }
+        var showResumePrompt by remember(resumePillMs) { mutableStateOf(resumePillMs != null && resumePillMs > 0L) }
+        androidx.compose.runtime.LaunchedEffect(resumePillMs) {
+            if (resumePillMs != null && resumePillMs > 0L) {
+                showResumePrompt = true
+                kotlinx.coroutines.delay(5000L)
+                showResumePrompt = false
+            }
+        }
+
         androidx.compose.animation.AnimatedVisibility(
-            visible = visible && resumePillMs != null,
+            visible = visible && showResumePrompt && !resumePromptDismissed,
             enter = fadeIn(animationSpec = tween(180)) + slideInVertically(
                 animationSpec = tween(220),
                 initialOffsetY = { it / 2 },
             ),
             exit = fadeOut(animationSpec = tween(180)),
         ) {
-            if (resumePillMs != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp),
+                horizontalArrangement = Arrangement.Start,
+            ) {
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 6.dp),
-                    horizontalArrangement = Arrangement.Center,
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xD60E1117))
+                        .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Row(
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Dismiss",
+                        tint = Color.White.copy(alpha = 0.7f),
                         modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(Color(0xF50A0C10))
-                            // hair2 (14%) per the mockup `.resume` border.
-                            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
-                            .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        val totalSec = resumePillMs / 1000L
-                        Text(
-                            // Mockup `.resume`: wording in --fg, the tnum time
-                            // in --dim. 11.5sp.
-                            text = buildAnnotatedString {
-                                append("Resumed at ")
-                                withStyle(SpanStyle(color = Color(0xFFABABB2))) {
-                                    append("%d:%02d".format(totalSec / 60L, totalSec % 60L))
-                                }
+                            .size(16.dp)
+                            .clickable {
+                                resumePromptDismissed = true
+                                showResumePrompt = false
                             },
-                            color = Color.White,
-                            fontSize = 11.5.sp,
-                            style = Tnum,
-                        )
-                        Text(
-                            text = "Start over",
-                            // Mockup `.resume .act`: --fg text on white 5% with
-                            // a hair2 border, 10.5sp.
-                            color = Color.White,
-                            fontSize = 10.5.sp,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(Color.White.copy(alpha = 0.05f))
-                                .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
-                                .clickable {
-                                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                                    onStartOver()
-                                }
-                                .padding(horizontal = 11.dp, vertical = 6.dp),
-                        )
-                    }
+                    )
+                    Text(
+                        text = "Continue playing from where you stopped.",
+                        color = Color.White,
+                        fontSize = 11.5.sp,
+                    )
+                    Text(
+                        text = "Start Over",
+                        color = accent,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.5.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable {
+                                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                resumePromptDismissed = true
+                                showResumePrompt = false
+                                onStartOver()
+                            }
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
                 }
             }
         }
 
-        // ── Subtitle Sync Status Pill (Directly Above Scrubber Timeline) ──
+        // ── Subtitle Sync Status Pill (Transient: auto-hiding after 2.5 seconds) ──
+        var showSyncPill by remember { mutableStateOf(false) }
+        androidx.compose.runtime.LaunchedEffect(actions.quick.isSyncLocked.value, liveOffsetMs) {
+            if (actions.quick.isSyncLocked.value) {
+                showSyncPill = true
+                kotlinx.coroutines.delay(2500L)
+                showSyncPill = false
+            }
+        }
+
         androidx.compose.animation.AnimatedVisibility(
-            visible = visible && (actions.quick.subSyncRunning.value || actions.quick.isSyncLocked.value || hasSubtitleTrack),
+            visible = visible && (actions.quick.subSyncRunning.value || showSyncPill),
             enter = fadeIn(animationSpec = tween(180)),
             exit = fadeOut(animationSpec = tween(180)),
         ) {
@@ -357,34 +375,19 @@ internal fun SeekBarRow(
     val leftLabel = if (leftShowsRemaining) "-${fmtTime(remMs)}" else fmtTime(posWhole * 1000L)
     val rightLabel = if (rightShowsDuration) fmtTime(durationSec.value.toLong() * 1000L)
     else "-${fmtTime(remMs)}"
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(
-            horizontalAlignment = Alignment.Start,
-            modifier = Modifier
-                .widthIn(min = PlayerDimens.timeLabelMinW)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = ripple(bounded = false, radius = 24.dp, color = accent),
-                ) { leftShowsRemaining = !leftShowsRemaining },
-        ) {
-            Text(
-                leftLabel,
-                color = Color(0xFFF8FAFC),
-                fontSize = fluidText(min = 11.sp, max = 13.sp),
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Start,
-                style = Tnum,
-            )
-            // 9sp status label under the numeral (mockup `.time small`) —
-            // tnum, dim2.
-            Text(
-                text = if (leftShowsRemaining) "left" else "elapsed",
-                color = Color(0xFF78787F),
-                fontSize = 9.sp,
-                letterSpacing = 0.5.sp,
-                style = Tnum,
-            )
-        }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = fmtTime(posWhole * 1000L),
+            color = Color.White,
+            fontSize = fluidText(min = 11.5.sp, max = 13.sp),
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Start,
+            style = Tnum,
+            modifier = Modifier.padding(end = 4.dp),
+        )
         Box(Modifier.weight(1f).padding(horizontal = fluid(min = 6.dp, max = 12.dp))) {
             val visualPos by animateFloatAsState(
                 targetValue = when {
@@ -534,32 +537,15 @@ internal fun SeekBarRow(
                 )
             }
         }
-        Column(
-            horizontalAlignment = Alignment.End,
-            modifier = Modifier
-                .widthIn(min = PlayerDimens.timeLabelMinW)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = ripple(bounded = false, radius = 24.dp, color = accent),
-                ) { rightShowsDuration = !rightShowsDuration },
-        ) {
-            Text(
-                rightLabel,
-                color = Color(0xFFF8FAFC),
-                fontSize = fluidText(min = 11.sp, max = 13.sp),
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.End,
-                style = Tnum,
-            )
-            Text(
-                text = if (rightShowsDuration) "total" else "left",
-                color = Color(0xFF78787F),
-                fontSize = 9.sp,
-                letterSpacing = 0.5.sp,
-                style = Tnum,
-                textAlign = TextAlign.End,
-            )
-        }
+        Text(
+            text = fmtTime(durationSec.value.toLong() * 1000L),
+            color = Color(0xFFABABB2),
+            fontSize = fluidText(min = 11.5.sp, max = 13.sp),
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.End,
+            style = Tnum,
+            modifier = Modifier.padding(start = 4.dp),
+        )
     }
 }
 
@@ -686,7 +672,7 @@ private fun TransportRow(
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     Box(modifier = Modifier.fillMaxWidth()) {
-        // Left wing: lock, pinned to the start edge.
+        // Left wing: Lock
         Row(modifier = Modifier.align(Alignment.CenterStart)) {
             ControlChip(
                 icon = if (actions.ui.locked.value) Icons.Filled.Lock else Icons.Filled.LockOpen,
@@ -697,59 +683,37 @@ private fun TransportRow(
             )
         }
 
-        // Center cluster: centered on the SCREEN — the mockup's hero sits on
-        // the exact centerline, and leftover-space centering read 26–30dp
-        // left of it in the renders. Portrait stays mockup-exact (lock ·
-        // ‹10s · hero · 10s› · FIT · ⛶); prev/next remain landscape-only.
+        // Center cluster: [Rotate | Prev | Play/Pause | Next | AspectRatio]
         Row(
             modifier = Modifier.align(Alignment.Center),
             horizontalArrangement = Arrangement.spacedBy(
-                if (isLandscape) 16.dp else 8.dp,
+                if (isLandscape) 14.dp else 8.dp,
                 Alignment.CenterHorizontally,
             ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (isLandscape) {
-                ControlChip(
-                    icon = Icons.Filled.SkipPrevious,
-                    contentDescription = "Previous video",
-                    accent = accent,
-                    enabled = hasPreviousEpisode,
-                    onClick = onPlayPrevious,
-                )
-            }
-            SeekChip(
-                icon = Icons.Filled.FastRewind,
-                seconds = actions.ui.seekStepSec.intValue,
+            ControlChip(
+                icon = Icons.Filled.ScreenRotation,
+                contentDescription = "Rotate",
                 accent = accent,
-                contentDescription = "Seek back",
-                onClick = onSeekBack,
+                selected = actions.quick.rotateMode.value != RotateMode.SENSOR,
+                onClick = { actions.cycleRotateMode() },
+            )
+            ControlChip(
+                icon = Icons.Filled.SkipPrevious,
+                contentDescription = "Previous video",
+                accent = accent,
+                enabled = hasPreviousEpisode,
+                onClick = onPlayPrevious,
             )
             BigPlayPauseButton(isPlaying = isPlaying, accent = accent, onClick = onPlayPause)
-            SeekChip(
-                icon = Icons.Filled.FastForward,
-                seconds = actions.ui.seekStepSec.intValue,
+            ControlChip(
+                icon = Icons.Filled.SkipNext,
+                contentDescription = "Next video",
                 accent = accent,
-                contentDescription = "Seek forward",
-                onClick = onSeekForward,
+                enabled = hasNextEpisode,
+                onClick = onPlayNext,
             )
-            if (isLandscape) {
-                ControlChip(
-                    icon = Icons.Filled.SkipNext,
-                    contentDescription = "Next video",
-                    accent = accent,
-                    enabled = hasNextEpisode,
-                    onClick = onPlayNext,
-                )
-            }
-        }
-
-        // Right wing: Aspect ratio & Fullscreen, pinned to the end edge.
-        Row(
-            modifier = Modifier.align(Alignment.CenterEnd),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
             var aspectMenu by remember { mutableStateOf(false) }
             Box {
                 AspectTextChip(
@@ -790,11 +754,26 @@ private fun TransportRow(
                     }
                 }
             }
+        }
+
+        // Right wing: [Speed | PiP]
+        Row(
+            modifier = Modifier.align(Alignment.CenterEnd),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ControlChip(
+                icon = Icons.Filled.Timer,
+                contentDescription = "Playback Speed",
+                accent = accent,
+                selected = actions.ui.speedCardOpen.value,
+                onClick = { actions.toggleSpeedCard() },
+            )
             ControlChip(
                 icon = Icons.Filled.CropFree,
-                contentDescription = "Fullscreen",
+                contentDescription = "Picture in Picture",
                 accent = accent,
-                onClick = { actions.cycleRotateMode() },
+                onClick = { actions.enterPip() },
             )
         }
     }
