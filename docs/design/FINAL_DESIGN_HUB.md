@@ -239,6 +239,18 @@ _Mandate: match `scratch/proposed_black_glass_player.html` 1:1 in every section,
 - Accepted micro-delta: the landscape hero sits ~25px left of true centre (content-width wings can never clip; the mockup's equal-flex wings centred it) — cosmetic, flagged to the user.
 - Round 3 + 3.1 state = converged for every modelled frame; the phone feel-check is the remaining gate. Build for the check: `android_build` run 38707353369 on a289644, artifact `debug-apks`.
 
+**Round 4 (v1.0.0 Modular Architecture Remote Verification) — PASS (commit `997c701`, runs 39042198549 [build] + 39042525024 [render], 13/13 tests green, artifact `player-screens-997c701782eab1649d87b41faa2c3728028fe963`):**
+- Proved v1.0.0 architecture end-to-end on GitHub Actions farm: zero local JDK/SDK dependencies used.
+- PASS: `portrait_chrome_on.png` — Optical glass top bar, tech line pills, resting 5-disc ribbon, `OpticalSeekBarCanvas` cyan glow thumb disc + tnum timestamps, centered 6-control portrait transport cluster.
+- PASS: `speed_card_open.png` — 330dp optical glass card, 22dp concentric radius, bold `1.37×` readout, ±0.05x circular stepper buttons, milestone chips, reset & close affordances.
+- PASS: `subtitle_drawer_open.png` — 350dp optical glass chassis, 0.06f clear tap-catcher, flat rows (track selection, local file picker, acoustic VAD auto-sync, timing offset, appearance tray).
+- PASS: `settings_drawer_open.png` — 4×2 quick tools grid with cyan glow active state, 150% volume boost chip, repeat mode, speed selection.
+- PASS: `playlist_drawer_open.png` — 5-episode list, duration pills, playing item cyan glass highlight (`• Playing`), reorder drag handles.
+- PASS: `landscape_chrome_on.png` — Full title, tech pills, wide scrubber, 8-control transport cluster with FIT & aspect ratio chips.
+- PASS: `settings_hub.png` & `settings_playback.png` — Obsidian skin, flat rows with 38dp circular discs, drill-in navigation verified via real click-through.
+- PASS: `library_home.png`, `library_series.png`, `library_history.png` — Seeded persistence store discovered and rendered accurately.
+- Invariants verified: 0 Hz recomposition scrubber canvas + 1 Hz derivedStateOf timestamp text; optical glass specular rims and text shadows throughout; zero regression across all test suites.
+
 **Standing loop protocol:** convert → `recordRoborazziDebug` retry push → dispatch ui_render → download artifact → read every frame vs mockup → log verdicts here → repeat. A section is DONE only when a screenshot round shows 1:1 (or documented better-than-HTML delta). **Push + render dispatch are STANDING-APPROVED** (user, 2026-10-15: "always push and render"; AGENTS.md rule 5 amended) — tags and releases remain gated on explicit approval.
 
 ## 16. REIMAGINATION — FEEL · VIBE · FLOW (whole-app proposal, awaiting sign-off)
