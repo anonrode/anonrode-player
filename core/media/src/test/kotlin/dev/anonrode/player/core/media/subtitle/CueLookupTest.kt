@@ -105,4 +105,34 @@ class CueLookupTest {
         }
         assertEquals("a cue was on screen but the lookup returned null", 0, misses)
     }
+
+    /**
+     * Overlapping cues must be returned in ascending start (chronological) order.
+     * If the backward walk is not reversed into ascending order, multi-line joins
+     * (e.g. bilingual dialogue or speaker lines) render inverted/upside-down.
+     */
+    @Test
+    fun `overlapping cues are returned in ascending chronological start order`() {
+        val cues = listOf(
+            cue(1.0, 5.0, "Speaker 1: Hello"),
+            cue(2.0, 6.0, "Speaker 2: Hi there"),
+            cue(2.5, 4.0, "[Sign: Welcome]"),
+        )
+        val active = CueLookup.findActiveCues(cues, 3.0)
+        assertEquals(3, active.size)
+        assertEquals("Speaker 1: Hello", active[0].lines.first())
+        assertEquals("Speaker 2: Hi there", active[1].lines.first())
+        assertEquals("[Sign: Welcome]", active[2].lines.first())
+    }
+
+    @Test
+    fun `two overlapping cues return oldest first then newest`() {
+        val cueA = cue(10.0, 14.0, "Line 1")
+        val cueB = cue(11.0, 12.0, "Line 2")
+        val cues = listOf(cueA, cueB)
+        val active = CueLookup.findActiveCues(cues, 11.5)
+        assertEquals(listOf(cueA, cueB), active)
+        assertEquals("Line 1", active[0].lines.first())
+        assertEquals("Line 2", active[1].lines.first())
+    }
 }

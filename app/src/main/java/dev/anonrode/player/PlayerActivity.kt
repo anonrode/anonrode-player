@@ -81,8 +81,33 @@ import dev.anonrode.player.core.ui.theme.AnonrodeTheme
 import dev.anonrode.player.core.ui.theme.rememberSkinPalette
 import dev.anonrode.player.feature.player.PlaybackEngine
 import dev.anonrode.player.feature.player.PlayerService
+import dev.anonrode.player.ui.AspectZoomMode
+import dev.anonrode.player.ui.ChapterMarker
+import dev.anonrode.player.ui.GestureMode
+import dev.anonrode.player.ui.GestureUiState
 import dev.anonrode.player.ui.PlayerScreen
+import dev.anonrode.player.ui.PlayerScreenActions
+import dev.anonrode.player.ui.PlayerUiState
+import dev.anonrode.player.ui.PlayerVideoSurface
+import dev.anonrode.player.ui.PlaylistEpisodeItem
+import dev.anonrode.player.ui.QuickRowUiState
+import dev.anonrode.player.ui.RepeatLoopMode
+import dev.anonrode.player.ui.RotateMode
 import dev.anonrode.player.ui.SettingsScreen
+import dev.anonrode.player.ui.SubtitleTrackItem
+import dev.anonrode.player.ui.rememberPlayerScreenActions
+import android.graphics.Bitmap
+import android.os.Environment
+import android.view.PixelCopy
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToLong
@@ -199,6 +224,8 @@ class PlayerActivity : ComponentActivity() {
 
     /** Smooth micro-slewed offset currently applied in the render loop. */
     private var appliedOffsetSec = Double.NaN
+    private var lastTickWallMs = 0L
+    private var lastTRaw = Double.NaN
 
     // ── auto-advance (next episode) state ────────────────────────────
 
@@ -264,7 +291,8 @@ class PlayerActivity : ComponentActivity() {
     /** True while [dev.anonrode.player.feature.player.PlaybackEngine.rebuild]
      *  is rebuilding the ExoPlayer around a new renderers factory. Mirrored
      *  into the HW chip in PlayerScreen to disable the button + show "…". */
-    private var isRebuildingDecoder by mutableStateOf(false)
+    private val isRebuildingDecoderState = mutableStateOf(false)
+    private var isRebuildingDecoder by isRebuildingDecoderState
 
     /**
      * The decoder profile the engine is ACTUALLY on, as a display label.
@@ -281,7 +309,8 @@ class PlayerActivity : ComponentActivity() {
      * trigger a recomposition when the mode changes. This mirror is
      * observable and is refreshed on every point the mode can move.
      */
-    private var decoderModeLabel by mutableStateOf("HW+SW")
+    private val decoderModeState = mutableStateOf("HW+SW")
+    private var decoderModeLabel by decoderModeState
 
     /**
      * Whether auto-orientation may override the activity's orientation.
@@ -347,7 +376,8 @@ class PlayerActivity : ComponentActivity() {
      * computed offset (auto-lock + manual delay) plus any ±0.1s nudge the
      * user fires from the sync popover. Re-read every render tick.
      */
-    private var liveOffsetMs by mutableStateOf(0L)
+    private val liveOffsetMsState = mutableStateOf(0L)
+    private var liveOffsetMs by liveOffsetMsState
 
     /**
      * v0.7.1: true while the sync engine is genuinely working — the live
@@ -550,6 +580,7 @@ class PlayerActivity : ComponentActivity() {
         if (app.engine.activeSyncCues.isEmpty()) return
         val tRaw = newPosMs / 1000.0
         appliedOffsetSec = Double.NaN
+        lastTRaw = Double.NaN
         // Re-anchor live sync processor sliding window at new seek position
         app.engine.setStartPosition(newPosMs)
 
@@ -823,252 +854,174 @@ class PlayerActivity : ComponentActivity() {
                     SettingsScreen(onBack = { settingsOpen = false })
                 } else {
                     val palette = rememberSkinPalette()
-                    Box(modifier = androidx.compose.ui.Modifier
-                        .fillMaxWidth()
-                        .fillMaxSize()) {
-                        PlayerScreen(
-                            player = engine.player,
-                            engine = engine,
-                            title = title,
-                            mediaId = currentUriStr ?: "",
-                            cueText = cueText ?: embeddedCueText,
-                            // Hub 8.1: the resume pill renders INSIDE the dock
-                            // (the old activity-level overlay sat on the
-                            // seekbar). Host still owns the state.
-                            resumePillMs = resumedPillMs,
-                            onStartOver = {
-                                AnonrodeApp.get(this@PlayerActivity).engine.player.seekTo(0)
-                                resumedPillMs = null
-                                resumePillJob?.cancel()
-                            },
-                            // v0.7.1 perf pass: pass the backing STATE objects
-                            // (activity fields are mutableFloatStateOf) so a
-                            // 10Hz tick recomposes only the seek bar, not the
-                            // whole PlayerScreen body.
-                            positionSec = positionState,
-                            durationSec = durationState,
-                            bufferedSec = bufferedState,
-                            onBack = {
-                                AnonrodeApp.get(this@PlayerActivity).engine.savePositionNow()
-                                finish()
-                            },
-                            initialSpeed = restoredSpeed,
-                            onSpeedChanged = { speed ->
-                                sessionSpeed = speed
-                                PlayerPrefs.saveGlobalSpeed(this@PlayerActivity, speed)
-                                val targetUri = currentUriStr
-                                val vPath = currentVideoPath
+
+                    val ui = remember { PlayerUiState(initialIsPlaying = engine.player.isPlaying) }
+                    val gestures = remember { GestureUiState() }
+                    val quick = remember { QuickRowUiState() }
+
+                    LaunchedEffect(savedZoomIdx) { ui.zoomIdx.intValue = savedZoomIdx }
+                    LaunchedEffect(settings.seekIncrementSec) { ui.seekStepSec.intValue = settings.seekIncrementSec }
+                    LaunchedEffect(resumedPillMs) { ui.resumePromptVisible.value = resumedPillMs != null }
+                    LaunchedEffect(subSyncRunning) { quick.subSyncRunning.value = subSyncRunning }
+                    LaunchedEffect(isSyncLocked) { quick.isSyncLocked.value = isSyncLocked }
+                    LaunchedEffect(equalizerOn) { quick.equalizerOn.value = equalizerOn }
+                    LaunchedEffect(settings.subtitleAutoSyncEnabled) { quick.subSyncEnabled.value = settings.subtitleAutoSyncEnabled }
+                    LaunchedEffect(settings.backgroundPlayback) { ui.backgroundPlayOn.value = settings.backgroundPlayback }
+                    LaunchedEffect(settings.audioEffectEnabled) { ui.audioEffectOn.value = settings.audioEffectEnabled }
+                    LaunchedEffect(savedShuffleOn) { ui.shuffleOn.value = savedShuffleOn }
+                    LaunchedEffect(savedRepeatModeOrdinal) {
+                        ui.repeatMode.value = when (savedRepeatModeOrdinal) {
+                            1 -> RepeatLoopMode.ONE
+                            2 -> RepeatLoopMode.ALL
+                            else -> RepeatLoopMode.OFF
+                        }
+                    }
+
+                    LaunchedEffect(ui.zoomIdx.intValue) {
+                        val idx = ui.zoomIdx.intValue
+                        if (idx != savedZoomIdx) {
+                            savedZoomIdx = idx
+                            val uri = currentUriStr
+                            val vPath = currentVideoPath
+                            if (uri != null) {
                                 lifecycleScope.launch(Dispatchers.IO) {
-                                    if (targetUri != null) {
-                                        app.stateStore.updatePlaybackSpeed(targetUri, speed)
-                                        AppLog.d("SPEED", "persisted $speed for $targetUri")
-                                    }
+                                    app.stateStore.updateZoom(uri, (idx + 1).toFloat())
                                     if (!vPath.isNullOrBlank()) {
                                         val parent = java.io.File(vPath).parent.orEmpty()
                                         if (parent.isNotBlank()) {
-                                            PlayerPrefs.saveSeriesSpeed(this@PlayerActivity, parent, speed)
-                                        }
-                                    }
-                                    try {
-                                        app.playerSettingsDataStore.updateData { it.copy(defaultPlaybackSpeed = speed) }
-                                    } catch (_: Throwable) {}
-                                }
-                            },
-                            isPipMode = pipMode,
-                            onEnterPip = { enterPip() },
-                            hasNextEpisode = episodeQueue?.next() != null,
-                            hasPreviousEpisode = episodeQueue?.previous() != null,
-                            onPlayNext = { playNextNow() },
-                            onPlayPrevious = { playPreviousNow() },
-                            nextCountdownSec = nextCountdownSec,
-                            onCancelNext = { cancelNextCountdown() },
-                            onHoldAutoAdvance = { holdAutoAdvance() },
-                            // Scanner already cleans titles (no extension,
-                            // no path) — stripping here would truncate
-                            // titles with internal dots ("Mr. Robot").
-                            upNextTitle = episodeQueue?.next()?.title,
-                            episodeQueue = episodeQueue,
-                            onReorderQueue = { from, to ->
-                                val q = episodeQueue
-                                if (q != null && from in q.episodes.indices &&
-                                    to in q.episodes.indices && from != to
-                                ) {
-                                    val list = q.episodes.toMutableList()
-                                    list.add(to, list.removeAt(from))
-                                    val playingUri = q.current?.uri ?: ""
-                                    episodeQueue = q.copy(
-                                        episodes = list,
-                                        currentIndex = list.indexOfFirst { it.uri == playingUri }
-                                            .coerceAtLeast(0),
-                                    )
-                                    q.episodes.firstOrNull()?.parentPath?.let { folder ->
-                                        QueueOrderStore.set(this@PlayerActivity, folder, list.map { it.uri })
-                                    }
-                                }
-                            },
-                            onSelectEpisode = { v -> openVideo(v.uri, v.title) },
-                            onOpenSettings = { settingsOpen = true },
-                            liveOffsetMs = liveOffsetMs,
-                            isCalibrating = isCalibrating,
-                            onStartCalibration = {
-                                // Real resync, not a placebo banner: the
-                                // popover's RE-SYNC routes here and must
-                                // actually (re)run the fingerprint — the
-                                // old 4.3s auto-clearing banner did nothing.
-                                isCalibrating = true
-                                AppLog.d("PLAYER", "calibration started")
-                                onResyncNow()
-                                // Auto-clear the banner if no lock lands;
-                                // a real lock clears it via the offset
-                                // change (liveOffsetMs moves off 0).
-                                handler.postDelayed({
-                                    if (isCalibrating) {
-                                        isCalibrating = false
-                                        AppLog.d("PLAYER", "calibration done (timeout)")
-                                    }
-                                }, 45000L)
-                            },
-                            onNudgeSubtitle = { deltaMs ->
-                                manualNudgeMs += deltaMs
-                                val uri = currentUriStr
-                                if (uri != null) {
-                                    lifecycleScope.launch(Dispatchers.IO) {
-                                        app.stateStore.updateSubtitleDelay(uri, manualNudgeMs)
-                                    }
-                                }
-                            },
-                            isRebuildingDecoder = isRebuildingDecoder,
-                            decoderModeLabel = decoderModeLabel,
-                            onRebuildDecoder = { newHw -> requestDecoderRebuild(newHw) },
-                            onAutoRotateChanged = { enabled -> autoRotateEnabled = enabled },
-                            onToggleEqualizer = { request -> requestToggleEqualizer(request) },
-                            onOpenCastPicker = { requestOpenCastPicker() },
-                            onOpenEqPanel = { eqPanelOpen = true },
-                            onOpenAudioTrackPicker = { requestOpenAudioTrackPicker() },
-                            onOpenSubStyle = { subStyleSheetOpen = true },
-                            onOpenSubtitlePicker = { subtitlePickerOpen = true },
-                            // v0.6.2 sub-sync UX pass: sync toggle callbacks.
-                            // The toggle's icon flips instantly via
-                            // PlayerScreenActions; these are the persistence
-                            // and side-effect callbacks (engine gate, fingerprint
-                            // job cancel on OFF, "resync now" force-schedule).
-                            onSetSubSyncEnabled = { enabled -> onSetSubSyncEnabled(enabled) },
-                            onResyncNow = { onResyncNow() },
-                            subSyncRunning = subSyncRunning,
-                            isSyncLocked = isSyncLocked,
-                            castRouteName = castRouteName,
-                            subtitleStyle = subStyle,
-                            onSubtitleStyleChanged = { applySubtitleStyle(it) },
-                            seekIncrementSec = settings.seekIncrementSec,
-                            // v0.7.3 dock wiring: the CC chip exists iff the
-                            // media has subtitle tracks OR a sidecar is
-                            // loaded; every host sheet pauses auto-hide; the
-                            // Subtitle-source tile shows the ACTIVE choice.
-                            hasSubtitleTrack = subtitleTrackCount > 0 ||
-                                lastCues.isNotEmpty(),
-                            hostSheetOpen = castPickerOpen || eqPanelOpen ||
-                                audioTrackPickerOpen || subStyleSheetOpen ||
-                                subtitlePickerOpen,
-                            subtitleChoiceLabel = when {
-                                subtitleChoice.isEmpty() -> "Auto"
-                                subtitleChoice == "none" -> "None"
-                                subtitleChoice.startsWith("embedded") -> "Embedded"
-                                subtitleChoice.startsWith("sidecar") -> "Sidecar file"
-                                else -> "Downloaded"
-                            },
-                            onSkipLengthChanged = { s ->
-                                lifecycleScope.launch {
-                                    app.playerSettingsDataStore.updateData {
-                                        it.copy(seekIncrementSec = s)
-                                    }
-                                }
-                            },
-                            doubleTapSeekEnabled = settings.doubleTapSeek,
-                            swipeToSeekEnabled = settings.swipeToSeek,
-                            volumeGestureEnabled = settings.volumeGesture,
-                            brightnessGestureEnabled = settings.brightnessGesture,
-                            pinchZoomEnabled = settings.pinchZoom,
-                            autoHideControlsMs = settings.autoHideControlsMs,
-                            initialSleepTimerMinutes = settings.sleepTimerMinutes,
-                            subtitleAutoSyncEnabled = settings.subtitleAutoSyncEnabled,
-                            abStartMs = abStartMs,
-                            abEndMs = abEndMs,
-                            onAbRepeatTap = { advanceAbRepeat() },
-                            initialZoomIdx = savedZoomIdx,
-                            onZoomChanged = { idx ->
-                                savedZoomIdx = idx
-                                val uri = currentUriStr
-                                val vPath = currentVideoPath
-                                if (uri != null) {
-                                    lifecycleScope.launch(Dispatchers.IO) {
-                                        // Convention: stored value = idx + 1
-                                        // (entity default 1.0 means "unset" = FIT).
-                                        app.stateStore.updateZoom(uri, (idx + 1).toFloat())
-                                        if (!vPath.isNullOrBlank()) {
-                                            val parent = java.io.File(vPath).parent.orEmpty()
-                                            if (parent.isNotBlank()) {
-                                                PlayerPrefs.saveSeriesZoom(this@PlayerActivity, parent, idx)
-                                            }
+                                            PlayerPrefs.saveSeriesZoom(this@PlayerActivity, parent, idx)
                                         }
                                     }
                                 }
-                            },
-                            fastSeekThresholdSec = settings.fastSeekThresholdSec,
-                            volumeBoostPct = settings.volumeBoostPct,
-                            onShareSyncLog = { shareSyncLog() },
-                            onVolumeBoostCycle = {
-                                lifecycleScope.launch {
-                                    app.playerSettingsDataStore.updateData { s ->
-                                        s.copy(
-                                            volumeBoostPct = when (s.volumeBoostPct) {
-                                                0 -> 50
-                                                50 -> 100
-                                                100 -> 200
-                                                else -> 0
-                                            },
-                                        )
-                                    }
-                                }
-                            },
-                            // The ribbon's "Background Play" tool writes the
-                            // SAME field the Settings screen owns and onStop
-                            // consults, so the toggle has one source of truth
-                            // instead of a private flag nothing read.
-                            onSetBackgroundPlayback = { enabled ->
-                                lifecycleScope.launch {
-                                    app.playerSettingsDataStore.updateData {
-                                        it.copy(backgroundPlayback = enabled)
-                                    }
-                                }
-                            },
-                            // "Audio Effect" -> the dialogue-clarity DSP stage
-                            // in the audio pipeline. Persisted so it survives
-                            // process death and applies on the next open.
-                            onSetAudioEffect = { enabled ->
-                                lifecycleScope.launch {
-                                    app.playerSettingsDataStore.updateData {
-                                        it.copy(audioEffectEnabled = enabled)
-                                    }
-                                }
-                            },
-                            initialBackgroundPlay = settings.backgroundPlayback,
-                            initialAudioEffect = settings.audioEffectEnabled,
-                            // Restore this video's saved Shuffle/Loop choice.
-                            initialShuffle = savedShuffleOn,
-                            initialRepeatMode = savedRepeatModeOrdinal,
-                            onPersistPlaylistMode = { uri, shuffle, repeat ->
-                                lifecycleScope.launch(Dispatchers.IO) {
-                                    app.stateStore.updatePlaylistMode(uri, shuffle, repeat)
-                                }
-                            },
-                        )
+                            }
+                        }
+                    }
 
-                        // ── Resume Pill moved INSIDE the dock (hub 8.1) —
-                        // it now renders from PlayerScreenBottomBar, anchored
-                        // above the sync row; the old overlay here sat
-                        // dead-center on the seekbar. resumedPillMs is still
-                        // host-owned state: the pill appears/disappears from
-                        // this class, positioned by the screen. ──
+                    val combinedCueTextState = remember(cueText, embeddedCueText) {
+                        derivedStateOf { (cueText ?: embeddedCueText).orEmpty() }
+                    }
+
+                    val videoResolutionFpsLabel = remember {
+                        derivedStateOf {
+                            val w = if (pipAspectCacheW > 0) pipAspectCacheW else engine.player.videoSize.width
+                            val h = if (pipAspectCacheH > 0) pipAspectCacheH else engine.player.videoSize.height
+                            if (w > 0 && h > 0) "${w}x${h}" else "1080p • 60fps"
+                        }
+                    }
+
+                    val playlistEpisodes = remember(episodeQueue) {
+                        episodeQueue?.let { q ->
+                            q.episodes.mapIndexed { idx, v ->
+                                PlaylistEpisodeItem(
+                                    id = v.uri,
+                                    title = v.title,
+                                    durationSec = (v.durationMs / 1000f),
+                                    isPlaying = idx == q.currentIndex,
+                                )
+                            }
+                        } ?: emptyList()
+                    }
+
+                    val subtitleTracks = remember(subtitleChoice, subtitleTrackCount) {
+                        val list = mutableListOf<SubtitleTrackItem>()
+                        list.add(SubtitleTrackItem(id = "", title = "Auto", formatLabel = "Auto detect"))
+                        list.add(SubtitleTrackItem(id = "none", title = "None", formatLabel = "Subtitles Off"))
+                        if (subtitleTrackCount > 0) {
+                            list.add(SubtitleTrackItem(id = "embedded:0", title = "Embedded Subtitle", formatLabel = "Track 1 • Embedded"))
+                        }
+                        if (subtitleChoice.startsWith("sidecar")) {
+                            list.add(SubtitleTrackItem(id = subtitleChoice, title = "Sidecar Subtitle", formatLabel = "Sidecar file", isExternal = true))
+                        }
+                        list
+                    }
+
+                    val scope = rememberCoroutineScope()
+                    val actions = rememberPlayerScreenActions(
+                        context = this@PlayerActivity,
+                        activity = this@PlayerActivity,
+                        livePlayer = engine.player,
+                        ui = ui,
+                        gestures = gestures,
+                        quick = quick,
+                        scope = scope,
+                        decoderModeLabel = decoderModeState,
+                        isRebuildingDecoder = isRebuildingDecoderState,
+                        onRebuildDecoderCycle = {
+                            performDecoderCycle(engine)
+                        },
+                        onApplyEngineSubtitleOffsetSec = { offsetSec ->
+                            val newNudgeMs = (offsetSec * 1000f).toLong()
+                            manualNudgeMs = newNudgeMs
+                            val uri = currentUriStr
+                            if (uri != null) {
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    app.stateStore.updateSubtitleDelay(uri, newNudgeMs)
+                                }
+                            }
+                        },
+                        onTriggerEngineAutoSync = {
+                            onResyncNow()
+                        },
+                        onCaptureVideoFrame = {
+                            captureVideoFrame()
+                        },
+                    )
+
+                    Box(
+                        modifier = androidx.compose.ui.Modifier
+                            .fillMaxWidth()
+                            .fillMaxSize(),
+                    ) {
+                        PlayerScreen(
+                            title = title,
+                            positionSec = positionState,
+                            durationSec = durationState,
+                            bufferedSec = bufferedState,
+                            cueText = combinedCueTextState,
+                            videoResolutionFpsLabel = videoResolutionFpsLabel,
+                            decoderModeLabel = decoderModeState,
+                            liveOffsetMs = liveOffsetMsState,
+                            chapters = emptyList(),
+                            subtitleTracks = subtitleTracks,
+                            selectedSubtitleTrackId = subtitleChoice.ifEmpty { null },
+                            episodes = playlistEpisodes,
+                            scrubPreviewBitmap = null,
+                            isPipMode = pipMode,
+                            ui = ui,
+                            gestures = gestures,
+                            quick = quick,
+                            actions = actions,
+                            videoSurfaceContent = {
+                                PlayerVideoSurface(
+                                    player = engine.player,
+                                    videoWidth = pipAspectCacheW.takeIf { it > 0 } ?: engine.player.videoSize.width,
+                                    videoHeight = pipAspectCacheH.takeIf { it > 0 } ?: engine.player.videoSize.height,
+                                    zoomIdx = ui.zoomIdx.intValue,
+                                    posterArtBitmap = null,
+                                    hasRenderedFirstFrame = true,
+                                )
+                            },
+                            onNavigateBack = {
+                                AnonrodeApp.get(this@PlayerActivity).engine.savePositionNow()
+                                finish()
+                            },
+                            onSelectSubtitleTrack = { choice ->
+                                onSubtitleChoiceSelected(choice ?: "none")
+                            },
+                            onOpenLocalSubtitlePicker = {
+                                subtitlePickerOpen = true
+                            },
+                            onSelectEpisode = { item ->
+                                val v = episodeQueue?.episodes?.firstOrNull { it.uri == item.id }
+                                if (v != null) {
+                                    openVideo(v.uri, v.title)
+                                }
+                            },
+                            onPreviousEpisode = { playPreviousNow() },
+                            onNextEpisode = { playNextNow() },
+                            onOpenAudioTracks = { audioTrackPickerOpen = true },
+                            onEnterPip = { enterPip() },
+                        )
                     }
                     // ── Cast route picker (audio output) ───────────────
                     if (castPickerOpen) {
@@ -1243,6 +1196,7 @@ class PlayerActivity : ComponentActivity() {
                     }
                     return@collect
                 }
+                val snapOnVerdict = syncAwaitingBackgroundVerdict
                 syncAwaitingBackgroundVerdict = false
                 withContext(Dispatchers.Main) {
                     if (uri != currentUriStr) return@withContext
@@ -1250,6 +1204,13 @@ class PlayerActivity : ComponentActivity() {
                     engine.applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor, s.autoSyncPiecewise)
                     piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
                     isSyncLocked = s.autoSyncOffsetMs != 0L || s.autoSyncCheckedAtMs != 0L || engine.isLiveLocked
+                    if (snapOnVerdict) {
+                        val posMs = engine.clock.positionMs
+                        val tRaw = posMs / 1000.0
+                        appliedOffsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
+                            ?: piecewiseSegments.firstOrNull()?.second
+                            ?: (s.autoSyncOffsetMs / 1000.0)
+                    }
                     subSyncRunning = false
                 }
             }
@@ -1765,6 +1726,36 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    private fun captureVideoFrame() {
+        try {
+            val view = window?.decorView ?: return
+            if (view.width <= 0 || view.height <= 0) return
+            val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                PixelCopy.request(window, bitmap, { result ->
+                    if (result == PixelCopy.SUCCESS) {
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            try {
+                                val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+                                val outDir = File(picturesDir, "Anonrode")
+                                if (!outDir.exists()) outDir.mkdirs()
+                                val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                                val file = File(outDir, "Screenshot_$timestamp.png")
+                                FileOutputStream(file).use { out ->
+                                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                }
+                            } catch (e: Exception) {
+                                AppLog.e("SCREENSHOT", "Failed to save frame", e)
+                            }
+                        }
+                    }
+                }, Handler(Looper.getMainLooper()))
+            }
+        } catch (e: Exception) {
+            AppLog.e("SCREENSHOT", "Failed to capture frame", e)
+        }
+    }
+
     /**
      * Cached MediaStore-derived (w,h) pair for PiP aspect lookup. Populated
      * by [refreshPipAspectAsync] on a background dispatcher; read by
@@ -2210,6 +2201,8 @@ class PlayerActivity : ComponentActivity() {
     private fun restartRenderLoop(cues: List<SubtitleCue>) {
         renderTick?.let { handler.removeCallbacks(it) }
         lastCues = cues
+        lastTRaw = Double.NaN
+        lastTickWallMs = 0L
         if (cues.isNotEmpty()) {
             val eng = AnonrodeApp.get(this).engine
             if (eng.activeSyncCues.isEmpty()) {
@@ -2239,51 +2232,68 @@ class PlayerActivity : ComponentActivity() {
                 // Piecewise cut lock: the offset depends on position (each
                 // segment carries its own beta). Scalar lock: one offset.
                 val targetOffsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
+                    ?: piecewiseSegments.firstOrNull()?.second
                     ?: (engine.subtitleOffsetMs / 1000.0)
 
-                // Smooth inter-cue micro-slew:
-                // Only adapt offset during silence gaps between cues (cueText == null)
-                // so text never jitters or jumps while actively being read.
-                if (appliedOffsetSec.isNaN()) {
+                val nowWallMs = android.os.SystemClock.uptimeMillis()
+                val dtMediaSec = if (lastTRaw.isNaN()) 0.0 else (tRaw - lastTRaw).coerceIn(0.0, 0.200)
+                lastTRaw = tRaw
+                lastTickWallMs = nowWallMs
+
+                // Smooth inter-cue micro-slew with strict monotonicity:
+                // Rate of change |d(appliedOffset)/dt_media| is bounded by 0.25,
+                // guaranteeing that (tRaw - appliedOffset) / spd is strictly monotonic
+                // during forward playback (d(tSub)/d(tRaw) >= 0.75 / spd > 0).
+                // When paused or buffering (dtMediaSec == 0.0), appliedOffsetSec never slews.
+                if (appliedOffsetSec.isNaN() || !isSyncLocked) {
                     appliedOffsetSec = targetOffsetSec
-                } else if (cueText == null) {
+                } else {
                     val diff = targetOffsetSec - appliedOffsetSec
-                    if (abs(diff) > 1.2) {
-                        // Commercial cut / seek jump: snap cleanly during the silent gap
+                    if (abs(diff) > 2.0) {
+                        // Commercial cut / large seek jump: snap immediately
                         appliedOffsetSec = targetOffsetSec
-                    } else if (abs(diff) > 0.001) {
-                        // Micro-slew: adjust by at most 50ms per frame towards target
-                        appliedOffsetSec += diff.coerceIn(-0.050, 0.050)
+                    } else if (abs(diff) > 0.0005) {
+                        // Rate-limited slew: at most 0.25 s offset change per media progression second
+                        val maxSlew = 0.25 * dtMediaSec
+                        appliedOffsetSec += diff.coerceIn(-maxSlew, maxSlew)
                     }
-                } else if (abs(targetOffsetSec - appliedOffsetSec) > 2.5) {
-                    // Large discontinuity (e.g. scrub while text displayed)
-                    appliedOffsetSec = targetOffsetSec
                 }
 
                 val offsetSec = appliedOffsetSec
                 val t = (tRaw - offsetSec) / spd
-                val cue = findCue(cues, t)
-                cueText = cue?.lines?.joinToString("\n")
+                val activeCues = CueLookup.findActiveCues(cues, t)
+                val cue = activeCues.lastOrNull()
+                cueText = if (activeCues.isNotEmpty()) {
+                    activeCues.flatMap { it.lines }.joinToString("\n")
+                } else null
                 // Mirror the offset ACTUALLY applied at the current position
                 // into Compose state for the SYNCED chip: on cut content
                 // that is the piecewise beta of the active segment, not the
-                // engine's scalar offset.
-                liveOffsetMs = (offsetSec * 1000).roundToLong()
-                // Boundary-aware scheduling: wake exactly when the showing
-                // cue ends or the next cue starts, mapped back onto the raw
-                // position timeline (tRaw = t * spd + offsetSec) so drift
-                // correction doesn't skew the delay. Clamped: never spin
-                // faster than 8ms (touching cues), never sleep past 100ms.
-                var boundarySec = cue?.end ?: nextCueAfter(cues, t)?.start
+                // engine's scalar offset. Quantized to >= 50ms (or settling at target)
+                // to prevent top bar recomposition churn on every micro-slew tick.
+                val newOffsetMs = (offsetSec * 1000).roundToLong()
+                val isSettled = abs(offsetSec - targetOffsetSec) < 0.005
+                if (abs(newOffsetMs - liveOffsetMs) >= 50L || (isSettled && liveOffsetMs != newOffsetMs)) {
+                    liveOffsetMs = newOffsetMs
+                }
+                // Boundary-aware scheduling: wake when the earliest active cue ends
+                // or the next cue starts, mapped back onto raw position timeline.
+                val activeEnds = activeCues.map { it.end }
+                val nextStart = nextCueAfter(cues, t)?.start
+                var boundarySec: Double? = if (activeEnds.isNotEmpty()) {
+                    minOf(activeEnds.minOrNull() ?: Double.MAX_VALUE, nextStart ?: Double.MAX_VALUE).takeIf { it != Double.MAX_VALUE }
+                } else {
+                    nextStart
+                }
                 abEnd?.let { endMs ->
                     val endSec = endMs / 1000.0
-                    if (boundarySec == null || endSec < boundarySec) boundarySec = endSec
+                    if (boundarySec == null || endSec < boundarySec!!) boundarySec = endSec
                 }
                 val delayMs = if (boundarySec == null) 100L else {
-                    val delayRaw = (boundarySec * spd + offsetSec - tRaw) * 1000.0
+                    val delayRaw = (boundarySec!! * spd + offsetSec - tRaw) * 1000.0
                     val playbackSpeed = p.playbackParameters.speed.coerceAtLeast(0.25f)
                     val wallDelayMs = delayRaw / playbackSpeed
-                    ceil(wallDelayMs).toLong().coerceIn(8L, 100L)
+                    ceil(wallDelayMs).toLong().coerceIn(16L, 100L)
                 }
                 handler.postDelayed(this, delayMs)
             }
@@ -2690,18 +2700,14 @@ class PlayerActivity : ComponentActivity() {
     private fun onResyncNow() {
         val uri = currentUriStr ?: return
         val app = AnonrodeApp.get(this)
-        // Reset in-memory and persisted locks immediately so old bogus locks stop applying
-        app.engine.clearPersistedLock()
+        // Keep current applied offset active without snapping back to 0.0s (Defect 1.1D)
         piecewiseSegments = emptyList()
-        isSyncLocked = false
-        // Force-enable live re-lock and trigger immediate forced background evaluation
         app.engine.setSubSyncEnabled(true)
         app.engine.rearmLiveSync()
         syncAwaitingBackgroundVerdict = true
         SyncFingerprint.schedule(applicationContext, uri, immediate = true, force = true)
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                app.stateStore.updateAutoSync(uri, 0L, 1f, "")
                 app.stateStore.clearAutoSyncChecked(uri)
                 app.playerSettingsDataStore.updateData {
                     it.copy(subtitleAutoSyncEnabled = true)

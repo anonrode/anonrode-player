@@ -397,7 +397,7 @@ class SyncFingerprintJob(
                     val anchorStarts = starts.filter { it in (anchorStart - 30.0).coerceAtLeast(0.0)..(anchorStart + anchorSpan + 30.0) }
                     if (anchorOnsets.size >= 8 && anchorStarts.size >= 8) {
                         val candidate = attemptLock(anchorOnsets, anchorStarts, "cue-anchor")
-                        if (candidate != null && candidate.recall >= 0.65) {
+                        if (candidate != null && candidate.recall >= 0.65 && abs(candidate.offsetMs / 1000.0) <= 30.0) {
                             sources = anchorPass
                             extractionComplete = false
                             val durMs = getVideoDurationMs(videoUri, videoPath)
@@ -405,7 +405,7 @@ class SyncFingerprintJob(
                                 extractor, videoPath, videoUri, cues,
                                 candidate.offsetMs / 1000.0, durMs,
                                 isCancelled = { !coroutineContext.isActive || isStopped }
-                            ).ifEmpty { candidate.piecewise }
+                            ).ifEmpty { "" }
 
                             val lockCandidate = candidate.copy(piecewise = pw)
                             lock = lockCandidate
@@ -427,6 +427,100 @@ class SyncFingerprintJob(
                                 "Stage 0 CUE-ANCHOR FAST LOCKED in <1.5s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall}"
                             )
                             return@withContext Result.success()
+                        }
+                    }
+                }
+
+                // ── Stage 0.5: Multi-Cluster Sparse Seek Probe (|beta| in [30s, 180s]) ──
+                // Avoids whole-file 50-minute extraction when |beta| is in [30s, 180s]
+                // (e.g. uncut cold opens, broadcast title cards, or extended intro gaps).
+                val totalDurationMs = getVideoDurationMs(videoUri, videoPath)
+                if (cached == null && starts.size >= 16 && totalDurationMs >= 180_000L) {
+                    val durSec = totalDurationMs / 1000.0
+                    val clusterSpan = 25.0
+                    val targetPositions = listOf(
+                        120.0,
+                        (0.25 * durSec).coerceIn(300.0, 720.0),
+                        (0.50 * durSec).coerceIn(600.0, 1500.0),
+                    ).distinct()
+
+                    val allClusterOnsets = mutableListOf<Double>()
+                    val clusterRanges = mutableListOf<Pair<Double, Double>>()
+                    var clusterPassSources: OnsetSources? = null
+
+                    for (targetSec in targetPositions) {
+                        if (!coroutineContext.isActive || isStopped) break
+                        if (targetSec + clusterSpan >= durSec) continue
+
+                        val nearbyCues = cues.filter { it.start in (targetSec - 120.0).coerceAtLeast(0.0)..(targetSec + 120.0) }
+                        val (cStart, _) = if (nearbyCues.size >= 8) {
+                            findDensestDialogueCluster(nearbyCues, clusterSpan)
+                        } else {
+                            targetSec to (targetSec + clusterSpan)
+                        }
+                        val probeStart = (cStart - 1.0).coerceAtLeast(0.0)
+
+                        AppLog.d("SYNC_JOB", "Stage 0.5 cluster probe at %.1fs (span %.0fs)".format(probeStart, clusterSpan))
+                        val pass = extractor.extractSources(
+                            videoPath,
+                            Uri.parse(videoUri),
+                            resumeFromSec = probeStart,
+                            maxMediaDurationSec = clusterSpan,
+                            includeVad = true,
+                            isCancelled = { !coroutineContext.isActive || isStopped },
+                        )
+                        val onsets = OnsetCache.mergeOnsets(pass.silencedetect, pass.vad)
+                        if (onsets.isNotEmpty()) {
+                            allClusterOnsets.addAll(onsets)
+                            clusterRanges.add(probeStart to (probeStart + clusterSpan))
+                            clusterPassSources = if (clusterPassSources == null) pass else {
+                                OnsetSources(
+                                    silencedetect = clusterPassSources.silencedetect + pass.silencedetect,
+                                    vad = clusterPassSources.vad + pass.vad,
+                                    vadEnvelope = FloatArray(0),
+                                )
+                            }
+                        }
+                    }
+
+                    if (allClusterOnsets.size >= 12 && clusterRanges.isNotEmpty()) {
+                        val sparseStarts = starts.filter { s ->
+                            clusterRanges.any { (cStart, cEnd) ->
+                                s in (cStart - 185.0).coerceAtLeast(0.0)..(cEnd + 185.0)
+                            }
+                        }
+                        if (sparseStarts.size >= 12) {
+                            val candidate = attemptLock(allClusterOnsets, sparseStarts, "stage-0.5-sparse")
+                            if (candidate != null && candidate.recall >= 0.60 && abs(candidate.offsetMs / 1000.0) <= 180.0) {
+                                val pw = buildMultiSpotPiecewise(
+                                    extractor, videoPath, videoUri, cues,
+                                    candidate.offsetMs / 1000.0, totalDurationMs,
+                                    isCancelled = { !coroutineContext.isActive || isStopped }
+                                ).ifEmpty { "" }
+
+                                val lockCandidate = candidate.copy(piecewise = pw)
+                                lock = lockCandidate
+                                withContext(kotlinx.coroutines.NonCancellable) {
+                                    store.updateAutoSync(videoUri, lockCandidate.offsetMs, lockCandidate.speed, lockCandidate.piecewise)
+                                }
+                                if (clusterPassSources != null) {
+                                    OnsetCache.store(
+                                        applicationContext, videoUri, videoFile,
+                                        OnsetCache.Entry(
+                                            silencedetect = clusterPassSources.silencedetect,
+                                            vad = clusterPassSources.vad,
+                                            envelope = FloatArray(0),
+                                            coveredSec = extractor.lastCoveredSec,
+                                            complete = false,
+                                        ),
+                                    )
+                                }
+                                AppLog.d(
+                                    "SYNC_JOB",
+                                    "Stage 0.5 MULTI-CLUSTER SPARSE LOCKED in <3s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall}"
+                                )
+                                return@withContext Result.success()
+                            }
                         }
                     }
                 }
@@ -686,7 +780,12 @@ class SyncFingerprintJob(
                                 val newPiecewise = if (activePiecewise.isEmpty()) {
                                     SyncFinder.piecewiseToStorage(cutAudioSec, activeBeta, cand.beta)
                                 } else {
-                                    "$activePiecewise;$cutAudioSec:${cand.beta}"
+                                    val base = if (!activePiecewise.startsWith("0.0:") && !activePiecewise.startsWith("0:")) {
+                                        "0.0:$activeBeta;$activePiecewise"
+                                    } else {
+                                        activePiecewise
+                                    }
+                                    "$base;$cutAudioSec:${cand.beta}"
                                 }
                                 activePiecewise = newPiecewise
                                 activeBeta = cand.beta

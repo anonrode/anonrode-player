@@ -193,15 +193,19 @@ object SubtitleSourceResolver {
         val videoName = videoPath.substringAfterLast('/')
         var best: Sidecar? = null
         var bestScore = Double.NEGATIVE_INFINITY
+        var bestLangW = -1.0
         for (c in candidates) {
             if (SubtitleMatcher.episodeConflict(videoName, c.name)) continue
             val s = SubtitleMatcher.scoreSidecar(videoName, c.name)
+            val langW = SubtitleMatcher.languageWeight(c.name)
             if (best == null ||
                 s > bestScore ||
-                (s == bestScore && c.name.lowercase() < best.name.lowercase())
+                (s == bestScore && langW > bestLangW) ||
+                (s == bestScore && langW == bestLangW && c.name.lowercase() < best.name.lowercase())
             ) {
                 best = c
                 bestScore = s
+                bestLangW = langW
             }
         }
         if (best == null) return null

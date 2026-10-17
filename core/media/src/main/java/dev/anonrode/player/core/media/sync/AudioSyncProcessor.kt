@@ -410,9 +410,12 @@ class AudioSyncProcessor(
         val remaining = input.remaining()
         if (remaining == 0) return
 
-        // Analyze on a duplicate: the view carries its own position cursor,
-        // so the passthrough copy below still sees the full buffer.
-        if (active) analyze(input.duplicate().order(ByteOrder.nativeOrder()))
+        // Analyze in-place with position restore: eliminates per-buffer allocation
+        if (active) {
+            val origPos = input.position()
+            analyze(input)
+            (input as java.nio.Buffer).position(origPos)
+        }
 
         // Passthrough: copy the input into the reused output buffer. The
         // copy consumes the input (position -> limit) AND produces a fresh
@@ -446,7 +449,8 @@ class AudioSyncProcessor(
     override fun flush() {
         inputEnded = false
         outputBuffer = AudioProcessor.EMPTY_BUFFER
-        resetWindow()
+        val anchor = pendingResetPosition ?: -1L
+        resetWindow(anchorPosMs = anchor)
     }
 
     override fun reset() {

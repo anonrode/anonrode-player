@@ -178,7 +178,7 @@ object EmbeddedSubtitleExtractor {
         // MAX_CUE_LEN_SEC so a silence gap can't freeze a cue on screen);
         // the final sample gets the default length.
         var prevStartSec = -1.0
-        var prevPayload: ByteArray? = null
+        var prevLines: List<String>? = null
         var guard = 0
         while (guard++ < MAX_SAMPLES) {
             buf.clear()
@@ -193,39 +193,39 @@ object EmbeddedSubtitleExtractor {
             val bytes = ByteArray(n)
             buf.position(0)
             buf.get(bytes, 0, n)
-            if (prevPayload != null) {
-                val endSec = minOf(startSec, prevStartSec + MAX_CUE_LEN_SEC)
-                addCue(cues, mime, prevPayload, prevStartSec, endSec)
+            val currentLines = parseLines(mime, bytes)
+            if (prevLines != null && prevLines.isNotEmpty()) {
+                val charCount = prevLines.sumOf { it.length }
+                val maxDur = (charCount * 0.08 + 2.0).coerceIn(2.5, 8.0)
+                val endSec = minOf(startSec, prevStartSec + maxDur)
+                if (prevStartSec >= 0 && endSec > prevStartSec) {
+                    cues.add(SubtitleCue(prevStartSec, endSec, prevLines))
+                }
             }
             prevStartSec = startSec
-            prevPayload = bytes
+            prevLines = currentLines
             if (!ex.advance()) break
         }
-        if (prevPayload != null) {
-            addCue(cues, mime, prevPayload, prevStartSec, prevStartSec + DEFAULT_CUE_LEN_SEC)
+        if (prevLines != null && prevLines.isNotEmpty()) {
+            val charCount = prevLines.sumOf { it.length }
+            val maxDur = (charCount * 0.08 + 2.0).coerceIn(2.5, 8.0)
+            val endSec = prevStartSec + maxDur
+            if (prevStartSec >= 0 && endSec > prevStartSec) {
+                cues.add(SubtitleCue(prevStartSec, endSec, prevLines))
+            }
         }
         cues.sortBy { it.start }
         return cues
     }
 
-    private fun addCue(
-        cues: ArrayList<SubtitleCue>,
-        mime: String,
-        payload: ByteArray,
-        startSec: Double,
-        endSec: Double,
-    ) {
-        if (startSec < 0 || endSec <= startSec) return
-        val lines: List<String> = when {
-            mime == MIME_SRT || mime.contains("subrip") ->
-                plainLines(String(payload, Charsets.UTF_8))
-            mime == MIME_VTT -> vttLines(String(payload, Charsets.UTF_8))
-            mime == MIME_SSA || mime.contains("ssa") -> assLines(String(payload, Charsets.UTF_8))
-            mime in MIME_TTML -> ttmlLines(String(payload, Charsets.UTF_8))
-            mime in MIME_TX3G || mime.contains("tx3g") -> tx3gLines(payload)
-            else -> plainLines(String(payload, Charsets.UTF_8))
-        }
-        if (lines.isNotEmpty()) cues.add(SubtitleCue(startSec, endSec, lines))
+    private fun parseLines(mime: String, payload: ByteArray): List<String> = when {
+        mime == MIME_SRT || mime.contains("subrip") ->
+            plainLines(String(payload, Charsets.UTF_8))
+        mime == MIME_VTT -> vttLines(String(payload, Charsets.UTF_8))
+        mime == MIME_SSA || mime.contains("ssa") -> assLines(String(payload, Charsets.UTF_8))
+        mime in MIME_TTML -> ttmlLines(String(payload, Charsets.UTF_8))
+        mime in MIME_TX3G || mime.contains("tx3g") -> tx3gLines(payload)
+        else -> plainLines(String(payload, Charsets.UTF_8))
     }
 
     private fun plainLines(text: String): List<String> = text

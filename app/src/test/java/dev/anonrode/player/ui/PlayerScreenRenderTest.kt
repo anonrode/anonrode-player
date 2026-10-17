@@ -19,6 +19,8 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -105,40 +107,27 @@ class PlayerScreenRenderTest {
             androidx.test.core.app.ApplicationProvider.getApplicationContext<Context>(),
         ).build()
 
-    private fun fixtureActions(): PlayerScreenActions {
+    private fun fixtureActions(
+        ui: PlayerUiState = PlayerUiState(initialIsPlaying = true),
+        gestures: GestureUiState = GestureUiState(),
+        quick: QuickRowUiState = QuickRowUiState(),
+    ): PlayerScreenActions {
         val context = androidx.test.core.app.ApplicationProvider
             .getApplicationContext<Context>()
-        @Suppress("UNUSED_VARIABLE")
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         return PlayerScreenActions(
             context = context,
-            view = View(context),
-            audioManager = audioManager,
             activity = null,
-            engine = null,
             livePlayer = fixturePlayer(),
-            captureScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
-            ui = PlayerUiState(initialIsPlaying = true),
-            hud = HudUiState(),
-            sleep = SleepTimerUiState(),
-            gestures = GestureUiState(),
-            quick = QuickRowUiState(),
-            speedIdx = mutableIntStateOf(2),
-            speeds = listOf(0.25f, 0.5f, 1f, 1.25f, 1.5f, 2f, 2.5f, 3f, 3.5f, 4f),
-            seekIncrementSec = 10,
-            fastSeekThresholdSec = 120L,
-            isRebuildingDecoder = false,
-            title = "The Great Protector S01E04 540p x265 AAC",
-            onSpeedChanged = {},
-            onZoomChanged = {},
-            onToggleEqualizer = { true },
-            onOpenCastPicker = {},
-            onOpenAudioTrackPicker = {},
-            onRebuildDecoder = { 0 },
-            onNudgeSubtitle = {},
-            onEnterPip = {},
-            onSetSubSyncEnabled = {},
-            onResyncNow = {},
+            ui = ui,
+            gestures = gestures,
+            quick = quick,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            decoderModeLabel = mutableStateOf("HW+SW"),
+            isRebuildingDecoder = mutableStateOf(false),
+            onRebuildDecoderCycle = {},
+            onApplyEngineSubtitleOffsetSec = {},
+            onTriggerEngineAutoSync = {},
+            onCaptureVideoFrame = {},
         )
     }
 
@@ -157,27 +146,45 @@ class PlayerScreenRenderTest {
 
     @Composable
     private fun Chrome(actions: PlayerScreenActions, visible: Boolean) {
-        PlayerControlsOverlay(
-            visible = visible,
+        val ui = remember { PlayerUiState(initialIsPlaying = true).apply { controlsVisible.value = visible } }
+        val gestures = remember { GestureUiState() }
+        val quick = remember { QuickRowUiState() }
+        val pos = remember { mutableFloatStateOf(46f * 60f + 23f) }
+        val dur = remember { mutableFloatStateOf(53f * 60f + 52f) }
+        val buf = remember { mutableFloatStateOf(34f * 60f) }
+        val cue = remember { mutableStateOf("") }
+        val res = remember { mutableStateOf("1080p • 24fps") }
+        val dec = remember { mutableStateOf("HW+SW") }
+        val off = remember { mutableStateOf(120L) }
+
+        PlayerScreen(
             title = "The Great Protector S01E04 540p x265 AAC",
-            accent = accent.primary,
-            positionSec = mutableFloatStateOf(46f * 60f + 23f),
-            durationSec = mutableFloatStateOf(53f * 60f + 52f),
-            bufferedSec = mutableFloatStateOf(34f * 60f),
-            localSeek = mutableFloatStateOf(-1f),
-            isPlaying = true,
-            hasPreviousEpisode = true,
-            hasNextEpisode = true,
-            videoWidth = 1920,
-            videoHeight = 1080,
-            videoFps = 24,
-            hasSubtitleTrack = true,
-            liveOffsetMs = 120L,
+            positionSec = pos,
+            durationSec = dur,
+            bufferedSec = buf,
+            cueText = cue,
+            videoResolutionFpsLabel = res,
+            decoderModeLabel = dec,
+            liveOffsetMs = off,
+            chapters = emptyList(),
+            subtitleTracks = emptyList(),
+            selectedSubtitleTrackId = null,
+            episodes = emptyList(),
+            scrubPreviewBitmap = null,
+            isPipMode = false,
+            ui = ui,
+            gestures = gestures,
+            quick = quick,
             actions = actions,
-            onBack = {},
-            onPlayPrevious = {},
-            onPlayNext = {},
-            onMore = {},
+            videoSurfaceContent = {},
+            onNavigateBack = {},
+            onSelectSubtitleTrack = {},
+            onOpenLocalSubtitlePicker = {},
+            onSelectEpisode = {},
+            onPreviousEpisode = {},
+            onNextEpisode = {},
+            onOpenAudioTracks = {},
+            onEnterPip = {},
         )
     }
 
@@ -255,18 +262,20 @@ class PlayerScreenRenderTest {
 
     @Test
     fun speed_card_open() {
-        val actions = fixtureActions()
+        val ui = PlayerUiState(initialIsPlaying = true).apply {
+            currentPlaybackSpeed.floatValue = 1.37f
+            speedCardOpen.value = true
+        }
+        val actions = fixtureActions(ui = ui)
         compose.setContent {
             Stage(false) {
                 Chrome(actions, visible = true)
                 Box(Modifier.fillMaxSize().padding(top = 150.dp), contentAlignment = Alignment.TopCenter) {
                     PrecisionSpeedCard(
                         visible = true,
-                        currentSpeed = 1.37f,
-                        onStep = {},
-                        onSetSpeed = {},
-                        onReset = {},
-                        accent = accent.primary,
+                        ui = ui,
+                        onApplySpeed = {},
+                        onDismiss = {},
                     )
                 }
             }
@@ -276,22 +285,27 @@ class PlayerScreenRenderTest {
 
     @Test
     fun subtitle_drawer_open() {
-        val actions = fixtureActions()
+        val ui = PlayerUiState(initialIsPlaying = true)
+        val gestures = GestureUiState()
+        val actions = fixtureActions(ui = ui, gestures = gestures)
+        val tracks = listOf(
+            SubtitleTrackItem(id = "sub-1", title = "English (embedded)", formatLabel = "ASS • Embedded"),
+            SubtitleTrackItem(id = "sub-2", title = "Spanish (sidecar)", formatLabel = "SRT • Sidecar", isExternal = true),
+        )
         compose.setContent {
             Stage(false) {
                 Chrome(actions, visible = true)
                 Box(Modifier.fillMaxSize().background(Color(0x66000000))) {
                     PlayerSubtitleDrawer(
                         visible = true,
-                        showCC = true,
-                        currentChoiceLabel = "episode-2 · English (embedded)",
-                        offsetMs = 120L,
-                        accent = accent,
-                        onToggleShowCC = {},
-                        onNudge = {},
-                        onResetOffset = {},
-                        onResync = {},
-                        onOpenLocalFile = {},
+                        tracks = tracks,
+                        selectedTrackId = "sub-1",
+                        ui = ui,
+                        gestures = gestures,
+                        onSelectTrack = {},
+                        onOpenLocalFilePicker = {},
+                        onTriggerAutoSync = {},
+                        onApplySubtitleOffsetSec = {},
                         onDismiss = {},
                     )
                 }
@@ -302,22 +316,27 @@ class PlayerScreenRenderTest {
 
     @Test
     fun settings_drawer_open() {
-        val actions = fixtureActions()
+        val ui = PlayerUiState(initialIsPlaying = true).apply {
+            volumeBoostPercent.intValue = 150
+            nightMode.value = false
+            backgroundPlayOn.value = true
+        }
+        val quick = QuickRowUiState().apply {
+            equalizerOn.value = false
+        }
+        val actions = fixtureActions(ui = ui, quick = quick)
         compose.setContent {
             Stage(false) {
                 Chrome(actions, visible = true)
                 Box(Modifier.fillMaxSize().background(Color(0x66000000))) {
                     PlayerSettingsDrawer(
                         visible = true,
-                        accent = accent,
-                        abActive = true,
-                        nightMode = false,
-                        backgroundPlay = true,
-                        volumeBoost = 50,
-                        sleepMinutes = 30,
-                        equalizerOn = false,
-                        repeatModeLabel = "OFF",
-                        decoderModeLabel = "HW+SW",
+                        ui = ui,
+                        quick = quick,
+                        onApplySpeed = {},
+                        onOpenAudioTracks = {},
+                        onEnterPip = {},
+                        onCaptureScreenshot = {},
                         onDismiss = {},
                     )
                 }
@@ -329,30 +348,21 @@ class PlayerScreenRenderTest {
     @Test
     fun playlist_drawer_open() {
         val actions = fixtureActions()
-        val videos = (1..5).map { i ->
-            Video(
-                uri = "/sdcard/show/episode-0$i.mkv",
-                path = "/sdcard/show/episode-0$i.mkv",
+        val episodes = (1..5).map { i ->
+            PlaylistEpisodeItem(
+                id = "/sdcard/show/episode-0$i.mkv",
                 title = "…season-1-episode-0$i",
-                durationMs = 3_200_000L + i * 60_000L,
-                width = 1280,
-                height = 720,
-                sizeBytes = 730_000_000L,
-                lastModifiedMs = 1_760_000_000_000L,
-                mediaStoreId = i.toLong(),
-                parentPath = "/sdcard/show",
+                durationSec = 3200f + i * 60f,
+                isPlaying = i == 2,
             )
         }
-        val queue = EpisodeQueue(episodes = videos, currentIndex = 1)
         compose.setContent {
             Stage(false) {
                 Chrome(actions, visible = true)
                 Box(Modifier.fillMaxSize().background(Color(0x66000000))) {
                     PlayerPlaylistDrawer(
                         visible = true,
-                        queue = queue,
-                        currentMediaUri = videos[1].uri,
-                        accent = accent,
+                        episodes = episodes,
                         onSelectEpisode = {},
                         onDismiss = {},
                     )

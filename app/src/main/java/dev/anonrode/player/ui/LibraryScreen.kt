@@ -1,7 +1,10 @@
 package dev.anonrode.player.ui
 
 import android.content.Intent
+import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1804,3 +1807,202 @@ private fun SkeletonRow(palette: SkinPalette, wide: Boolean = false) {
         }
     }
 }
+
+/**
+ * §10.1 Continue Watching (`ContinueCard`):
+ * - Pure 140dp x 80dp (16:9) card (`AGENT.md` §4.1).
+ * - All extraneous text labels below the card are removed.
+ * - Overlays: Bottom-left duration pill (`▶ 24:12`) and bottom edge 3dp progress bar.
+ */
+@Composable
+fun ContinueCard(
+    thumbnail: Bitmap?,
+    remainingOrDurationLabel: String,
+    progressFraction: Float,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .size(width = 140.dp, height = 80.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF111827))
+            .clickable(onClick = onClick),
+    ) {
+        if (thumbnail != null && !thumbnail.isRecycled) {
+            Image(
+                bitmap = thumbnail.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        // Bottom-left duration pill (`▶ 24:12`)
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 6.dp, bottom = 7.dp)
+                .opticalGlass(
+                    shape = RoundedCornerShape(5.dp),
+                    baseColor = Color.Black.copy(alpha = 0.58f),
+                    borderWidth = 0.8.dp,
+                )
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        ) {
+            Text(
+                text = "▶ $remainingOrDurationLabel",
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFeatureSettings = "tnum",
+                ),
+            )
+        }
+
+        // Bottom edge 3dp progress bar
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .height(3.dp)
+                .background(Color.White.copy(alpha = 0.22f)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
+                    .height(3.dp)
+                    .background(OpticalGlassTokens.CyanAccent),
+            )
+        }
+    }
+}
+
+/**
+ * §10.2 Series Hub (`SeriesCard`):
+ * - Strict Modifier Ordering: `.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).height(88.dp)`
+ *   so vertical padding never reduces the 88dp row height or clips thumbnails.
+ * - Theme-Aware Border: `BorderStroke(1.dp, paletteTextColor.copy(alpha = 0.08f))`.
+ * - Thumbnail Progress Bar along the bottom edge of the 112dp x 68dp thumbnail.
+ * - Play Button Contrast: Icon tint explicitly set to `Color.White`.
+ */
+@Composable
+fun SeriesCard(
+    title: String,
+    episodeCountLabel: String,
+    lastWatchedSubtitle: String,
+    thumbnail: Bitmap?,
+    watchedFraction: Float,
+    paletteSurfaceColor: Color,
+    paletteTextColor: Color,
+    onCardClick: () -> Unit,
+    onQuickPlayClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .height(88.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = paletteSurfaceColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, paletteTextColor.copy(alpha = 0.08f)),
+        onClick = onCardClick,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // 112dp x 68dp Thumbnail with bottom watched progress bar
+            Box(
+                modifier = Modifier
+                    .size(width = 112.dp, height = 68.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF1E293B)),
+            ) {
+                if (thumbnail != null && !thumbnail.isRecycled) {
+                    Image(
+                        bitmap = thumbnail.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                if (watchedFraction > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .background(Color.Black.copy(alpha = 0.5f)),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(watchedFraction.coerceIn(0f, 1f))
+                                .height(3.dp)
+                                .background(OpticalGlassTokens.CyanAccent),
+                        )
+                    }
+                }
+            }
+
+            // Series Title & Episode Info
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = TextStyle(
+                        color = paletteTextColor,
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                )
+                Text(
+                    text = episodeCountLabel,
+                    maxLines = 1,
+                    style = TextStyle(
+                        color = paletteTextColor.copy(alpha = 0.65f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                )
+                Text(
+                    text = lastWatchedSubtitle,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = TextStyle(
+                        color = OpticalGlassTokens.CyanAccent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+            }
+
+            // High-Contrast Play Button (Explicit Color.White glyph tint)
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(OpticalGlassTokens.CyanAccent)
+                    .clickable(onClick = onQuickPlayClick),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "▶",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+    }
+}
+

@@ -204,7 +204,14 @@ object SubtitleParser {
         var i = from
         while (i < lines.size) {
             val l = lines[i]
-            if (l.trim().isEmpty() || TIMING.containsMatchIn(l)) break
+            val trimmed = l.trim()
+            if (trimmed.isEmpty() || TIMING.containsMatchIn(trimmed)) break
+            // If the next line is a timing line and current line is an identifier/index,
+            // break so it is not captured as subtitle text for this cue.
+            val nextIsTiming = (i + 1 < lines.size) && TIMING.containsMatchIn(lines[i + 1].trim())
+            if (nextIsTiming && (trimmed.all { it.isDigit() } || trimmed.startsWith("NOTE", ignoreCase = true) || !trimmed.contains(' '))) {
+                break
+            }
             val s = stripTags(l)
             if (s.isNotEmpty()) txt.add(s)
             i++
@@ -219,8 +226,16 @@ object SubtitleParser {
         var i = 0
         while (i < lines.size) {
             val line = lines[i].trim()
-            // Cue-index lines (SRT) and headers/NOTE/STYLE (VTT): skip.
-            if (line.isEmpty() || line.all { it.isDigit() }) {
+            // WebVTT NOTE / STYLE / REGION block: skip until blank line
+            if (line.startsWith("NOTE", ignoreCase = true) ||
+                line.startsWith("STYLE", ignoreCase = true) ||
+                line.startsWith("REGION", ignoreCase = true)
+            ) {
+                while (i < lines.size && lines[i].trim().isNotEmpty()) i++
+                continue
+            }
+            // Cue-index lines (SRT) and headers: skip.
+            if (line.isEmpty() || line.all { it.isDigit() } || line.startsWith("WEBVTT", ignoreCase = true)) {
                 i++
                 continue
             }

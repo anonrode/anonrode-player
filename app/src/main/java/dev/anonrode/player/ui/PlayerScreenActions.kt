@@ -1,905 +1,231 @@
 package dev.anonrode.player.ui
 
 import android.app.Activity
-import android.content.ContentValues
 import android.content.Context
-import android.graphics.Bitmap
 import android.media.AudioManager
-import android.os.Build
-import android.os.Environment
-import android.os.Handler
-import android.os.Looper
-import android.provider.MediaStore
-import android.view.HapticFeedbackConstants
-import android.view.PixelCopy
-import android.view.SurfaceView
-import android.view.View
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AspectRatio
-import androidx.compose.runtime.MutableIntState
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
+import android.media.audiofx.LoudnessEnhancer
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.remember
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
-import dev.anonrode.player.core.media.log.AppLog
-import dev.anonrode.player.feature.player.PlaybackEngine
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.IOException
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.roundToInt
-import dev.anonrode.player.PlayerPrefs
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
-/**
- * The player screen's action surface — what used to be ~16 local functions
- * inside one giant composable. The construction site in PlayerScreen.kt
- * now wraps this in remember(livePlayer, engine, ui, hud, sleep, gestures,
- * quick, captureScope), giving the four pointerInput blocks in
- * PlayerScreenGestures.kt a stable actions reference across control-overlay
- * recompositions — so they don't relaunch on every 8–100 ms render-loop
- * tick. Freshness is preserved: this class captures [livePlayer] and the
- * holder references, and method bodies read `ui.foo.value` / `hud.showHud()`
- * live off those holders — the same live-read semantics as before. Only the
- * construction identity changes; field types and method signatures are
- * untouched (intentionally — see the perf audit).
- */
-@UnstableApi
-internal class PlayerScreenActions(
-    val context: Context,
-    val view: View,
-    val audioManager: AudioManager,
-    val activity: Activity?,
-    val engine: PlaybackEngine?,
-    val livePlayer: Player,
-    private val captureScope: CoroutineScope,
-    val ui: PlayerUiState,
-    private val hud: HudUiState,
-    val sleep: SleepTimerUiState,
-    val gestures: GestureUiState,
-    val quick: QuickRowUiState,
-    val speedIdx: MutableIntState,
-    val speeds: List<Float>,
-    /**
-     * Persisted seek step (seconds) from PlayerSettings.seekIncrementSec.
-     * Seeding-only input — the value lives on [PlayerUiState.seekStepSec],
-     * which this constructor seeds so the double-tap wave and the dock's
-     * ±N s chips read one shared state (hub 3.2/4.6, single source).
-     */
-    seekIncrementSec: Int,
-    private val fastSeekThresholdSec: Long,
-    private val isRebuildingDecoder: Boolean,
-    private val title: String,
-    private val onSpeedChanged: (Float) -> Unit,
-    private val onZoomChanged: (Int) -> Unit,
-    private val onToggleEqualizer: (Boolean) -> Boolean,
-    private val onOpenCastPicker: () -> Unit,
-    private val onOpenAudioTrackPicker: () -> Unit,
-    private val onRebuildDecoder: (Boolean) -> Int,
-
-    /**
-     * The decoder profile the engine is on, mirrored from the host so the chip
-     * shows the truth rather than a local guess. See [cycleDecoderMode].
-     */
-    val decoderModeLabel: String = "HW+SW",
-    /**
-     * Reports whether the user has pinned rotation, so the host can stop its
-     * auto-landscape-on-widescreen behaviour from overriding an explicit lock.
-     * True means "auto-rotate is welcome" (mode == SENSOR).
-     */
-    private val onAutoRotateChanged: (Boolean) -> Unit = {},
-    private val onNudgeSubtitle: (Long) -> Unit,
-    private val onEnterPip: () -> Unit,
-    /**
-     * v0.6.2 sub-sync UX pass: DataStore write for the user-facing sync
-     * toggle. The action also mirrors the new state into [quick.subSyncEnabled]
-     * so the toggle's icon flips instantly (DataStore is async).
-     */
-    private val onSetSubSyncEnabled: (Boolean) -> Unit,
-    /** "Resync now" — long-press on the toggle. */
-    private val onResyncNow: () -> Unit,
-    /**
-     * Persist + apply the user's background-playback preference.
-     *
-     * The ribbon's "Background Play" tool used to flip a Compose flag that
-     * nothing read, so the tap produced a toast and no behaviour change. It
-     * now routes through to the same [dev.anonrode.player.core.datastore.PlayerSettings.backgroundPlayback]
-     * field that PlayerActivity.onStop consults — one source of truth, so
-     * the ribbon tool and the Settings screen can never disagree.
-     */
-    private val onSetBackgroundPlayback: (Boolean) -> Unit = {},
-    /**
-     * Persist + apply the "Audio Effect" (voice clarity) preference. The
-     * host owns the DSP stage; this action only owns the UI state + haptics
-     * so the red active dot flips instantly.
-     */
-    private val onSetAudioEffect: (Boolean) -> Unit = {},
-    /**
-     * Persist the playlist shuffle/repeat pair for [persistUri] (the video
-     * currently open). Null when no video is open, in which case the
-     * toggle still applies to the live player but is not written.
-     */
-    private val onPersistPlaylistMode: (uri: String, shuffle: Boolean, repeatMode: Int) -> Unit = { _, _, _ -> },
-    /** The video whose playlist mode is currently being edited. */
-    private val persistUri: () -> String? = { null },
-    private val onOpenSubtitlePicker: () -> Unit = {},
+@Stable
+class PlayerScreenActions(
+    private val context: Context,
+    private val activity: Activity?,
+    private val livePlayer: ExoPlayer?,
+    private val ui: PlayerUiState,
+    private val gestures: GestureUiState,
+    private val quick: QuickRowUiState,
+    private val scope: CoroutineScope,
+    val decoderModeLabel: State<String>,
+    val isRebuildingDecoder: State<Boolean>,
+    private val onRebuildDecoderCycle: () -> Unit,
+    private val onApplyEngineSubtitleOffsetSec: (Float) -> Unit,
+    private val onTriggerEngineAutoSync: () -> Unit,
+    private val onCaptureVideoFrame: () -> Unit,
 ) {
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val maxHardwareVolume: Int =
+        audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
 
-    init {
-        // Seek-step single source of truth (hub 3.2/4.6): the persisted
-        // step the host passes in seeds [PlayerUiState.seekStepSec], the
-        // one state field the double-tap wave and the dock's ±N s chips
-        // read. It re-seeds on every actions rebuild (decoder swap, new
-        // player, screen re-entry), so the shared value can never drift
-        // from the store the Control Center pill reflects.
-        ui.seekStepSec.intValue = seekIncrementSec
-    }
+    private var loudnessEnhancer: LoudnessEnhancer? = null
+    private var exactSeekRestoreJob: Job? = null
 
-    fun openSubtitlePicker() {
-        onOpenSubtitlePicker()
-    }
-
-    fun showHud(icon: ImageVector, text: String) =
-        hud.showHud(view, icon, text)
-
-    fun showTransientToast(msg: String) = hud.showTransientToast(view, msg)
-
-    // ── 3-Tier Hierarchy Navigation & Visibility ──
-    fun toggleHud() {
-        if (ui.locked.value) return
-        val next = !ui.controlsVisible.value
-        ui.controlsVisible.value = next
-        if (!next) {
-            closeTier2And3()
+    fun syncInitialHardwareState() {
+        val currentHw = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        ui.volumeBoostPercent.intValue = ((currentHw.toFloat() / maxHardwareVolume) * 100f).roundToInt()
+        val windowAttr = activity?.window?.attributes
+        if (windowAttr != null && windowAttr.screenBrightness >= 0f) {
+            ui.screenBrightnessFraction.floatValue = windowAttr.screenBrightness.coerceIn(0.02f, 1.0f)
         }
     }
 
-    fun toggleThreeDotsMenu() {
-        val next = !ui.threeDotsMenuOpen.value
-        if (next) {
-            closeAllDrawers()
-        }
-        ui.threeDotsMenuOpen.value = next
-        view.haptic()
-    }
-
-    fun closeThreeDotsMenu() {
-        ui.threeDotsMenuOpen.value = false
-    }
-
-    fun togglePlaylistDrawer() {
-        val next = !ui.playlistDrawerOpen.value
-        if (next) {
-            closeAllDrawers()
-        }
-        ui.playlistDrawerOpen.value = next
-        view.haptic()
-    }
-
-    fun openPlaylistDrawer() {
-        closeAllDrawers()
-        ui.playlistDrawerOpen.value = true
-        view.haptic()
-    }
-
-    fun closePlaylistDrawer() {
-        ui.playlistDrawerOpen.value = false
-    }
-
-    fun toggleSubtitleDrawer() {
-        val next = !ui.subtitleDrawerOpen.value
-        if (next) {
-            closeAllDrawers()
-        }
-        ui.subtitleDrawerOpen.value = next
-        view.haptic()
-    }
-
-    fun openSubtitleDrawer() {
-        closeAllDrawers()
-        ui.subtitleDrawerOpen.value = true
-        view.haptic()
-    }
-
-    fun closeSubtitleDrawer() {
-        ui.subtitleDrawerOpen.value = false
-    }
-
-    fun closeAllDrawers() {
-        ui.threeDotsMenuOpen.value = false
-        ui.playlistDrawerOpen.value = false
-        ui.subtitleDrawerOpen.value = false
-        ui.equalizerSheetOpen.value = false
-        ui.speedCardOpen.value = false
-    }
-
-    fun closeTier2And3() {
-        ui.closeTier2And3()
-        quick.closeRibbonCustomise()
-        closeSyncPopover()
-    }
-
-    fun togglePlayPause() {
-        if (livePlayer.isPlaying) livePlayer.pause() else livePlayer.play()
-    }
-
-    fun toggleLock() {
-        val next = !ui.locked.value
-        ui.locked.value = next
-        ui.lockScrimVisible.value = next
-        if (next) {
-            ui.controlsVisible.value = false
-            closeTier2And3()
-            showTransientToast("Screen Locked")
+    fun onPlayPauseToggle() {
+        ui.bumpInteraction()
+        val player = livePlayer ?: return
+        if (player.isPlaying) {
+            player.pause()
+            ui.isPlaying.value = false
         } else {
-            ui.controlsVisible.value = true
-            showTransientToast("Screen Unlocked")
-        }
-        view.haptic()
-    }
-
-    fun lockControls() {
-        ui.locked.value = true
-        ui.lockScrimVisible.value = true
-        ui.controlsVisible.value = false
-        closeTier2And3()
-        view.haptic()
-        showTransientToast("Screen Locked")
-    }
-
-    fun unlockControls() {
-        ui.locked.value = false
-        ui.lockScrimVisible.value = false
-        ui.controlsVisible.value = true
-        view.haptic()
-        showTransientToast("Screen Unlocked")
-    }
-
-    fun toggleShowCC() {
-        val next = !ui.showCC.value
-        ui.showCC.value = next
-        view.haptic()
-        showTransientToast(if (next) "Subtitles on" else "Subtitles off")
-    }
-
-    fun toggleNightMode() {
-        ui.nightMode.value = !ui.nightMode.value
-        view.haptic()
-        showTransientToast(if (ui.nightMode.value) "Night mode on" else "Night mode off")
-    }
-
-    fun toggleShuffle() {
-        ui.shuffleOn.value = !ui.shuffleOn.value
-        view.haptic()
-        (livePlayer as? ExoPlayer)?.shuffleModeEnabled = ui.shuffleOn.value
-        showTransientToast(if (ui.shuffleOn.value) "Shuffle on" else "Shuffle off")
-        persistPlaylistMode()
-    }
-
-    fun cycleRepeatLoopMode() {
-        val next = ui.repeatMode.value.next()
-        ui.repeatMode.value = next
-        view.haptic()
-        val exoMode = when (next) {
-            RepeatLoopMode.OFF -> Player.REPEAT_MODE_OFF
-            RepeatLoopMode.ONE -> Player.REPEAT_MODE_ONE
-            RepeatLoopMode.ALL -> Player.REPEAT_MODE_ALL
-        }
-        livePlayer.repeatMode = exoMode
-        showTransientToast(next.label)
-        persistPlaylistMode()
-    }
-
-    /**
-     * Write the shuffle/repeat pair through to the host.
-     *
-     * Both are persisted in ONE statement so they can never land as a
-     * half-applied pair, and skipped entirely when no video is open (the
-     * live player still honours the change for this session).
-     */
-    private fun persistPlaylistMode() {
-        val uri = persistUri() ?: return
-        onPersistPlaylistMode(
-            uri,
-            ui.shuffleOn.value,
-            ui.repeatMode.value.ordinal,
-        )
-    }
-
-    fun toggleMute() {
-        val maxV = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val currentV = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (ui.isMuted.value) {
-            val restoreV = if (ui.savedVolume.intValue > 0) ui.savedVolume.intValue else (maxV / 2)
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, restoreV, 0)
-            ui.isMuted.value = false
-            view.haptic()
-            showTransientToast("Unmuted")
-        } else {
-            ui.savedVolume.intValue = currentV
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
-            ui.isMuted.value = true
-            view.haptic()
-            showTransientToast("Muted")
-        }
-    }
-
-    fun cycleSleepTimer() {
-        val options = listOf(0, 15, 30, 45, 60)
-        val curMin = ui.sleepMinutes.intValue
-        val nextIdx = (options.indexOf(curMin).coerceAtLeast(0) + 1) % options.size
-        val nextMin = options[nextIdx]
-        ui.sleepMinutes.intValue = nextMin
-        val matchedOpt = SleepOptions.firstOrNull { it.minutes == nextMin } ?: SleepOption(if (nextMin == 0) "Off" else "${nextMin}m", nextMin)
-        selectSleep(matchedOpt)
-        view.haptic()
-        showTransientToast(if (nextMin == 0) "Sleep Timer Off" else "Sleep Timer: ${nextMin}m")
-    }
-
-    fun cycleAbRepeat() {
-        val curPos = livePlayer.currentPosition
-        when {
-            ui.abStartMs.value == null -> {
-                ui.abStartMs.value = curPos
-                view.haptic()
-                showTransientToast("Point A set: ${fmtTime(curPos)}")
-            }
-            ui.abEndMs.value == null -> {
-                if (curPos > ui.abStartMs.value!!) {
-                    ui.abEndMs.value = curPos
-                    view.haptic()
-                    showTransientToast("Point B set: ${fmtTime(curPos)} · Looping A-B")
-                } else {
-                    showTransientToast("Point B must be after Point A")
-                }
-            }
-            else -> {
-                ui.abStartMs.value = null
-                ui.abEndMs.value = null
-                view.haptic()
-                showTransientToast("A-B repeat cleared")
-            }
+            player.play()
+            ui.isPlaying.value = true
         }
     }
 
     /**
-     * Audio Effect / voice clarity.
-     *
-     * This used to flip [PlayerUiState.audioEffectOn] and stop there — the
-     * flag was only ever read back to colour its own icon, so the tap was
-     * decorative. It now persists the preference through the host, which
-     * owns the actual DSP stage, so the red active dot reflects a real
-     * audible change.
+     * Fast 60 FPS keyframe preview seek (`SeekParameters.CLOSEST_SYNC`) during horizontal drags.
      */
-    fun toggleAudioEffect() {
-        val next = !ui.audioEffectOn.value
-        ui.audioEffectOn.value = next
-        view.haptic()
-        onSetAudioEffect(next)
-        showTransientToast(if (next) "Voice clarity on" else "Audio effect off")
+    fun onPreviewKeyFrameSeekMs(targetMs: Long) {
+        val player = livePlayer ?: return
+        exactSeekRestoreJob?.cancel()
+        player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+        player.seekTo(targetMs.coerceAtLeast(0L))
     }
 
     /**
-     * Reset the persistent rate to 1x without cycling — the reference
-     * player's long-press on the speed pill. [RibbonToolItem] already
-     * accepts an `onLongClick`; the ribbon's Speed tool now uses it.
+     * Commits final scrub position and restores `SeekParameters.EXACT` 500ms after touch release (§5.2.1).
      */
-    fun resetSpeed() {
-        val normal = speeds.indexOfFirst { abs(it - 1f) < 0.05f }
-        if (normal < 0 || speedIdx.intValue == normal) {
-            showTransientToast("Speed already " + speedLabel(1f))
-            return
+    fun onCommitExactSeekMs(targetMs: Long) {
+        val player = livePlayer ?: return
+        exactSeekRestoreJob?.cancel()
+        player.setSeekParameters(SeekParameters.EXACT)
+        player.seekTo(targetMs.coerceAtLeast(0L))
+        exactSeekRestoreJob = scope.launch {
+            delay(500L)
+            livePlayer?.setSeekParameters(SeekParameters.EXACT)
         }
-        speedIdx.intValue = normal
-        ui.currentPlaybackSpeed.floatValue = 1f
-        livePlayer.setPlaybackSpeed(1f)
-        onSpeedChanged(1f)
-        view.haptic()
-        showTransientToast("Speed reset to " + speedLabel(1f))
-    }
-
-    fun resetSpeedToDefault() = resetSpeed()
-
-    fun toggleSpeedCard() {
-        val next = !ui.speedCardOpen.value
-        ui.speedCardOpen.value = next
-        if (next) {
-            ui.threeDotsMenuOpen.value = false
-        }
-        view.haptic()
-    }
-
-    fun closeSpeedCard() {
-        ui.speedCardOpen.value = false
-    }
-
-    fun setArbitrarySpeed(speed: Float) {
-        val clamped = (kotlin.math.round(speed * 100f) / 100f).coerceIn(0.25f, 4.0f)
-        ui.currentPlaybackSpeed.floatValue = clamped
-        val matchingIdx = speeds.indexOfFirst { abs(it - clamped) < 0.05f }
-        if (matchingIdx >= 0) speedIdx.intValue = matchingIdx
-        (engine?.player ?: livePlayer).setPlaybackSpeed(clamped)
-        onSpeedChanged(clamped)
-    }
-
-    fun stepSpeed(delta: Float) {
-        val current = ui.currentPlaybackSpeed.floatValue
-        setArbitrarySpeed(current + delta)
-        view.haptic()
-    }
-
-    val discreteMilestones = listOf(0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f, 4.0f)
-    private var scrubBaseSpeed = 1.0f
-
-    fun startSpeedScrub() {
-        scrubBaseSpeed = ui.currentPlaybackSpeed.floatValue
-        ui.discreteScrubIndex.intValue = 4 // 2.0x milestone default
-        ui.showSpeedScrubHud(2.0f, expanded = false)
-        (engine?.player ?: livePlayer).setPlaybackSpeed(2.0f)
-        view.haptic()
-    }
-
-    fun updateDiscreteScrub(stepIndex: Int, isSliding: Boolean) {
-        val validIndex = stepIndex.coerceIn(0, discreteMilestones.size - 1)
-        val changed = validIndex != ui.discreteScrubIndex.intValue
-        ui.discreteScrubIndex.intValue = validIndex
-        val speed = discreteMilestones[validIndex]
-        ui.updateSpeedScrub(speed, expanded = isSliding)
-        (engine?.player ?: livePlayer).setPlaybackSpeed(speed)
-        if (changed) {
-            view.haptic()
-        }
-    }
-
-    fun stopSpeedScrub() {
-        ui.hideSpeedScrubHud()
-        (engine?.player ?: livePlayer).setPlaybackSpeed(scrubBaseSpeed)
-        showTransientToast("Restored ${speedLabel(scrubBaseSpeed)}")
     }
 
     /**
-     * Background playback.
-     *
-     * Previously a no-op flag. Now writes the real setting: with it OFF,
-     * PlayerActivity.onStop pauses the player when the activity leaves the
-     * foreground; with it ON, playback (and the foreground service) continue.
+     * §5.2.2 Gesture Cancellation Recovery: immediately restores `SeekParameters.EXACT`
+     * so aborted drags never leave ExoPlayer stuck in coarse keyframe seek mode.
      */
-    fun toggleBackgroundPlay() {
-        val next = !ui.backgroundPlayOn.value
-        ui.backgroundPlayOn.value = next
-        view.haptic()
-        onSetBackgroundPlayback(next)
-        showTransientToast(if (next) "Background play on" else "Background play off")
-    }
-
-    fun openRibbonCustomise() {
-        quick.openRibbonCustomise()
-        view.haptic()
-    }
-
-    fun closeRibbonCustomise() {
-        quick.closeRibbonCustomise()
-    }
-
-    fun toggleRibbonToolVisible(tool: RibbonTool) {
-        quick.toggleRibbonToolVisible(tool)
-        view.haptic()
-        persistRibbon()
-    }
-
-    fun moveRibbonTool(tool: RibbonTool, dir: Int) {
-        quick.moveRibbonTool(tool, dir)
-        view.haptic()
-        persistRibbon()
+    fun onCancelKeyframeSeek() {
+        exactSeekRestoreJob?.cancel()
+        gestures.pendingSeekMs.floatValue = -1f
+        gestures.scrubDeltaSec.floatValue = 0f
+        ui.localSeek.floatValue = -1f
+        livePlayer?.setSeekParameters(SeekParameters.EXACT)
     }
 
     /**
-     * Write the current arrangement through to SharedPreferences.
-     *
-     * Only the ORDER of the visible tools is stored; the hidden set is
-     * stored separately, so a hidden tool is simply absent from the order
-     * and reappears at its catalogue position when unhidden.
+     * Step seek (±10s default) shared between transport buttons and double-tap seek ripples (§7.4).
      */
-    private fun persistRibbon() {
-        dev.anonrode.player.PlayerPrefs.saveRibbonOrder(
-            context,
-            quick.ribbonOrder.map { it.name },
-        )
-        dev.anonrode.player.PlayerPrefs.saveRibbonHidden(
-            context,
-            quick.ribbonHiddenTools().map { it.name }.toSet(),
-        )
+    fun onStepSeekSec(deltaSec: Int) {
+        ui.bumpInteraction()
+        val player = livePlayer ?: return
+        val durationMs = player.duration.coerceAtLeast(1000L)
+        val targetMs = (player.currentPosition + deltaSec * 1000L).coerceIn(0L, durationMs)
+        player.setSeekParameters(SeekParameters.EXACT)
+        player.seekTo(targetMs)
     }
 
     /**
-     * Persist the ribbon's horizontal scroll offset.
-     *
-     * Separate from [persistRibbon] because the trigger is different in kind:
-     * the arrangement writes are user-initiated and rare, whereas this one
-     * arrives on every settled scroll. The collector in
-     * `PlayerScreenTopBar` debounces it, and [QuickRowUiState.onRibbonScrolled]
-     * reports whether the value actually moved, so a no-op scroll costs
-     * nothing.
+     * Continuous 0%..200% Volume + LoudnessEnhancer Audio Boost.
+     * - 0..100%: Maps linearly to hardware `AudioManager.STREAM_MUSIC` (0 dB software gain).
+     * - 101..200%: Locks hardware volume at 100% and applies up to +1200 mB (+12 dB) via `LoudnessEnhancer`.
      */
-    fun onRibbonScrolled(px: Int) {
-        if (quick.onRibbonScrolled(px)) {
-            dev.anonrode.player.PlayerPrefs.saveRibbonScrollPx(context, px)
-        }
-    }
+    fun onApplyVolumeBoostPercent(percent: Int) {
+        val clamped = percent.coerceIn(0, 200)
+        ui.volumeBoostPercent.intValue = clamped
+        ui.isMuted.value = (clamped == 0)
 
-    fun openSyncPopover() {
-        quick.showSyncPopover.value = true
-    }
+        val hwFraction = (clamped.coerceAtMost(100) / 100f)
+        val targetHwIndex = (hwFraction * maxHardwareVolume).roundToInt().coerceIn(0, maxHardwareVolume)
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetHwIndex, 0)
 
-    fun closeSyncPopover() {
-        quick.showSyncPopover.value = false
-    }
-
-    fun toggleEqualizer() {
-        val requested = !quick.equalizerOn.value
-        // The host owns the android.media.audiofx.Equalizer instance bound
-        // to the current audio session id; on each tap it enables/disables
-        // that effect and reports back the actual on/off state.
-        val actual = onToggleEqualizer(requested)
-        quick.equalizerOn.value = actual
-        AppLog.d("PLAYER", "equalizer request=" + requested + " actual=" + actual)
-        showTransientToast(
-            if (actual) "Equalizer on"
-            else "Equalizer off"
-        )
-    }
-
-    fun openCastPicker() {
-        AppLog.d("PLAYER", "cast: opening route picker")
-        onOpenCastPicker()
-    }
-
-    /**
-     * Advance the decoder one step through the engine's real three profiles
-     * (HW+SW -> APP -> HW -> HW+SW).
-     *
-     * This used to be `toggleHwDecoder`, which flipped a local `hwDecoder`
-     * boolean and handed it to the host. The host ignored that boolean and
-     * called `cycleDecoderMode()` anyway, so the chip could land on any of
-     * three engine states while showing two — including reading "SW" while
-     * the engine sat in the default HW+SW hybrid. The label the chip renders
-     * now comes from the host, which reads it back off the engine.
-     */
-    fun toggleDecoder() {
-        if (isRebuildingDecoder) {
-            showTransientToast("Decoder swap in progress…")
-            return
-        }
-        val nextHw = !ui.isHwDecoder.value
-        ui.isHwDecoder.value = nextHw
-        view.haptic()
-        AppLog.d("PLAYER", "decoder toggle to hw=$nextHw")
-        showTransientToast(if (nextHw) "Hardware (HW) Decoder" else "Software (SW) Decoder")
-        onRebuildDecoder(nextHw)
-    }
-
-    /**
-     * Advance the decoder one step through the engine's real three profiles
-     * (HW+SW -> APP -> HW -> HW+SW).
-     *
-     * This used to be `toggleHwDecoder`, which flipped a local `hwDecoder`
-     * boolean and handed it to the host. The host ignored that boolean and
-     * called `cycleDecoderMode()` anyway, so the chip could land on any of
-     * three engine states while showing two — including reading "SW" while
-     * the engine sat in the default HW+SW hybrid. The label the chip renders
-     * now comes from the host, which reads it back off the engine.
-     */
-    fun cycleDecoderMode() {
-        if (isRebuildingDecoder) {
-            showTransientToast("Decoder swap in progress…")
-            return
-        }
-        AppLog.d("PLAYER", "decoder request: cycle, current=" + decoderModeLabel)
-        showTransientToast("Switching decoder profile…")
-        val nextHw = decoderModeLabel == "APP" || !ui.isHwDecoder.value
-        ui.isHwDecoder.value = nextHw
-        onRebuildDecoder(nextHw)
-    }
-
-    /** Step the 3-state rotation mode forward (sensor → landscape →
-     *  portrait → sensor). The activity orientation is reapplied by
-     *  RotationLockEffect, which is keyed on this state. */
-    fun cycleRotateMode() {
-        val next = quick.rotateMode.value.next()
-        applyRotateMode(next)
-    }
-
-    private fun applyRotateMode(mode: RotateMode) {
-        quick.rotateMode.value = mode
-        // Tell the host whether it may auto-orient. Without this, the host's
-        // onVideoSizeChanged keeps forcing landscape for widescreen video and
-        // the explicit lock here is silently overwritten (the DisposableEffect
-        // in RotationLockEffect is keyed on `mode` and never re-fires).
-        onAutoRotateChanged(mode == RotateMode.SENSOR)
-        AppLog.d("PLAYER", "rotate mode=" + mode)
-        showTransientToast(
-            when (mode) {
-                RotateMode.SENSOR -> "Auto-rotate"
-                RotateMode.LANDSCAPE -> "Landscape locked"
-                RotateMode.PORTRAIT -> "Portrait locked"
-            }
-        )
-    }
-
-    fun nudgeSubtitle(deltaMs: Long) {
-        onNudgeSubtitle(deltaMs)
-        showTransientToast(
-            "Subtitle " + (if (deltaMs > 0) "+" else "") +
-                "%.1fs".format(deltaMs / 1000f)
-        )
-    }
-
-    /**
-     * v0.6.2 sub-sync UX pass. Mirror the new toggle state into
-     * [quick.subSyncEnabled] (instant icon flip) then persist via the
-     * host callback (DataStore + fingerprint job enqueue / cancel). The
-     * host callback is responsible for side effects (cancel pending
-     * fingerprint jobs when toggling OFF, etc.).
-     */
-    fun setSubSyncEnabled(enabled: Boolean) {
-        quick.subSyncEnabled.value = enabled
-        if (!enabled) {
-            quick.isSyncLocked.value = false
-            quick.subSyncRunning.value = false
-        }
-        onSetSubSyncEnabled(enabled)
-        AppLog.d("PLAYER", "sub-sync toggle=$enabled")
-        showTransientToast(if (enabled) "Sub sync on" else "Sub sync off")
-    }
-
-    /**
-     * "Resync now" — fires the host callback that triggers an immediate
-     * fingerprint / calibration pass. Always available, regardless of the
-     * toggle state, so a user can force a calibration without first
-     * flipping the toggle ON.
-     */
-    fun resyncNow() {
-        onResyncNow()
-    }
-
-    /** Enter PiP (host hook). Bottom-bar PiP chip path. */
-    fun enterPip() {
-        view.haptic()
-        onEnterPip()
-    }
-
-    fun pickAudioTrack() {
-        // Opens the audio track picker in the host (PlayerActivity). The
-        // host reads Player.getCurrentTracks() and shows a bottom sheet
-        // listing every available audio track.
-        view.haptic()
-        onOpenAudioTrackPicker()
-    }
-
-    fun selectSleep(opt: SleepOption) = sleep.selectSleep(opt)
-
-    /**
-     * Pick an exact playback rate (v0.7.3): the speed pill's dropdown and
-     * the Control Center both set a VALUE now instead of blindly cycling
-     * (a 0.5→2.0 cycle through six stops made "what am I at?" a lookup
-     * task). Applies live, persists per-video via the host, flips the
-     * pill's index.
-     */
-    fun setSpeed(sp: Float) {
-        val idx = speeds.indexOfFirst { abs(it - sp) < 0.05f }
-        if (idx < 0) return
-        speedIdx.intValue = idx
-        livePlayer.setPlaybackSpeed(sp)
-        onSpeedChanged(sp)
-        showTransientToast("Speed " + speedLabel(sp))
-    }
-
-    fun cycleAspect() {
-        val nextIdx = (ui.zoomIdx.intValue + 1) % ZoomModes.size
-        setZoom(nextIdx)
-    }
-
-    /**
-     * Pick an exact zoom/aspect mode (v0.7.3): direct mode selection from
-     * the aspect pill's dropdown replaces the old double-blind cycle — and
-     * the HUD pill still flashes the abbreviation for touch feedback.
-     */
-    fun setZoom(idx: Int) {
-        if (idx !in ZoomModes.indices) return
-        ui.zoomIdx.intValue = idx
-        onZoomChanged(idx)
-        val mode = ZoomModes[idx]
-        val label = if (mode.abbreviation == "STR") "STRETCH" else mode.abbreviation
-        ui.showAspectBadge(view, label)
-        view.haptic()
-        showTransientToast("Aspect Ratio: $label")
-    }
-
-    /**
-     * Step the zoom mode by [dir] (+1 / -1), clamped to the mode list. Used
-     * by the pinch gesture; a no-op at either end. Persists like [setZoom].
-     */
-    fun zoomBy(dir: Int) {
-        val next = (ui.zoomIdx.intValue + dir).coerceIn(0, ZoomModes.size - 1)
-        if (next == ui.zoomIdx.intValue) return
-        ui.zoomIdx.intValue = next
-        onZoomChanged(ui.zoomIdx.intValue)
-        showHud(Icons.Filled.AspectRatio, ZoomModes[ui.zoomIdx.intValue].abbreviation)
-    }
-
-    fun seekDelta(seconds: Int) {
-        seekBy(seconds, forceFast = true)
-        ui.showSeekRipple(view, if (seconds < 0) -1 else 1, abs(seconds))
-    }
-
-    fun seekBy(sec: Int, forceFast: Boolean = false) {
-        val p = engine?.player ?: livePlayer
-        val d = p.duration.takeIf { it > 0 } ?: return
-        // Double-taps, skip buttons, and big jumps snap to the nearest keyframe (instant, 0ms stall);
-        // EXACT is restored shortly after so fine timeline drags are unaffected.
-        // (setSeekParameters/SeekParameters live on ExoPlayer, not Player.)
-        val fast = forceFast || abs(sec) >= fastSeekThresholdSec
-        if (fast) {
-            (p as? ExoPlayer)?.setSeekParameters(SeekParameters.CLOSEST_SYNC)
-        }
-        p.seekTo((p.currentPosition + sec * 1000L).coerceIn(0L, d))
-        if (fast) {
-            view.postDelayed({
-                ((engine?.player ?: livePlayer) as? ExoPlayer)
-                    ?.setSeekParameters(SeekParameters.EXACT)
-            }, 500)
-        }
-        ui.flashSide.value = if (sec < 0) -1 else 1
-        view.postDelayed({ ui.flashSide.value = 0 }, 420)
-    }
-
-    fun updateVolumeGesture(deltaY: Float) {
-        val maxV = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val scrH = gestures.scrH.floatValue.takeIf { it > 0f } ?: 1000f
-        val frac = (deltaY / (scrH * 0.7f)).coerceIn(-1f, 1f)
-        val nv = (gestures.startVol.intValue + (frac * maxV).roundToInt()).coerceIn(0, maxV)
-        val currentV = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (nv != currentV) {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nv, 0)
-        }
-        // Haptics law (master spec §2/§3): a double-tick when the vertical
-        // volume drag arrives exactly at a rail end (0% or 100%). Fired only
-        // on ENTERING the end (value actually changed), so dragging along a
-        // clamped rail doesn't machine-gun the motor — same feel family as
-        // the hold-to-speed milestone tick.
-        if (nv != currentV && (nv == 0 || nv == maxV)) {
-            view.haptic(HapticFeedbackConstants.CLOCK_TICK)
-            view.postDelayed(
-                { view.haptic(HapticFeedbackConstants.CLOCK_TICK) },
-                VOLUME_EDGE_TICK_GAP_MS,
-            )
-        }
-        val progress = nv.toFloat() / maxV.toFloat()
-        val pctText = "${(progress * 100).roundToInt()}%"
-        ui.showVerticalHud(view, VerticalHudType.VOLUME, progress, pctText)
-    }
-
-    fun commitVolumeGesture() {
-        val curV = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        activity?.let { dev.anonrode.player.PlayerPrefs.saveVolume(it, curV) }
-    }
-
-    fun updateBrightnessGesture(deltaY: Float) {
-        val scrH = gestures.scrH.floatValue.takeIf { it > 0f } ?: 1000f
-        val frac = (deltaY / (scrH * 0.7f)).coerceIn(-1f, 1f)
-        val nb = (gestures.startBri.floatValue + frac * 0.9f).coerceIn(0.02f, 1f)
-        activity?.window?.let { w ->
-            val attr = w.attributes
-            attr.screenBrightness = nb
-            w.attributes = attr
-        }
-        dev.anonrode.player.PlayerPrefs.saveScreenBrightness(context, nb)
-        val pctText = "${(nb * 100).roundToInt()}%"
-        ui.showVerticalHud(view, VerticalHudType.BRIGHTNESS, nb, pctText)
-    }
-
-    fun onSubtitleDrag(amountY: Float) {
-        val scrH = gestures.scrH.floatValue.takeIf { it > 0f } ?: 1000f
-        val deltaFrac = amountY / scrH
-        gestures.subX.floatValue = SUB_DEFAULT_X
-        gestures.subY.floatValue = (gestures.subY.floatValue + deltaFrac).coerceIn(SUB_Y_MIN, SUB_Y_MAX)
-    }
-
-    fun onSubtitleDragEnd() {
-        gestures.subDragging.value = false
-        val uri = persistUri() ?: ""
-        PlayerPrefs.saveSubtitlePosition(context, uri, SUB_DEFAULT_X, gestures.subY.floatValue)
-    }
-
-    fun captureScreenshot() = captureFrame()
-
-    /**
-     * Save the current video frame: PixelCopy the PlayerView's SurfaceView
-     * (which holds the decoded frame — a plain view screenshot would be
-     * black), then write a PNG to Pictures/AnonPlayer (MediaStore on
-     * API 29+, app-specific dir below that — no permission needed either
-     * way).
-     */
-    fun captureFrame() {
-        val pv = ui.playerViewRef.value ?: return
-        if (Build.VERSION.SDK_INT < 24) {
-            showTransientToast("Screenshot needs Android 7.0+")
-            return
-        }
-        val surfaceView = pv.videoSurfaceView as? SurfaceView
-        if (surfaceView == null || surfaceView.width <= 0 || surfaceView.height <= 0) {
-            showTransientToast("Screenshot failed — no video surface")
-            return
-        }
-        val surface = surfaceView.holder.surface
-        if (surface == null || !surface.isValid) {
-            showTransientToast("Screenshot failed — surface not ready")
-            return
-        }
-        ui.triggerScreenshotFlash(view)
-        view.haptic()
-        val bmp = Bitmap.createBitmap(
-            surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888
-        )
-        PixelCopy.request(surface, bmp, { result ->
-            if (result == PixelCopy.SUCCESS) saveFrame(bmp)
-            else showTransientToast("Screenshot failed (code " + result + ")")
-        }, Handler(Looper.getMainLooper()))
-    }
-
-    private fun saveFrame(bmp: Bitmap) {
-        val base = title.substringAfterLast('/').substringBeforeLast('.')
-            .replace(Regex("[^A-Za-z0-9 ._\\-]"), "")
-            .ifEmpty { "frame" }
-        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val name = base + "_" + stamp + ".png"
-        captureScope.launch(Dispatchers.IO) {
+        val boostPct = (clamped - 100).coerceAtLeast(0)
+        val playerSessionId = livePlayer?.audioSessionId ?: 0
+        if (boostPct > 0 && playerSessionId != 0) {
             try {
-                val bytes = ByteArrayOutputStream().use { out ->
-                    bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-                    out.toByteArray()
+                if (loudnessEnhancer == null) {
+                    loudnessEnhancer = LoudnessEnhancer(playerSessionId).apply { enabled = true }
                 }
-                val where: String
-                if (Build.VERSION.SDK_INT >= 29) {
-                    val values = ContentValues().apply {
-                        put(MediaStore.Images.Media.DISPLAY_NAME, name)
-                        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-                        put(
-                            MediaStore.Images.Media.RELATIVE_PATH,
-                            Environment.DIRECTORY_PICTURES + "/AnonPlayer",
-                        )
-                        put(MediaStore.Images.Media.IS_PENDING, 1)
-                    }
-                    val resolver = context.contentResolver
-                    val uri = resolver.insert(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
-                    ) ?: throw IOException("MediaStore insert failed")
-                    resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                        ?: throw IOException("no output stream")
-                    values.clear()
-                    values.put(MediaStore.Images.Media.IS_PENDING, 0)
-                    resolver.update(uri, values, null, null)
-                    where = "Pictures/AnonPlayer"
-                } else {
-                    // App-specific public dir: no WRITE_EXTERNAL_STORAGE
-                    // needed, visible to file managers.
-                    val dir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-                        ?: throw IOException("no external files dir")
-                    File(dir, name).writeBytes(bytes)
-                    where = dir.absolutePath
-                }
-                AppLog.d("SHOT", "saved " + name + " to " + where)
-                view.post { showTransientToast("Saved to " + where + "/" + name) }
-            } catch (e: Exception) {
-                AppLog.e("SHOT", "screenshot save failed", e)
-                view.post { showTransientToast("Screenshot save failed") }
+                val targetGainMb = boostPct * 12 // +1200 mB (+12 dB) at 200%
+                loudnessEnhancer?.setTargetGain(targetGainMb)
+                loudnessEnhancer?.enabled = true
+                ui.audioEffectOn.value = true
+            } catch (_: Throwable) {
+                // Hardware audio session unavailable
             }
+        } else {
+            loudnessEnhancer?.setTargetGain(0)
+            loudnessEnhancer?.enabled = false
+            ui.audioEffectOn.value = false
         }
     }
+
+    fun onApplyBrightnessFraction(fraction: Float) {
+        val clamped = fraction.coerceIn(0.02f, 1.0f)
+        ui.screenBrightnessFraction.floatValue = clamped
+        val window = activity?.window ?: return
+        val params = window.attributes
+        params.screenBrightness = clamped
+        window.attributes = params
+    }
+
+    fun onSetPlaybackSpeed(speed: Float) {
+        val clamped = speed.coerceIn(0.25f, 4.0f)
+        livePlayer?.playbackParameters = PlaybackParameters(clamped)
+    }
+
+    fun onCycleDecoderMode() {
+        ui.bumpInteraction()
+        onRebuildDecoderCycle()
+    }
+
+    fun onApplySubtitleOffsetSec(offsetSec: Float) {
+        ui.subtitleOffsetSec.floatValue = offsetSec
+        onApplyEngineSubtitleOffsetSec(offsetSec)
+        ui.syncToastVisible.value = true
+    }
+
+    fun onTriggerAutoSync() {
+        quick.subSyncRunning.value = true
+        onTriggerEngineAutoSync()
+    }
+
+    fun onCaptureScreenshot() {
+        ui.bumpInteraction()
+        onCaptureVideoFrame()
+    }
+
+    fun release() {
+        exactSeekRestoreJob?.cancel()
+        try {
+            loudnessEnhancer?.release()
+        } catch (_: Throwable) {
+        }
+        loudnessEnhancer = null
+    }
+}
+
+@Composable
+fun rememberPlayerScreenActions(
+    context: Context,
+    activity: Activity?,
+    livePlayer: ExoPlayer?,
+    ui: PlayerUiState,
+    gestures: GestureUiState,
+    quick: QuickRowUiState,
+    scope: CoroutineScope,
+    decoderModeLabel: State<String>,
+    isRebuildingDecoder: State<Boolean>,
+    onRebuildDecoderCycle: () -> Unit,
+    onApplyEngineSubtitleOffsetSec: (Float) -> Unit,
+    onTriggerEngineAutoSync: () -> Unit,
+    onCaptureVideoFrame: () -> Unit,
+): PlayerScreenActions = remember(
+    livePlayer,
+    ui,
+    gestures,
+    quick,
+    scope,
+    decoderModeLabel,
+    isRebuildingDecoder,
+) {
+    PlayerScreenActions(
+        context = context,
+        activity = activity,
+        livePlayer = livePlayer,
+        ui = ui,
+        gestures = gestures,
+        quick = quick,
+        scope = scope,
+        decoderModeLabel = decoderModeLabel,
+        isRebuildingDecoder = isRebuildingDecoder,
+        onRebuildDecoderCycle = onRebuildDecoderCycle,
+        onApplyEngineSubtitleOffsetSec = onApplyEngineSubtitleOffsetSec,
+        onTriggerEngineAutoSync = onTriggerEngineAutoSync,
+        onCaptureVideoFrame = onCaptureVideoFrame,
+    )
 }

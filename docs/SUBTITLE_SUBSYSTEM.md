@@ -1,6 +1,6 @@
 # The subtitle subsystem — syncing & rendering
 
-**Subsystem spec, extracted from the anonrode-player Android codebase (v0.9.13, tree of 2026-10-16).**
+**Subsystem spec, extracted from the anonrode-player Android codebase (v0.9.14, tree of 2026-10-17).**
 
 This document is written to be **self-contained**: it describes everything the app does with
 subtitles — from finding a subtitle file to a pixel of text on screen — with the decisive constants,
@@ -78,8 +78,12 @@ the two can never disagree about which file a lock was fitted to.
 
 `EmbeddedSubtitleExtractor` enumerates text tracks with `MediaExtractor` (mime-based: SRT, WebVTT,
 ASS, tx3g). `MediaExtractor` exposes no per-sample duration for text tracks, so cue ends are derived
-(a cue runs until the next sample; a tail rule for the last one). Sample payloads are parsed per
-format (`srt`/`vtt`/`ass`/`tx3g` line decoders).
+from successor sample timestamps or clear packets. To prevent frozen cues across long dialogue-free
+scenes (e.g. 2-minute silence gaps without an empty clear packet), derived cue duration is capped by
+character density:
+$$\text{maxDurationSec} = \text{clamp}(\text{charCount} \times 0.08 + 2.0, \, 2.5, \, 8.0)$$
+$$\text{endSec} = \min(\text{nextSampleStartSec}, \, \text{startSec} + \text{maxDurationSec})$$
+Sample payloads are parsed per format (`srt`/`vtt`/`ass`/`tx3g` line decoders).
 
 **AUTO preference:** when no choice is persisted and the container has any text-sub track, the
 first embedded track is preferred over sidecars — embedded timing is already container-aligned.
@@ -101,16 +105,19 @@ the sync job only runs against embedded cues when explicitly enabled for them.
 |---|---|
 | 100 | exact stem match (`Show.S01E03.mkv` ↔ `Show.S01E03.srt`) |
 | 80 | one stem is the other plus a tag at a dot boundary (`Show.S01E03.eng.srt`) |
-| −100 | **episode conflict** — both names carry season/episode markers and they disagree; hard disqualification (prevents episode N+1's subtitle out-scoring on shared series tokens) |
+| −100 | **episode conflict** — both names carry season/episode markers (including CJK `第03集` and delimited bare numbers `.03.`, `- 03`) and they disagree; hard disqualification (prevents episode N+1's subtitle out-scoring on shared series tokens) |
 | +50 | episode agreement (both sides numbered, same S+E) |
 | +≤20 | token overlap (IoU over tokens, junk tokens removed: codec/release tags — `1080p`, `x265`, `webrip`, `yify`, … — and pure-digit tokens) |
 | +≤10 | language hint (weighted keyword table; `english/eng/en` highest) |
 | +2 / +1 | format preference (`srt` / `vtt`, `ass`) |
 | −10 | episode-marked video with an unnumbered candidate: last-resort fallback, kept so a lone `subtitle.srt` in a single-sub folder is still usable |
 
-- Normalized to 0..1 (divide by 100). Two thresholds in the UX: **≥ 0.6** = sidecar good enough to
-  skip scheduling a fingerprint; **≥ 0.7** = a persisted lock for this sidecar may be reused on
-  next open. A weak match (0.0..0.1) is usable only as a single-sub-folder fallback.
+- Normalized to 0..1 (divide by 100). A strong match (≥ 0.6–0.7) qualifies a sidecar for automatic
+  selection over weaker candidates. However, exact or strong name matches (even score 1.0) must NEVER
+  suppress auto-sync fingerprint scheduling when the file is unsynced (`autoSyncCheckedAtMs == 0L`) —
+  external subtitles frequently suffer from framerate mismatch, cold-open cut offsets, or intro delays
+  (Law #2: No deadlock on unsynced files). A weak match (0.0..0.1) is usable only as a single-sub-folder fallback.
+- **Language Weight Tie-Breaking:** When multiple sidecars share the same top score (e.g. `Show.S01E03.en.srt` vs `Show.S01E03.fr.srt` both score 80.0), `pickAutoSidecar` uses `SubtitleMatcher.languageWeight` (derived from `LANG_W`) as a tie-breaker before alphabetical sorting.
 
 ### 3.3 Downloaded subtitles
 
@@ -162,7 +169,7 @@ Hardening rules (each exists because real files violated the naive version):
   one pass per line; HTML/XML tags and entities (`&amp; &lt; &gt; &nbsp; &quot; &#39;`) stripped in
   a second pass. A `<` with no `>` stays literal.
 - A timing line always terminates the previous cue's text (files with missing blank-line separators
-  still parse); cue-index lines and VTT `NOTE/STYLE` headers are skipped.
+  still parse); cue-index/identifier lines immediately preceding a timing line are pruned; multi-line WebVTT `NOTE`, `STYLE`, and `REGION` blocks are safely skipped until the next blank separator.
 - **The output contract: cues are returned sorted by `start`** (stable). ASS `[Events]` need not be
   chronological, and the render loop binary-searches the list — sorting at the producer makes the
   guarantee a property of the type instead of something each caller must remember.
@@ -172,11 +179,13 @@ Hardening rules (each exists because real files violated the naive version):
 
 ## 5. Cue lookup — the render tick's search
 
-`CueLookup.find(cues, t)` finds the cue showing at time `t` on a start-sorted list:
+`CueLookup.findActiveCues(cues, t)` retrieves all concurrent active cues showing at time `t` on a start-sorted list:
 
 1. **Upper-bound binary search on `start`** — first index whose start is after `t`.
-2. **Backward walk** from there (max `MAX_OVERLAP = 32`) returning the first cue with
-   `start ≤ t ≤ end`.
+2. **Backward walk** from there (max `MAX_OVERLAP = 32`) collecting all active cues satisfying
+   `start ≤ t ≤ end`, **reversed into ascending chronological order** (`active.reverse()`). This guarantees concurrent dialogue, bilingual lines, and top-screen sign/note cues remain visible simultaneously without masking each other, and multiline joins render in chronological dialogue order (older cue on top, newer cue below) rather than inverted.
+3. `CueLookup.find(cues, t)` delegates to `findActiveCues(cues, t).lastOrNull()`.
+4. The render tick joins active lines: `cueText = activeCues.flatMap { it.lines }.joinToString("\n")`.
 
 Why the walk: the obvious search discards half the range whenever `t` falls past `cues[mid].end`,
 silently assuming **non-overlapping cues** — but ASS sign/song cues, two-speaker lines, and
@@ -198,35 +207,46 @@ visible cue and schedules its next wake. Core loop, once per tick:
 
 ```kotlin
 val tRaw = positionMs / 1000.0
-val spd  = engine.subtitleSpeedFactor            // alpha, ≥ 0.5 clamped
-// scalar lock → one beta; piecewise lock → beta of the active segment
+val spd  = engine.subtitleSpeedFactor.coerceAtLeast(0.5f)
+// piecewise cut lock: active segment beta; scalar lock fallback; first segment fallback
 val targetOffsetSec = piecewise.lastOrNull { it.start <= tRaw }?.beta
-                      ?: engine.subtitleOffsetMs / 1000.0
-// …offset smoothing (below)…
-val t = (tRaw - appliedOffsetSec) / spd          // subtitle timeline
-val cue = CueLookup.find(cues, t)
-cueText = cue?.lines?.joinToString("\n")
+                      ?: piecewise.firstOrNull()?.beta
+                      ?: (engine.subtitleOffsetMs / 1000.0)
+
+// Positive-media bounded slew (strict monotonicity: |dβ/dt_media| <= 0.25):
+val dtMediaSec = if (lastTRaw.isNaN()) 0.0 else (tRaw - lastTRaw).coerceIn(0.0, 0.200)
+lastTRaw = tRaw
+if (appliedOffsetSec.isNaN() || !isSyncLocked) {
+    appliedOffsetSec = targetOffsetSec
+} else {
+    val diff = targetOffsetSec - appliedOffsetSec
+    if (abs(diff) > 2.0) {
+        appliedOffsetSec = targetOffsetSec // immediate cut / large seek snap
+    } else if (abs(diff) > 0.0005) {
+        val maxSlew = 0.25 * dtMediaSec
+        appliedOffsetSec += diff.coerceIn(-maxSlew, maxSlew)
+    }
+}
+
+val offsetSec = appliedOffsetSec
+val t = (tRaw - offsetSec) / spd
+val activeCues = CueLookup.findActiveCues(cues, t)
+cueText = if (activeCues.isNotEmpty()) activeCues.flatMap { it.lines }.joinToString("\n") else null
 ```
 
-**Offset smoothing** — text must never jitter or jump while being read:
+**Offset smoothing & strict monotonicity:**
+- Offset adaptation rate of change is bounded by positive media progression: $|d\beta/dt_{\text{media}}| \le 0.25$, where $dt_{\text{media}} = (t_{\text{Raw}} - \text{lastTRaw})\text{.coerceIn}(0.0, 0.200)$. This ensures $d(t_{\text{sub}})/dt_{\text{media}} \ge 0.75 / \text{spd} > 0$ during forward playback, mathematically guaranteeing that subtitle time never runs backward or freezes.
+- Zero pause-slew: when playback is paused or buffering, $t_{\text{Raw}} = \text{lastTRaw}$ so $dt_{\text{media}} = 0.0$ and offset slewing is completely arrested.
+- Continuous adaptation without deadlock: active cues no longer lock out drift tracking or freshly acquired locks.
+- Discontinuities ($|\Delta| > 2.0\text{s}$) or forced user resyncs (`syncAwaitingBackgroundVerdict`) snap immediately.
 
-- Offset adaptation happens **only during silence gaps** (`cueText == null`).
-- Small differences are **micro-slewed: at most 50 ms per tick** toward the target.
-- A jump > 1.2 s during a gap = commercial cut / seek → **snap** to the target.
-- A jump > 2.5 s while text is displayed (scrub) → snap.
-- The tick mirrors the **actually applied** offset (incl. active piecewise beta) into state for the
-  UI's "synced" indicator — never the raw engine scalar.
+**Boundary-aware scheduling:**
+- Wake time tracks the earliest event across all active cues or the upcoming cue:
+  $$\text{boundarySec} = \min(\{c.\text{end} \mid c \in \text{activeCues}\} \cup \{\text{nextCue}.\text{start}\})$$
+- Delay mapped back to wall time: clamped to **16–100 ms** (60 FPS cap, preventing rapid handler spin).
 
-**Boundary-aware scheduling** — instead of a fixed poll, the tick computes its next wake as the
-distance to the *next event* (current cue's end, or next cue's start; A-B repeat's B is also a wake
-point), mapped back onto the raw position timeline: `delay = (boundary·spd + offset − tRaw) /
-playbackSpeed`, wall-clock, clamped to **8–100 ms**. Touching cues can't induce a spin below 8 ms;
-an eventless stretch sleeps at most 100 ms. (Mapping back through `spd`/`offset` means drift
-correction doesn't skew the delay.)
-
-**Source changes clear the lock.** A lock was fitted to the *previous* source's timing; on a new
-choice it is cleared, then the video reloads (restoring position), re-resolves cues, and
-re-schedules the fingerprint job so the new source earns its own lock.
+**Resync without triple-jump:**
+- "Resync now" preserves the currently applied offset smoothly rather than snapping to 0.0s. Sets `syncAwaitingBackgroundVerdict = true` and clears `autoSyncCheckedAtMs` so the background pass lands cleanly without intermediate jumps.
 
 ---
 
@@ -245,8 +265,7 @@ re-schedules the fingerprint job so the new source earns its own lock.
 
 `OutlinedSubtitleText` — the look:
 
-- **8-way black outline** — eight copies of the text at ±2 dp offsets in 95 %-black beneath the fill
-  text; **no background box**.
+- **2-pass hardware stroke** — Pass 1 renders a black outline (`Stroke(width = strokeWidthPx, join = StrokeJoin.Round)` with `strokeWidthPx` derived from `4.dp` via `LocalDensity`, yielding a true `2.dp` border outside the glyph path in 95 %-black); Pass 2 renders the interior fill text; **no background box**. Eliminates 7 redundant text layout passes per cue update.
 - Max **3 lines**, soft-wrapped, centered, line height 1.35× font size; overflow visible.
 - Style envelope (persisted): size ∈ {S=14, M=18, L=22, XL=26 sp}, color ∈ {White, Yellow
   `#FFD75E`, Green `#7CE487`, Cyan `#7AD8E8`}, weight (bold default), position preset
@@ -293,18 +312,17 @@ Pipeline:
    cue starts for a **20 s span with ~12–15 dialogue cues** within the first 5–8 minutes;
    intro/cold-open handling skips an initial music/silence gap ≥ 35 s (title themes); junk cues are
    filtered (credits lines, song marks `♪`, bracketed sign text, subtitle-credit lines).
-4. Extract speech onsets for the window (below) — with a **hybrid anchor**: silencedetect onsets
-   ∪ VAD onsets, both gated, so stage-0 works on continuous-mix content, not only on clean
-   dialogue.
+4. Stage 0 fast-lock gate enforces $|\beta| \le 30.0\text{s}$. If Stage 0 does not lock, **Stage 0.5 multi-cluster sparse seek probe** extracts 2–3 dense dialogue clusters (25s each via `MediaExtractor.seekTo` at ~2m, ~25% dur, ~50% dur) across an expanded window $|\beta| \le 180.0\text{s}$ with recall gate $\ge 0.60$, completely avoiding 50-minute whole-file extraction for uncut cold opens and broadcast intro gaps. True offsets $> 180\text{s}$ fall through cleanly to Stage 1/2 whole-file extraction.
 5. Fit: the tier-1 **continuous soft-envelope 2D Pearson correlator** (`SpeechCorrelator`) first;
    then the discrete-onset fitters and cut machinery (`SyncOrchestrator.resolveModel` → cut model
    via `IntervalAligner`/`CutEnsemble`, else `SyncBest`/`SyncFinder` singles). Gates (any tier):
 
-   - **Job/worker gates:** ≥ 20 onsets, recall ≥ **0.35**, margin ≥ **0.04**.
+   - **Dialogue mass & effective overlap gate:** For $|\text{shift}| > 150$ bins, require tested subtitle mass $sB \ge 15$ bins (1.5s). Compute statistical significance via effective sample size:
+     $$N_{\text{eff}} = \min(n, \text{hard}, sB), \quad z = r \sqrt{N_{\text{eff}}}$$
+     This prevents sparse dialogue clusters from artificially inflating $z$-scores into false locks.
+   - **Canonical piecewise storage:** Every piecewise string starts strictly with `"0.0:beta0;..."`, ensuring raw video times before the first cut map deterministically to the initial offset.
    - **Correlator gates (continuous envelope):** peak height ≥ **0.18**, prominence ≥ **0.08**,
-     z-score of the peak ≥ ramp **5.5 → 4.5** (as bin count rises past the eligibility line of
-     **160** bins; ~280 bins for the low end), pair exclusion ≤ **35** bins, containment
-     ≥ **0.40** at its page, 100 ms alignment bins.
+     $z \ge z_{\text{floor}}$ ramp **5.5 → 4.5** on $N_{\text{eff}}$, pair exclusion ≤ **35** bins, containment ≥ **0.40**.
    - **Discrete fitter gates (`SyncFinder`):** ≥ 20 onsets / ≥ 10 cue starts, recall ≥ **0.25**,
      containment ≥ **0.18** at 0.5 s window, margin ≥ **0.04**, cross-half consistency, LSQ refit
      on matched pairs.
@@ -337,9 +355,9 @@ Injected into Media3's audio pipeline as an `AudioProcessor`, so it sees exactly
 played. It is **passthrough** (never alters audio) and allocation-free on the render thread.
 
 - **Speech envelope**: neural VAD (`LiveVad` → `SileroVad`, in-process ONNX, 1.26 MB model) runs on
-  a dedicated low-priority worker — the render thread only copies PCM into a preallocated buffer
-  (no math, no allocation, no inference; a render-thread stutter is strictly worse than no sync).
-  The worker publishes a **100 ms probability envelope**. When the model is unavailable the caller
+  a dedicated low-priority worker — the render thread copies PCM in-place without `duplicate()` allocation
+  (no math, no allocation, no inference; 0ms render-thread jitter). On buffer overflow, dropped frames advance the VAD timeline offset (`vad.onsetOffsetSec += droppedSec`) to eliminate neural clock drift.
+  `AudioSyncProcessor.flush()` preserves seek position anchors, and ONNX runtime strictly enforces `setIntraOpNumThreads(1)`. When the model is unavailable the caller
   falls back to the **min-statistics noise-floor + long-horizon energy envelope** (constants
   `NOISE_DECAY=0.9995`, `NOISE_RISE=0.005`, `HI_DECAY=0.9998`, `NOISE_GUARD=2.0`, `SPAN_HI=0.7`) —
   evidence log in `tools/_sync_fallback_study.md`. The previous AGC floor/peak envelope pinned music
@@ -463,17 +481,36 @@ overlay call site. `audio/SubtitleStyleSheet.kt` (218, incl. the style model), `
 
 ---
 
-## 11. Invariants & known traps
+---
+
+## 11. The v0.9.14 End-to-End Audit & Defect Resolutions
+
+In October 2026, an exhaustive audit and offline algorithmic verification of 10 verified defects was executed across the subtitle, sync, and UI modules:
+
+| # | Subsystem | Defect Verified | Surgical Resolution | Validation |
+|---|---|---|---|---|
+| **1.1A** | Render Loop | `renderTick` time-reversal totter & pause slew | Positive-media bounded slew: $|d\beta/dt_{\text{media}}| \le 0.25$ ($dt_{\text{media}} = 0$ when paused) guarantees $d(t_{\text{sub}})/dt_{\text{media}} \ge 0.75/\text{spd} > 0$ | 0/50 backward steps; 0.0s pause slew |
+| **1.1B** | Render Loop | Active-cue smoothing deadlock & resync lag | Initial lock & forced resync snap immediately; continuous slew adapts without requiring null cue | Zero freeze; immediate resync snap |
+| **1.1C** | Scheduling | Single-cue boundary wake misses overlapping lines; delayRaw $\le 0$ spins at 125 FPS | Multi-cue boundary $\min(\{c.\text{end}\} \cup \{\text{nextCue}.\text{start}\})$, clamped to $[16, 100]\text{ms}$ | Wakes at exact 12s mark; 60 FPS cap |
+| **1.1D** | Resync UX | Resync triple-jump (0s snap $\to$ live alias $\to$ background lock) | Preserve active offset during resync; set `syncAwaitingBackgroundVerdict = true`; clear checked state | Monotonic transition without snap |
+| **1.1E** | Correlator | Future lag aliasing in short windows ($z = r\sqrt{n}$ inflated on tiny $sB$) | Enforce $sB \ge 15$ bins (1.5s); compute $z = r\sqrt{N_{\text{eff}}}$ where $N_{\text{eff}} = \min(n, \text{hard}, sB)$ | Rejected $sB=3$ alias ($z=0.73$); accepted dense match |
+| **1.2F** | Fingerprint | Stage 0 window starvation when true $|\beta| > 35\text{s}$ | Gate Stage 0 to $|\beta| \le 30.0\text{s}$; candidates outside range fall through to whole-file Stage 1/2 | Rejection of bogus Stage 0 aliases |
+| **1.2G** | Piecewise | Coordinate frame & first-segment fallback mismatch | Canonical `"0.0:beta0;..."` format enforced on cuts; `PlayerActivity` falls back to `firstOrNull()?.second` | Exact offset at $t=150\text{s}, 450\text{s}, 900\text{s}$ |
+| **1.3H** | Live VAD | Clock drift on frame drops & `flush()` zeroing seek anchor | Advance `vad.onsetOffsetSec += droppedSec` on overflow; preserve `pendingResetPosition` on seek flush | Perfect sync alignment across seeks |
+| **1.3I** | Audio Thread | Per-buffer `duplicate()` allocations & ONNX contention | In-place reading with position restore in `queueInput` & `submit`; `setIntraOpNumThreads(1)` | Zero GC churn on 4K playback |
+| **1.4J** | Subtitles/UI | Overlapping cues masked; CJK episode conflicts; language weight ties | `findActiveCues()` for multi-cue lines; `EpisodePattern` CJK/bare number veto; `languageWeight` tie-breaker | 100% CJK & bare conflict veto pass |
+
+---
+
+## 12. Invariants & known traps
 
 - **Sorted cues are a contract.** `CueLookup` binary-searches; producers sort, consumers assume it.
 - **Seconds vs milliseconds.** Cue times are `Double` seconds; persisted offsets are ms; the UI
   formatting layer takes ms. Mismatches here have shipped real bugs (a displayed `-0:00`).
 - **The walk-back predicate is the safety property** in `CueLookup`: `start ≤ t ≤ end` — degrade to
   missing, never wrong.
-- **Offset may only move in silence** (or on ≥ 1.2/2.5 s discontinuities) — visible text must not
-  jitter, and micro-slew steps are ≤ 50 ms.
-- **A source switch invalidates the lock.** Locks are per source-timing; reuse thresholds (0.6 /
-  0.7) exist precisely to avoid re-fingerprinting a confident sidecar.
+- **Strictly monotonic media-bounded slew:** applied offset slews at a bounded rate $|d(\text{appliedOffset})/dt_{\text{media}}| \le 0.25$, strictly guaranteeing $d(t_{\text{sub}})/dt_{\text{media}} \ge 0.75 / \text{spd} > 0$ during forward playback and completely arresting slewing when paused or buffering ($dt_{\text{media}} = 0.0$); discontinuities $> 2.0\text{s}$ or forced user resyncs snap immediately.
+- **A source switch invalidates the lock.** Locks are per source-timing; however, unsynced files (`autoSyncCheckedAtMs == 0L`) always schedule fingerprint analysis regardless of sidecar filename score to prevent deadlock on unverified sidecars (Law #2).
 - **Anchor windows are cue-guided**, never t=0 (law #4), and the anchor uses the silencedetect ∪
   VAD hybrid so continuous-mix content still anchors.
 - **The live path never outranks the full-file lock** (> 1.0 s rule), the tracking leash confines
@@ -486,7 +523,7 @@ overlay call site. `audio/SubtitleStyleSheet.kt` (218, incl. the style model), `
 
 ---
 
-## 12. Glossary
+## 13. Glossary
 
 - **Onset** — a moment speech begins (energy/neural detector output), used as an alignment anchor.
 - **Envelope** — a per-100 ms signal (probability for VAD, energy for fallback) over time; the
@@ -501,6 +538,6 @@ overlay call site. `audio/SubtitleStyleSheet.kt` (218, incl. the style model), `
 
 ---
 
-*End of document. Everything above was assembled from the v0.9.13 tree (commit `3739d27`); line
+*End of document. Everything above was assembled from the v0.9.14 tree (commit `cf9f6f4` + audit patches); line
 counts refer to that snapshot. For deeper detail the code itself is the ground truth — this
 document is the map.*

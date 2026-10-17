@@ -1,347 +1,322 @@
 package dev.anonrode.player.ui
 
-import android.media.AudioManager
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.material.icons.filled.FastRewind
-import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.SeekParameters
-import kotlin.math.abs
-import kotlin.math.roundToInt
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.abs
+import kotlin.math.pow
+import kotlin.math.roundToInt
 
 /**
- * The player's gesture layer, extracted 1:1 from PlayerScreen's root Box
- * modifier chain. Detector order and pointerInput keys are unchanged:
- *
- *  1. pinch-to-zoom (two fingers) — keyed (locked, isPipMode, pinchZoomEnabled)
- *  2. tap / double-tap / long-press — keyed (locked, isPipMode)
- *  3. vertical / horizontal drag    — keyed (locked, isPipMode)
- *  4. hold-to-2× speed boost        — keyed (locked, isPipMode)
- *
- * The lambdas read state through the remembered holders on [actions]
- * (live reads, exactly like the pre-split `by remember` delegates), while
- * plain values ([isPipMode], the gesture setting gates, the drag player
- * snapshot on [actions]) are frozen at block-restart time — the same
- * capture semantics the inline modifiers had.
+ * Layer 1 Gesture Pipeline.
+ * Enforces strict evaluation priority:
+ * 0. Subtitle Bounds Yielding (`gestures.subBounds`)
+ * 1. 2-Finger Pinch-to-Zoom
+ * 2. Single-Tap / 3-Zone Double-Tap
+ * 3. 2-Axis Drag (Left Brightness, Right 200% Volume+Boost, Horizontal Piecewise Quadratic Scrub)
+ * 4. Touch-Only Hold-to-Boost (500ms -> 2.0x + 34dp horizontal milestone stepping)
  */
-@UnstableApi
-internal fun Modifier.playerGestureLayer(
-    actions: PlayerScreenActions,
-    isPipMode: Boolean,
-    pinchZoomEnabled: Boolean,
-    doubleTapSeekEnabled: Boolean,
-    swipeToSeekEnabled: Boolean,
-    volumeGestureEnabled: Boolean,
-    brightnessGestureEnabled: Boolean,
-): Modifier {
-    val ui = actions.ui
-    val gestures = actions.gestures
-    return this
-        // ── pinch-to-zoom (two fingers) ────────────────────────────
-        // Placed first so that, once two pointers are down, it consumes
-        // the gesture before the single-pointer tap/drag/boost detectors
-        // can act on it. With a single pointer it never consumes, so the
-        // existing gestures are untouched. Gated by the Pinch-zoom setting.
-        .pointerInput(ui.locked.value, isPipMode, pinchZoomEnabled) {
-            if (!pinchZoomEnabled) return@pointerInput
+fun Modifier.playerGestureLayer(
+    ui: PlayerUiState,
+    gestures: GestureUiState,
+    durationSecProvider: () -> Float,
+    currentPositionMsProvider: () -> Float,
+    swipeToSeekEnabled: Boolean = true,
+    onToggleControls: () -> Unit,
+    onDoubleTapSeek: (deltaSec: Int, isLeft: Boolean) -> Unit,
+    onPlayPauseToggle: () -> Unit,
+    onPreviewKeyFrameSeekMs: (targetMs: Long) -> Unit,
+    onCommitExactSeekMs: (targetMs: Long) -> Unit,
+    onCancelKeyframeSeek: () -> Unit,
+    onApplyVolumeBoostPercent: (percent: Int) -> Unit,
+    onApplyBrightnessFraction: (fraction: Float) -> Unit,
+    onSetPlaybackSpeed: (speed: Float) -> Unit,
+    onCycleZoomMode: (zoomOut: Boolean) -> Unit,
+): Modifier = composed {
+    val density = LocalDensity.current.density
+    val view = LocalView.current
+
+    fun isInsideSubtitle(offset: Offset): Boolean {
+        if (!ui.showCC.value) return false
+        val rect = gestures.subBounds.value
+        return !rect.isEmpty && rect.contains(offset)
+    }
+
+    this
+        .onSizeChanged { size ->
+            gestures.scrW.floatValue = size.width.toFloat()
+            gestures.scrH.floatValue = size.height.toFloat()
+        }
+        // 1. TWO-FINGER PINCH-TO-ZOOM
+        .pointerInput(ui.locked.value) {
+            if (ui.locked.value) return@pointerInput
             awaitEachGesture {
-                awaitFirstDown(requireUnconsumed = false)
-                var startDist = -1f
-                while (true) {
-                    val event = awaitPointerEvent(PointerEventPass.Main)
-                    val pressed = event.changes.filter { it.pressed }
-                    if (pressed.isEmpty()) break
-                    if (pressed.size >= 2) {
-                        val dist = (pressed[0].position - pressed[1].position)
-                            .getDistance()
-                        if (startDist < 0f) {
-                            startDist = dist
-                        } else if (startDist > 40f) {
-                            val ratio = dist / startDist
-                            if (ratio > 1.35f) {
-                                actions.view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                                actions.zoomBy(+1)
-                                startDist = dist
-                            } else if (ratio < 0.74f) {
-                                actions.view.haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                                actions.zoomBy(-1)
-                                startDist = dist
-                            }
+                val down = awaitFirstDown(requireUnconsumed = false)
+                if (isInsideSubtitle(down.position)) return@awaitEachGesture
+                var accZoom = 1f
+                do {
+                    val event = awaitPointerEvent()
+                    if (event.changes.size >= 2) {
+                        val zoomChange = event.calculateZoom()
+                        accZoom *= zoomChange
+                        if (accZoom > 1.18f) {
+                            onCycleZoomMode(false)
+                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            accZoom = 1f
+                            event.changes.forEach { it.consume() }
+                        } else if (accZoom < 0.84f) {
+                            onCycleZoomMode(true)
+                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            accZoom = 1f
+                            event.changes.forEach { it.consume() }
                         }
-                        // Two fingers down: swallow the event so seek /
-                        // volume / brightness drags don't also fire.
-                        event.changes.forEach { it.consume() }
                     }
-                }
+                } while (event.changes.any { it.pressed })
             }
         }
-        .pointerInput(ui.locked.value, isPipMode) {
+        // 2. SINGLE TAP & 3-ZONE DOUBLE-TAP
+        .pointerInput(ui.locked.value) {
             detectTapGestures(
-                onTap = {
-                    if (isPipMode) return@detectTapGestures
-                    actions.ui.notifyUserInteraction()
-                    if (!ui.locked.value) {
-                        actions.toggleHud()
+                onTap = { offset ->
+                    if (isInsideSubtitle(offset)) return@detectTapGestures
+                    if (ui.locked.value) {
+                        ui.lockScrimVisible.value = !ui.lockScrimVisible.value
                     } else {
-                        // Single-tap on locked screen: show the lock
-                        // scrim so the user knows the screen IS locked
-                        ui.lockScrimVisible.value = true
-                        actions.showTransientToast("Controls locked")
+                        ui.bumpInteraction()
+                        onToggleControls()
                     }
                 },
-                onDoubleTap = { off ->
-                    if (isPipMode || ui.locked.value) return@detectTapGestures
-                    actions.ui.notifyUserInteraction()
-                    val w = gestures.scrW.floatValue
-                    val h = gestures.scrH.floatValue
-                    val density = actions.view.resources.displayMetrics.density.coerceAtLeast(1f)
-                    val edgeDeadZone = 52f * density
-                    if (off.y < edgeDeadZone || off.y > h - edgeDeadZone) return@detectTapGestures
-                    val x = off.x
+                onDoubleTap = { offset ->
+                    if (ui.locked.value || isInsideSubtitle(offset)) return@detectTapGestures
+                    ui.bumpInteraction()
+                    val w = gestures.scrW.floatValue.coerceAtLeast(1f)
+                    val step = ui.seekStepSec.intValue
                     when {
-                        x < w * 0.35f -> {
-                            if (doubleTapSeekEnabled) actions.seekDelta(-ui.seekStepSec.intValue)
+                        offset.x < w * 0.35f -> {
+                            gestures.doubleTapSide.intValue = -1
+                            gestures.doubleTapAccumSec.intValue -= step
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            onDoubleTapSeek(-step, true)
                         }
-                        x > w * 0.65f -> {
-                            if (doubleTapSeekEnabled) actions.seekDelta(ui.seekStepSec.intValue)
+                        offset.x > w * 0.65f -> {
+                            gestures.doubleTapSide.intValue = 1
+                            gestures.doubleTapAccumSec.intValue += step
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            onDoubleTapSeek(step, false)
                         }
                         else -> {
-                            actions.togglePlayPause()
+                            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            onPlayPauseToggle()
                         }
                     }
-                    ui.controlsVisible.value = false
                 },
-                onLongPress = if (ui.locked.value) {
-                    {
-                        if (!isPipMode) actions.unlockControls()
-                    }
-                } else null,
             )
         }
-        .pointerInput(ui.locked.value, isPipMode) {
+        // 3. TWO-AXIS DRAGS (Brightness, 200% Volume+Boost, Piecewise Quadratic Scrub)
+        .pointerInput(ui.locked.value, swipeToSeekEnabled) {
+            if (ui.locked.value) return@pointerInput
+            val topDeadZone = 52f * density
+            val bottomDeadZone = 52f * density
+            val sideDeadZone = 24f * density
+
             detectDragGestures(
                 onDragStart = { off ->
-                    if (ui.locked.value || isPipMode) return@detectDragGestures
-                    val density = actions.view.resources.displayMetrics.density.coerceAtLeast(1f)
-                    val topDeadZone = 52f * density
-                    val bottomDeadZone = 52f * density
-                    val sideDeadZone = 24f * density
-                    val h = gestures.scrH.floatValue
                     val w = gestures.scrW.floatValue
-                    // System edge gesture protection: ignore drags initiating in notification shade
-                    // or home/minimize navigation swipe zones so system shade swipes do not alter volume.
-                    if (off.y < topDeadZone || off.y > h - bottomDeadZone || off.x < sideDeadZone || off.x > w - sideDeadZone) {
-                        gestures.mode.value = null
+                    val h = gestures.scrH.floatValue
+                    if (isInsideSubtitle(off) ||
+                        off.y < topDeadZone || off.y > h - bottomDeadZone ||
+                        off.x < sideDeadZone || off.x > w - sideDeadZone
+                    ) {
+                        gestures.mode.value = GestureMode.NONE
                         return@detectDragGestures
                     }
-                    actions.ui.notifyUserInteraction()
-                    gestures.mode.value = null
                     gestures.startX.floatValue = off.x
                     gestures.startY.floatValue = off.y
                     gestures.lastX.floatValue = off.x
-                    gestures.startPosMs.floatValue = actions.livePlayer.currentPosition.toFloat()
-                    gestures.startVol.intValue = actions.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                    gestures.startBri.floatValue = actions.activity?.window?.attributes?.screenBrightness
-                        ?.takeIf { it >= 0 } ?: 0.5f
+                    gestures.startPosMs.floatValue = currentPositionMsProvider()
+                    gestures.startVolPercent.intValue = ui.volumeBoostPercent.intValue
+                    gestures.startBri.floatValue = ui.screenBrightnessFraction.floatValue
+                    gestures.mode.value = GestureMode.NONE
                 },
                 onDrag = { change, _ ->
-                    if (ui.locked.value || isPipMode) return@detectDragGestures
-                    actions.ui.notifyUserInteraction()
-                    change.consume()
-                    val x = change.position.x
-                    val y = change.position.y
-                    if (gestures.mode.value == null) {
-                        val dx = abs(x - gestures.startX.floatValue)
-                        val dy = abs(y - gestures.startY.floatValue)
-                        if (dx > 20 || dy > 20) {
-                            val scrW = gestures.scrW.floatValue
-                            val m = when {
-                                dy > 1.5f * dx -> {
-                                    when {
-                                        gestures.startX.floatValue <= scrW * 0.45f ->
-                                            if (brightnessGestureEnabled) "bri" else null
-                                        gestures.startX.floatValue >= scrW * 0.55f ->
-                                            if (volumeGestureEnabled) "vol" else null
-                                        else -> null
-                                    }
+                    val w = gestures.scrW.floatValue.coerceAtLeast(1f)
+                    val h = gestures.scrH.floatValue.coerceAtLeast(1f)
+                    val sx = gestures.startX.floatValue
+                    val sy = gestures.startY.floatValue
+                    if (sx < sideDeadZone || sx > w - sideDeadZone ||
+                        sy < topDeadZone || sy > h - bottomDeadZone
+                    ) {
+                        return@detectDragGestures
+                    }
+
+                    val totalDx = change.position.x - sx
+                    val totalDy = change.position.y - sy
+                    val absDx = abs(totalDx)
+                    val absDy = abs(totalDy)
+
+                    if (gestures.mode.value == GestureMode.NONE) {
+                        if (absDx < 18f && absDy < 18f) return@detectDragGestures
+                        gestures.mode.value = when {
+                            absDx > 1.5f * absDy -> {
+                                // LOCKOUT: Never enter SEEK mode if Hold-to-Boost is active!
+                                if (swipeToSeekEnabled &&
+                                    !ui.boostActive.value &&
+                                    !ui.speedScrubHudVisible.value
+                                ) {
+                                    GestureMode.SEEK
+                                } else {
+                                    GestureMode.NONE
                                 }
-                                dx > 1.5f * dy -> {
-                                    if (swipeToSeekEnabled) "seek" else null
-                                }
-                                else -> null
                             }
-                            gestures.mode.value = m
-                            if (m != null) ui.controlsVisible.value = false
+                            sx <= w * 0.45f -> GestureMode.BRIGHTNESS
+                            sx >= w * 0.55f -> GestureMode.VOLUME
+                            else -> GestureMode.NONE
                         }
                     }
+
                     when (gestures.mode.value) {
-                        "seek" -> {
-                            val d = actions.livePlayer.duration.takeIf { it > 0 }
-                                ?: return@detectDragGestures
-                            val density = actions.view.resources.displayMetrics.density.coerceAtLeast(1f)
-                            val deltaPx = x - gestures.startX.floatValue
-                            val deltaDp = deltaPx / density
-                            val absDp = abs(deltaDp)
-                            val sign = if (deltaPx >= 0f) 1f else -1f
-                            // Progressive scrub scaling: fine scrub for small movements (~1.5s per 10dp),
-                            // smooth velocity acceleration beyond 50dp.
-                            val deltaSec = if (absDp <= 50f) {
-                                absDp * 0.15f
+                        GestureMode.SEEK -> {
+                            change.consume()
+                            val deltaDp = absDx / density
+                            val sign = if (totalDx >= 0f) 1f else -1f
+                            val deltaSec = if (deltaDp <= 50f) {
+                                deltaDp * 0.15f
                             } else {
-                                val excess = absDp - 50f
-                                7.5f + excess * 0.15f + 0.008f * excess * excess
+                                val excess = deltaDp - 50f
+                                7.5f + (excess * 0.15f) + (0.008f * excess.pow(2))
                             }
-                            val deltaMs = sign * deltaSec * 1000f
-                            val target = (gestures.startPosMs.floatValue + deltaMs).coerceIn(0f, d.toFloat())
-                            gestures.pendingSeekMs.floatValue = target
-                            val diffSec = ((target - gestures.startPosMs.floatValue) / 1000f).roundToInt()
-                            val diffSign = if (diffSec >= 0) "+" else ""
-                            actions.showHud(
-                                if (deltaPx >= 0f) Icons.Filled.FastForward else Icons.Filled.FastRewind,
-                                "${fmtTime(target.toLong())} (${diffSign}${diffSec}s) / ${fmtTime(d)}"
-                            )
+                            val signedDeltaSec = sign * deltaSec
+                            val durMs = (durationSecProvider() * 1000f).coerceAtLeast(1000f)
+                            val targetMs = (gestures.startPosMs.floatValue + signedDeltaSec * 1000f)
+                                .coerceIn(0f, durMs)
+                            gestures.scrubDeltaSec.floatValue = signedDeltaSec
+                            gestures.pendingSeekMs.floatValue = targetMs
+                            ui.localSeek.floatValue = targetMs / 1000f
+                            onPreviewKeyFrameSeekMs(targetMs.toLong())
                         }
-                        "vol" -> {
-                            val dy = gestures.startY.floatValue - y
-                            actions.updateVolumeGesture(dy)
+                        GestureMode.BRIGHTNESS -> {
+                            change.consume()
+                            val dragSpan = h * 0.62f
+                            val deltaFrac = -totalDy / dragSpan
+                            val newBri = (gestures.startBri.floatValue + deltaFrac).coerceIn(0.02f, 1.0f)
+                            ui.screenBrightnessFraction.floatValue = newBri
+                            onApplyBrightnessFraction(newBri)
                         }
-                        "bri" -> {
-                            val dy = gestures.startY.floatValue - y
-                            actions.updateBrightnessGesture(dy)
+                        GestureMode.VOLUME -> {
+                            change.consume()
+                            val dragSpan = h * 0.65f
+                            val deltaPct = ((-totalDy / dragSpan) * 200f).roundToInt()
+                            val prevPct = ui.volumeBoostPercent.intValue
+                            val newPct = (gestures.startVolPercent.intValue + deltaPct).coerceIn(0, 200)
+                            if ((prevPct <= 100 && newPct > 100) || (prevPct > 100 && newPct <= 100)) {
+                                // Haptic detent at 100% hardware-to-boost threshold
+                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            }
+                            ui.volumeBoostPercent.intValue = newPct
+                            onApplyVolumeBoostPercent(newPct)
                         }
+                        else -> Unit
                     }
-                    gestures.lastX.floatValue = x
                 },
                 onDragEnd = {
-                    if (gestures.mode.value == "vol") {
-                        actions.commitVolumeGesture()
+                    if (gestures.mode.value == GestureMode.SEEK && gestures.pendingSeekMs.floatValue >= 0f) {
+                        onCommitExactSeekMs(gestures.pendingSeekMs.floatValue.toLong())
                     }
-                    // Commit the ONE pending scrub seek (fast/keyframe seek —
-                    // scrubbing is coarse navigation; the seekbar handles
-                    // exact seeks). Same setSeekParameters pattern as seekBy.
-                    if (gestures.mode.value == "seek" && gestures.pendingSeekMs.floatValue >= 0f) {
-                        val target = gestures.pendingSeekMs.floatValue.toLong()
-                        val p = actions.engine?.player ?: actions.livePlayer
-                        (p as? ExoPlayer)?.setSeekParameters(SeekParameters.CLOSEST_SYNC)
-                        p.seekTo(target)
-                        actions.view.postDelayed({
-                            ((actions.engine?.player ?: actions.livePlayer) as? ExoPlayer)
-                                ?.setSeekParameters(SeekParameters.EXACT)
-                        }, 500)
-                        gestures.pendingSeekMs.floatValue = -1f
-                    }
-                    gestures.mode.value = null
+                    gestures.pendingSeekMs.floatValue = -1f
+                    gestures.scrubDeltaSec.floatValue = 0f
+                    ui.localSeek.floatValue = -1f
+                    gestures.mode.value = GestureMode.NONE
                 },
-                onDragCancel = { gestures.mode.value = null },
+                onDragCancel = {
+                    // CRITICAL INVARIANT: Always restore SeekParameters.EXACT if system cancels drag
+                    gestures.pendingSeekMs.floatValue = -1f
+                    gestures.scrubDeltaSec.floatValue = 0f
+                    ui.localSeek.floatValue = -1f
+                    gestures.mode.value = GestureMode.NONE
+                    onCancelKeyframeSeek()
+                },
             )
         }
-        // Hold-to-2× speed boost: keep a
-        // finger pressed on the video and playback jumps to 2× after
-        // a long-press; lifting the finger restores whatever speed
-        // was active before the hold. detectTapGestures' onLongPress
-        // has no release callback, so the hold lives in its own
-        // detector: requireUnconsumed = false sees the down without
-        // stealing it, and nothing is consumed unless the boost
-        // actually engages — taps, double-taps and drags keep working.
-        .pointerInput(ui.locked.value, isPipMode) {
+        // 4. TOUCH-ONLY HOLD-TO-BOOST & 34dp DISCRETE MILESTONE SCRUB
+        .pointerInput(ui.locked.value) {
+            if (ui.locked.value) return@pointerInput
+            val stepPx = 34f * density
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
-                // Locked / PiP / paused / already boosting: leave the
-                // pointer to the tap + drag detectors. Only boost while
-                // playing so a paused video can't burst audio.
-                if (ui.locked.value || isPipMode || ui.boostActive.value || !ui.isPlaying.value) {
+                // Strict Touch-Only filter + Subtitle bounds yield
+                if (down.type != PointerType.Touch || isInsideSubtitle(down.position)) {
                     return@awaitEachGesture
                 }
-                // Touch-only arming (hub 3.3): the hold-to-speed detector may
-                // engage for touch pointers only. A stray mouse press (e.g. a
-                // trackpad click while playback runs) has no hold-and-slide
-                // semantics, and an armed mouse press was one of the paths in
-                // the phantom-2× family; a stylus press must not engage the
-                // boost either.
-                if (down.type != PointerType.Touch) return@awaitEachGesture
-                // Survive the long-press timeout with the finger down,
-                // alone, and within touch slop: lifting early falls
-                // through to the tap path, moving hands the pointer to
-                // the drag detector, a second finger aborts. Pointer
-                // CANCEL needs no separate branch: a cancelled pointer is
-                // delivered with pressed = false, so a cancel ends the
-                // hold exactly like a lift and nothing engages.
-                val activated = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-                    var ok = true
-                    while (ok) {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        val pressed = event.changes.filter { it.pressed }
-                        ok = when {
-                            // Lifted early — or pointer CANCEL, which arrives
-                            // as pressed = false → fall through to tap.
-                            pressed.isEmpty() -> false
-                            pressed.size > 1 -> false  // second finger → abort
-                            else -> {
-                                // Same pointer must survive: a lift+new
-                                // down in one event batch is NOT a hold.
-                                val p = pressed.first()
-                                p.id == down.id &&
-                                    (p.position - down.position)
-                                        .getDistance() <= viewConfiguration.touchSlop
-                            }
+                val startX = down.position.x
+                val startY = down.position.y
+                var movedBeforeTimeout = false
+
+                val timedOut = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change == null || !change.pressed) return@withTimeoutOrNull false
+                        val dx = abs(change.position.x - startX)
+                        val dy = abs(change.position.y - startY)
+                        if (dx > viewConfiguration.touchSlop || dy > viewConfiguration.touchSlop) {
+                            movedBeforeTimeout = true
+                            return@withTimeoutOrNull false
                         }
                     }
-                    false
-                } ?: true
-                // Nothing but a survived long-press may engage the scrub:
-                // an early lift or an aborted hold (second finger, slop
-                // exit, pointer cancel delivered as release) must fall
-                // through to the tap/drag detectors untouched.
-                if (!activated) return@awaitEachGesture
-                // Long-press survived — engage discrete milestone speed scrub.
-                actions.startSpeedScrub()
-                val startX = down.position.x
-                val density = actions.view.resources.displayMetrics.density.coerceAtLeast(1f)
-                var isSliding = false
-                var lastMoveTime = System.currentTimeMillis()
+                } == null
+
+                if (!timedOut || movedBeforeTimeout || gestures.mode.value != GestureMode.NONE) {
+                    return@awaitEachGesture
+                }
+
+                // Activate 2.0x Hold-to-Boost
+                val savedSpeed = ui.currentPlaybackSpeed.floatValue
+                val baseIndex = 6 // 2.0x in SpeedMilestones
+                ui.boostActive.value = true
+                ui.speedScrubHudVisible.value = true
+                ui.discreteScrubIndex.intValue = baseIndex
+                ui.currentScrubSpeed.floatValue = PlayerUiState.SpeedMilestones[baseIndex]
+                onSetPlaybackSpeed(2.0f)
+                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
 
                 try {
-                    // Hold until the finger lifts; a second finger going
-                    // down aborts the scrub. Consume changes so no other gesture fires.
                     while (true) {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        event.changes.forEach { it.consume() }
-                        val pressed = event.changes.filter { it.pressed }
-                        val heldPointer = event.changes.firstOrNull { it.id == down.id && it.pressed }
-                        if (heldPointer == null || pressed.isEmpty() || pressed.size > 1) break
-
-                        val deltaPx = heldPointer.position.x - startX
-                        val deltaDp = deltaPx / density
-
-                        if (abs(deltaDp) > 8f) {
-                            isSliding = true
-                            lastMoveTime = System.currentTimeMillis()
-                            // Each 34dp of horizontal drag moves 1 discrete milestone step
-                            val stepOffset = (deltaDp / 34f).roundToInt()
-                            val targetIndex = (4 + stepOffset).coerceIn(0, actions.discreteMilestones.size - 1)
-                            actions.updateDiscreteScrub(targetIndex, isSliding = true)
-                        } else {
-                            if (System.currentTimeMillis() - lastMoveTime > 600L && isSliding) {
-                                isSliding = false
-                                actions.updateDiscreteScrub(actions.ui.discreteScrubIndex.intValue, isSliding = false)
-                            }
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change == null || !change.pressed) break
+                        val dx = change.position.x - startX
+                        val indexStep = (dx / stepPx).roundToInt()
+                        val newIdx = (baseIndex + indexStep)
+                            .coerceIn(0, PlayerUiState.SpeedMilestones.lastIndex)
+                        if (newIdx != ui.discreteScrubIndex.intValue) {
+                            ui.discreteScrubIndex.intValue = newIdx
+                            val newSpd = PlayerUiState.SpeedMilestones[newIdx]
+                            ui.currentScrubSpeed.floatValue = newSpd
+                            onSetPlaybackSpeed(newSpd)
+                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        }
+                        if (change.positionChange() != Offset.Zero) {
+                            change.consume()
                         }
                     }
                 } finally {
-                    actions.stopSpeedScrub()
+                    ui.boostActive.value = false
+                    ui.speedScrubHudVisible.value = false
+                    onSetPlaybackSpeed(savedSpeed)
                 }
             }
         }

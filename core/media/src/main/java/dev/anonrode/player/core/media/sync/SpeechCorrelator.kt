@@ -246,12 +246,19 @@ object SpeechCorrelator {
         shiftB(B, bWords, dest, words, bestShift + padBins)
         if (lastBits != 0) dest[words - 1] = dest[words - 1] and ((1L shl lastBits) - 1)
         var inside = 0
+        var sBPk = 0
         for (i in 0 until n) {
-            if (audio[i] > 0.3f && ((dest[i shr 6] ushr (i and 63)) and 1L) != 0L) inside++
+            val bit = ((dest[i shr 6] ushr (i and 63)) and 1L) != 0L
+            if (bit) sBPk++
+            if (audio[i] > 0.3f && bit) inside++
         }
         val containment = if (hard > 0) inside.toFloat() / hard else 0f
 
-        val z = peak * sqrt(n.toDouble())
+        // Minimum dialogue mass check: reject sparse window hits
+        if (sBPk < 15 && abs(bestShift) > 150) return Outcome.NoMatch
+
+        val nEff = minOf(n.toDouble(), hard.toDouble(), sBPk.toDouble()).coerceAtLeast(1.0)
+        val z = peak * sqrt(nEff)
         val zFloor = if (n <= 160) Z_SMALL else Z_SMALL - (Z_SMALL - Z_LARGE) * minOf(1.0, (n - 160.0) / 120.0)
 
         // Standard gate: peak, margin, containment (restored from v0.6), and z-score

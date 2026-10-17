@@ -32,23 +32,29 @@ object CueLookup {
 
     const val MAX_OVERLAP = 32
 
-    fun find(cues: List<SubtitleCue>, t: Double, maxOverlap: Int = MAX_OVERLAP): SubtitleCue? {
-        if (cues.isEmpty()) return null
-        // upper bound: first index whose start is after t
+    fun findActiveCues(cues: List<SubtitleCue>, t: Double, maxOverlap: Int = MAX_OVERLAP): List<SubtitleCue> {
+        if (cues.isEmpty()) return emptyList()
         var lo = 0
         var hi = cues.size
         while (lo < hi) {
             val mid = (lo + hi) ushr 1
             if (cues[mid].start <= t) lo = mid + 1 else hi = mid
         }
+        val active = mutableListOf<SubtitleCue>()
         var i = lo - 1
         var walked = 0
         while (i >= 0 && walked < maxOverlap) {
             val c = cues[i]
-            if (t >= c.start && t <= c.end) return c
+            if (t >= c.start && t <= c.end) {
+                active.add(c)
+            }
             i--
             walked++
         }
-        return null
+        active.reverse()
+        return active
     }
+
+    fun find(cues: List<SubtitleCue>, t: Double, maxOverlap: Int = MAX_OVERLAP): SubtitleCue? =
+        findActiveCues(cues, t, maxOverlap).lastOrNull()
 }

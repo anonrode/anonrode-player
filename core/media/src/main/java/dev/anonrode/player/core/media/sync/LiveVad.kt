@@ -99,41 +99,46 @@ internal class LiveVad private constructor(
         val need = frames * frameBytes
         synchronized(lock) {
             var skip = 0
+            var droppedBytes = 0
             if (need > pending.size) {
-                // A single buffer larger than the entire ring. Keeping it whole
-                // is impossible, and the old code computed a negative `keep`,
-                // zeroed pendingLen, and then copied `need` bytes into a buffer
-                // of `pending.size` -- an IndexOutOfBoundsException thrown ON
-                // THE RENDER THREAD, which takes playback down rather than
-                // merely skipping a sync attempt. Take the newest
-                // frame-aligned tail instead and account for the rest.
                 val keepIn = (pending.size / frameBytes) * frameBytes
                 if (keepIn <= 0) {
+                    droppedBytes = need
                     pendingDropped += need.toLong()
+                    if (sampleRate > 0 && frameBytes > 0) {
+                        synchronized(vadLock) {
+                            vad.onsetOffsetSec += (droppedBytes / frameBytes).toDouble() / sampleRate
+                        }
+                    }
                     return
                 }
-                pendingDropped += (need - keepIn).toLong()
-                skip = need - keepIn
+                droppedBytes = need - keepIn
+                pendingDropped += droppedBytes.toLong()
+                skip = droppedBytes
                 pendingLen = 0
             } else if (pendingLen + need > pending.size) {
-                // Overflow drops the OLDEST audio, not the newest. The model
-                // wants contiguous speech: a gap in the middle poisons its
-                // recurrent state, whereas a truncated head only costs a little
-                // history. Trimming is frame-aligned so the copy stays
-                // de-interleavable.
                 val keep = ((pending.size - need) / frameBytes) * frameBytes
                 if (keep <= 0) {
+                    droppedBytes = pendingLen
                     pendingDropped += pendingLen.toLong()
                     pendingLen = 0
                 } else {
-                    System.arraycopy(pending, pendingLen - keep, pending, 0, keep)
+                    droppedBytes = pendingLen - keep
+                    pendingDropped += droppedBytes.toLong()
+                    System.arraycopy(pending, droppedBytes, pending, 0, keep)
                     pendingLen = keep
                 }
             }
+            if (droppedBytes > 0 && sampleRate > 0 && frameBytes > 0) {
+                synchronized(vadLock) {
+                    vad.onsetOffsetSec += (droppedBytes / frameBytes).toDouble() / sampleRate
+                }
+            }
             val toCopy = need - skip
-            val dup = buf.duplicate().order(buf.order())
-            (dup as java.nio.Buffer).position(buf.position() + skip)
-            dup.get(pending, pendingLen, toCopy)
+            val origPos = buf.position()
+            (buf as java.nio.Buffer).position(origPos + skip)
+            buf.get(pending, pendingLen, toCopy)
+            (buf as java.nio.Buffer).position(origPos)
             pendingLen += toCopy
             lock.notifyAll()
         }

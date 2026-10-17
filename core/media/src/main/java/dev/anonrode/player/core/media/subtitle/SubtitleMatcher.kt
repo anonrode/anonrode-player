@@ -25,9 +25,10 @@ import dev.anonrode.player.core.model.EpisodePattern
  *   - Hyphen / underscore / dot separators are now treated as equal
  *     through tokenization (already true; now also reflected in the
  *     leading-zero normalization helper used by the tests).
- *   - [normalizedScore] caps at 1.0 and clamps negatives to 0.0 so
- *     callers can apply a simple threshold (0.6 = "good enough to skip
- *     fingerprint; 0.7 = "lock candidate worth reusing verbatim").
+ *   - [normalizedScore] caps at 1.0 and clamps negatives to 0.0 for
+ *     candidate ranking and lock reuse (0.7 = "lock candidate worth reusing verbatim").
+ *     Per Law #2, sidecar matching score never suppresses fingerprint
+ *     scheduling when autoSyncCheckedAtMs == 0L (no deadlock on unsynced files).
  */
 object SubtitleMatcher {
 
@@ -208,11 +209,14 @@ object SubtitleMatcher {
 
     /**
      * Normalize the legacy 100-point sidecar score into 0.0..1.0 so the
-     * new sub-sync UX can apply simple thresholds:
-     *   score ≥ 0.6 → sidecar good enough to skip fingerprint schedule
-     *   score ≥ 0.7 → sidecar lock reusable on next open
+     * sub-sync UX can rank candidates and reuse locks:
+     *   score ≥ 0.6 → strong sidecar match for automatic candidate selection
+     *   score ≥ 0.7 → sidecar lock candidate reusable on next open
      *   < 0         → hard disqualification (episode conflict); clamped to 0
      *   0.0..0.1    → use as fallback in a single-sub folder only
+     *
+     * Note: Per Law #2, sidecar matching score never suppresses fingerprint
+     * scheduling when autoSyncCheckedAtMs == 0L (no deadlock on unsynced files).
      *
      * Mapping: 100-pt score → 0..1 by dividing by 100 (the historical
      * perfect-stem ceiling). Negative legacy scores (conflict) clamp to
@@ -225,7 +229,18 @@ object SubtitleMatcher {
     }
 
     /** Filename without its final extension. */
-    private fun stem(name: String): String = name.substringBeforeLast('.', name)
+    fun stem(name: String): String = name.substringBeforeLast('.', name)
+
+    /** Language priority weight (0.0 to 1.0) derived from LANG_W. */
+    fun languageWeight(subName: String): Double {
+        val sl = stem(subName).lowercase()
+        for ((kw, w) in LANG_W) {
+            if (LANG_RE.getValue(kw).containsMatchIn(sl)) {
+                return w
+            }
+        }
+        return 0.0
+    }
 
     private fun tokens(name: String): List<String> =
         name.lowercase()

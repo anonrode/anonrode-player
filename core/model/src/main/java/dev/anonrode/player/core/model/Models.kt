@@ -96,6 +96,9 @@ object EpisodePattern {
     private val cross = Regex("""(?<!\d)(\d{1,2})x(\d{2})(?!\d)""")
     private val seasonWord = Regex("""[Ss]eason\s*(\d{1,2})\s*[Ee]p(?:isode)?\s*(\d{1,3})""", RegexOption.IGNORE_CASE)
     private val bare = Regex("""[Ee][Pp]?[_.\-\s]*(\d{1,3})(?!\d)""")
+    private val cjk = Regex("""第\s*(\d{1,3})\s*[集话話期]""")
+    private val nonEpisodeNumbers = setOf(264, 265, 480, 576, 720, 1080, 2160)
+    private val delimitedBare = Regex("""(?<=[._\-\s\[\(])(\d{1,3})(?=[._\-\s\]\)]|$)""")
 
     fun find(name: String): Pair<Int?, Int>? {
         val m1 = full.find(name)
@@ -106,6 +109,22 @@ object EpisodePattern {
         if (m3 != null) return m3.groupValues[1].toIntOrNull() to m3.groupValues[2].toInt()
         val m4 = bare.find(name)
         if (m4 != null) return null to m4.groupValues[1].toInt()
+        val m5 = cjk.find(name)
+        if (m5 != null) return null to m5.groupValues[1].toInt()
+        val bareMatches = delimitedBare.findAll(name)
+            .mapNotNull { it.groupValues[1].toIntOrNull() }
+            .filter { it !in nonEpisodeNumbers && it > 0 }
+            .toList()
+        if (bareMatches.isNotEmpty()) {
+            val padded = delimitedBare.findAll(name)
+                .firstOrNull { it.groupValues[1].length == 2 && it.groupValues[1].startsWith("0") && it.groupValues[1].toInt() !in nonEpisodeNumbers }
+            if (padded != null) {
+                return null to padded.groupValues[1].toInt()
+            }
+            if (bareMatches.size == 1) {
+                return null to bareMatches.first()
+            }
+        }
         return null
     }
 

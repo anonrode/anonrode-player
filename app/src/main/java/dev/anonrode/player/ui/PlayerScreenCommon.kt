@@ -69,53 +69,6 @@ internal fun fmtTime(ms: Long): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
 }
 
-/**
- * The Quick Access Ribbon's tools, as stable keys.
- *
- * The ribbon previously hard-coded 13 `RibbonToolItem(...)` calls in
- * source order, which made "Customise" unimplementable — there was no
- * order to change. Naming each tool lets the ribbon render from a
- * user-editable list instead, while this enum keeps the persistence
- * format stable: the persisted value is the enum NAME, so reordering the
- * declaration below never invalidates a user's saved arrangement.
- */
-enum class RibbonTool(val label: String) {
-    SPEED("Speed"),
-    SCREENSHOT("Screenshot"),
-    ROTATION("Screen Rotation"),
-    MUTE("Mute"),
-    NIGHT_MODE("Night Mode"),
-    LOOP("Loop"),
-    CUSTOMISE("Customise"),
-    SHUFFLE("Shuffle"),
-    SLEEP_TIMER("Sleep Timer"),
-    AB_REPEAT("A-B Repeat"),
-    AUDIO_EFFECT("Audio Effect"),
-    EQUALIZER("Equalizer"),
-    BACKGROUND_PLAY("Background Play");
-
-    companion object {
-        /**
-         * Canonical order — also the fallback when nothing is persisted.
-         * Places the primary 4 tools first: Speed, Screenshot, Rotation, Mute.
-         */
-        fun defaultOrder(): List<RibbonTool> = listOf(
-            SPEED,
-            SCREENSHOT,
-            ROTATION,
-            MUTE,
-            NIGHT_MODE,
-            LOOP,
-            CUSTOMISE,
-            SHUFFLE,
-            SLEEP_TIMER,
-            AB_REPEAT,
-            AUDIO_EFFECT,
-            EQUALIZER,
-            BACKGROUND_PLAY,
-        )
-    }
-}
 
 /** Speed pill label: "1X", "1.25X", "1.5X", "2X". */
 internal fun speedLabel(sp: Float): String =
