@@ -446,7 +446,7 @@ class SyncFingerprintJob(
 
                     val allClusterOnsets = mutableListOf<Double>()
                     val clusterRanges = mutableListOf<Pair<Double, Double>>()
-                    var clusterPassSources: OnsetSources? = null
+                    var clusterPassSources: OnsetExtractor.OnsetSources? = null
 
                     for (targetSec in targetPositions) {
                         if (!coroutineContext.isActive || isStopped) break
@@ -474,10 +474,10 @@ class SyncFingerprintJob(
                             allClusterOnsets.addAll(onsets)
                             clusterRanges.add(probeStart to (probeStart + clusterSpan))
                             clusterPassSources = if (clusterPassSources == null) pass else {
-                                OnsetSources(
+                                OnsetExtractor.OnsetSources(
                                     silencedetect = clusterPassSources.silencedetect + pass.silencedetect,
                                     vad = clusterPassSources.vad + pass.vad,
-                                    vadEnvelope = FloatArray(0),
+                                    envelope = FloatArray(0),
                                 )
                             }
                         }
