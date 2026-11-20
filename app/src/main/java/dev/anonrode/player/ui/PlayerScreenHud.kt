@@ -25,6 +25,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.WbSunny
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -45,91 +51,61 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 object OpticalGlassTokens {
     val EaseReveal = CubicBezierEasing(0.16f, 1.0f, 0.3f, 1.0f)
-    val CyanAccent = Color(0xFF38BDF8)
-    val AmberBoost = Color(0xFFF59E0B)
-    val EmeraldSync = Color(0xFF10B981)
-    val SmokedChipBase = Color(0xFF080C14).copy(alpha = 0.32f)
-    val SmokedDrawerBase = Color(0xFF080B12).copy(alpha = 0.52f)
-    val SmokedHudPillBase = Color(0xFF080C14).copy(alpha = 0.42f)
+    val EmeraldAccent = Color(0xFF19B444)
+    val EmeraldSync = Color(0xFF3DDBA8)
+    val AmberBoost = Color(0xFFF5B84B)
+    val SmokedChipBase = Color.Black.copy(alpha = 0.50f)
+    val SmokedDrawerBase = Color(0xF5040406)
+    val SmokedHudPillBase = Color(0xDE0A0A0C)
 
     val CrispTextShadow = Shadow(
         color = Color.Black.copy(alpha = 0.88f),
         offset = Offset(0f, 1.5f),
-        blurRadius = 5f,
+        blurRadius = 4f,
     )
 }
 
 /**
- * Zero-allocation Optical Smoked Glass modifier.
- * Caches Outline, top-edge internal luminance highlight, and directional 3-stop specular rim border
- * inside [drawWithCache] so playback ticks and animations never allocate Brushes.
+ * Zero-allocation pure-black glass modifier (zero blur, zero blue).
  */
 fun Modifier.opticalGlass(
     shape: Shape = CircleShape,
     baseColor: Color = OpticalGlassTokens.SmokedChipBase,
     isActive: Boolean = false,
-    accentColor: Color = OpticalGlassTokens.CyanAccent,
-    borderWidth: Dp = 1.dp,
+    accentColor: Color = OpticalGlassTokens.EmeraldAccent,
+    borderWidth: Dp = 0.8.dp,
 ): Modifier = this
     .clip(shape)
     .drawWithCache {
         val strokePx = borderWidth.toPx()
         val outline = shape.createOutline(size, layoutDirection, this)
 
-        val internalHighlightBrush = if (isActive) {
-            Brush.radialGradient(
-                colors = listOf(
-                    accentColor.copy(alpha = 0.42f),
-                    accentColor.copy(alpha = 0.16f),
-                ),
-                center = Offset(size.width * 0.5f, size.height * 0.5f),
-                radius = (size.maxDimension * 0.75f).coerceAtLeast(1f),
-            )
+        val fillColor = if (isActive) {
+            accentColor.copy(alpha = 0.16f)
         } else {
-            Brush.verticalGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.09f),
-                    Color.Transparent,
-                ),
-                startY = 0f,
-                endY = size.height * 0.42f,
-            )
+            baseColor
         }
 
-        val specularRimBrush = if (isActive) {
-            Brush.linearGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.75f),
-                    accentColor.copy(alpha = 0.90f),
-                    accentColor.copy(alpha = 0.38f),
-                ),
-                start = Offset.Zero,
-                end = Offset(size.width, size.height),
-            )
+        val rimColor = if (isActive) {
+            accentColor.copy(alpha = 0.55f)
         } else {
-            Brush.linearGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.36f),
-                    Color.White.copy(alpha = 0.12f),
-                    Color.White.copy(alpha = 0.04f),
-                ),
-                start = Offset.Zero,
-                end = Offset(size.width, size.height),
-            )
+            Color.White.copy(alpha = 0.10f)
         }
 
         onDrawBehind {
-            drawOutline(outline = outline, color = baseColor)
-            drawOutline(outline = outline, brush = internalHighlightBrush)
-            drawOutline(
-                outline = outline,
-                brush = specularRimBrush,
-                style = Stroke(width = strokePx),
-            )
+            drawOutline(outline = outline, color = fillColor)
+            if (strokePx > 0f) {
+                drawOutline(
+                    outline = outline,
+                    color = rimColor,
+                    style = Stroke(width = strokePx),
+                )
+            }
         }
     }
 
@@ -140,9 +116,9 @@ fun OpticalGlassDiscButton(
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
     isActive: Boolean = false,
-    discSize: Dp = 36.dp,
-    touchTargetSize: Dp = 42.dp,
-    accentColor: Color = OpticalGlassTokens.CyanAccent,
+    discSize: Dp = 38.dp,
+    touchTargetSize: Dp = 48.dp,
+    accentColor: Color = OpticalGlassTokens.EmeraldAccent,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -160,11 +136,8 @@ fun OpticalGlassDiscButton(
         Box(
             modifier = Modifier
                 .size(discSize)
-                .opticalGlass(
-                    shape = CircleShape,
-                    isActive = isActive,
-                    accentColor = accentColor,
-                ),
+                .clip(CircleShape)
+                .background(if (isActive) accentColor else Color.Black.copy(alpha = 0.50f)),
             contentAlignment = Alignment.Center,
             content = content,
         )
@@ -180,7 +153,7 @@ fun OpticalGlassChip(
     onLongClick: (() -> Unit)? = null,
     isActive: Boolean = false,
     height: Dp = 36.dp,
-    accentColor: Color = OpticalGlassTokens.CyanAccent,
+    accentColor: Color = OpticalGlassTokens.EmeraldAccent,
     leadingIcon: (@Composable () -> Unit)? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -206,7 +179,7 @@ fun OpticalGlassChip(
         Text(
             text = label,
             style = TextStyle(
-                color = Color.White,
+                color = if (isActive) OpticalGlassTokens.EmeraldSync else Color.White,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFeatureSettings = "tnum",
@@ -217,13 +190,13 @@ fun OpticalGlassChip(
 }
 
 /**
- * Edge-hugged 34dp x 176dp vertical glass tube for Brightness (left) and 200% Volume Boost (right).
+ * Minimal borderless vertical capsule for Brightness (left) and 200% Volume+Boost (right).
  */
 @Composable
 fun VerticalGestureHudPill(
     visible: Boolean,
     isVolume: Boolean,
-    percentage: Int, // 0..100 for Brightness, 0..200 for Volume+Boost
+    percentage: Int,
     modifier: Modifier = Modifier,
 ) {
     val maxPct = if (isVolume) 200f else 100f
@@ -234,40 +207,42 @@ fun VerticalGestureHudPill(
         label = "verticalPillFill",
     )
     val isBoosted = isVolume && percentage > 100
-    val barColor = if (isBoosted) OpticalGlassTokens.AmberBoost else OpticalGlassTokens.CyanAccent
+    val barColor = if (isBoosted) OpticalGlassTokens.AmberBoost else OpticalGlassTokens.EmeraldAccent
 
     AnimatedVisibility(
         visible = visible,
         modifier = modifier,
-        enter = fadeIn(tween(150)) + scaleIn(tween(200, easing = OpticalGlassTokens.EaseReveal), initialScale = 0.92f),
-        exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.92f),
+        enter = fadeIn(tween(140)) + scaleIn(tween(180, easing = OpticalGlassTokens.EaseReveal), initialScale = 0.94f),
+        exit = fadeOut(tween(140)) + scaleOut(tween(140), targetScale = 0.94f),
     ) {
         Column(
             modifier = Modifier
-                .width(34.dp)
-                .height(176.dp)
-                .opticalGlass(
-                    shape = RoundedCornerShape(50),
-                    baseColor = OpticalGlassTokens.SmokedHudPillBase,
-                    isActive = isBoosted,
-                    accentColor = barColor,
-                )
+                .width(38.dp)
+                .height(168.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Color.Black.copy(alpha = 0.58f))
                 .padding(vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = if (isVolume) (if (percentage == 0) "🔇" else "🔊") else "☀️",
-                fontSize = 13.sp,
+                text = "$percentage%",
+                style = TextStyle(
+                    color = if (isBoosted) OpticalGlassTokens.AmberBoost else Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFeatureSettings = "tnum",
+                    shadow = OpticalGlassTokens.CrispTextShadow,
+                ),
             )
 
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .padding(vertical = 8.dp)
-                    .width(6.dp)
+                    .width(4.dp)
                     .clip(RoundedCornerShape(50))
-                    .background(Color.White.copy(alpha = 0.18f)),
+                    .background(Color.White.copy(alpha = 0.20f)),
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 Box(
@@ -279,22 +254,25 @@ fun VerticalGestureHudPill(
                 )
             }
 
-            Text(
-                text = "$percentage%",
-                style = TextStyle(
-                    color = if (isBoosted) OpticalGlassTokens.AmberBoost else Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFeatureSettings = "tnum",
-                    shadow = OpticalGlassTokens.CrispTextShadow,
-                ),
+            Icon(
+                imageVector = when {
+                    !isVolume -> Icons.Rounded.WbSunny
+                    percentage == 0 -> Icons.AutoMirrored.Rounded.VolumeOff
+                    else -> Icons.AutoMirrored.Rounded.VolumeUp
+                },
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(16.dp),
             )
         }
     }
 }
 
+private val HoldBoostStops = listOf(0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f)
+
 /**
- * Center HUD pill for Hold-to-Boost discrete milestone scrubbing and horizontal drag-seek readout.
+ * Top-center HUD capsule for Hold-to-Boost discrete milestone scrubbing,
+ * horizontal drag-seek readout, and transient aspect-ratio badge.
  */
 @Composable
 fun CenterGestureHudPill(
@@ -304,77 +282,157 @@ fun CenterGestureHudPill(
 ) {
     val isSeeking = gestures.mode.value == GestureMode.SEEK && gestures.pendingSeekMs.floatValue >= 0f
     val isBoosting = ui.boostActive.value || ui.speedScrubHudVisible.value
-    val visible = isSeeking || isBoosting
+    val isAspect = ui.aspectBadgeVisible.value && !isSeeking && !isBoosting
+    val visible = isSeeking || isBoosting || isAspect
 
     AnimatedVisibility(
         visible = visible,
         modifier = modifier,
-        enter = fadeIn(tween(140)) + scaleIn(tween(180, easing = OpticalGlassTokens.EaseReveal), initialScale = 0.94f),
-        exit = fadeOut(tween(140)),
+        enter = fadeIn(tween(130)) + scaleIn(tween(170, easing = OpticalGlassTokens.EaseReveal), initialScale = 0.95f),
+        exit = fadeOut(tween(130)),
     ) {
-        Column(
-            modifier = Modifier
-                .opticalGlass(
-                    shape = RoundedCornerShape(24.dp),
-                    baseColor = OpticalGlassTokens.SmokedHudPillBase,
-                )
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            if (isBoosting) {
+        when {
+            isBoosting -> {
                 val activeIdx = ui.discreteScrubIndex.intValue.coerceIn(0, PlayerUiState.SpeedMilestones.lastIndex)
                 val spd = PlayerUiState.SpeedMilestones[activeIdx]
-                Text(
-                    text = "⚡ Speed Boost ${spd}x",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFeatureSettings = "tnum",
-                        shadow = OpticalGlassTokens.CrispTextShadow,
-                    ),
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                val speedLabel = if (spd % 1f == 0f) "${spd.toInt()}.0x" else "${spd}x"
+                Column(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xD80A0A0C))
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    PlayerUiState.SpeedMilestones.forEachIndexed { idx, milestone ->
-                        val selected = idx == activeIdx
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            text = "0.25x",
+                            style = TextStyle(
+                                color = Color.White.copy(alpha = 0.80f),
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                fontFeatureSettings = "tnum",
+                            ),
+                        )
                         Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(
-                                    if (selected) OpticalGlassTokens.CyanAccent else Color.Transparent
-                                )
-                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                            modifier = Modifier.width(220.dp),
+                            contentAlignment = Alignment.BottomCenter,
                         ) {
-                            Text(
-                                text = "${milestone}x",
-                                style = TextStyle(
-                                    color = if (selected) Color.Black else Color.White.copy(alpha = 0.55f),
-                                    fontSize = 10.5.sp,
-                                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
-                                    fontFeatureSettings = "tnum",
-                                ),
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 4.dp)
+                                    .height(3.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(Color.White.copy(alpha = 0.24f)),
                             )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.Bottom,
+                            ) {
+                                HoldBoostStops.forEach { stop ->
+                                    val isStopSelected = abs(spd - stop) < 0.13f
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    ) {
+                                        Text(
+                                            text = "${stop}x",
+                                            style = TextStyle(
+                                                color = if (isStopSelected) OpticalGlassTokens.EmeraldSync else Color.White.copy(alpha = 0.72f),
+                                                fontSize = 9.5.sp,
+                                                fontWeight = if (isStopSelected) FontWeight.Bold else FontWeight.Normal,
+                                                fontFeatureSettings = "tnum",
+                                            ),
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .size(if (isStopSelected) 10.dp else 5.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isStopSelected) OpticalGlassTokens.EmeraldAccent else Color.White),
+                                        )
+                                    }
+                                }
+                            }
                         }
+                        Text(
+                            text = "4.0x",
+                            style = TextStyle(
+                                color = Color.White.copy(alpha = 0.80f),
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                fontFeatureSettings = "tnum",
+                            ),
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.FastForward,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Text(
+                            text = "$speedLabel Speed Playing",
+                            style = TextStyle(
+                                color = Color.White,
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFeatureSettings = "tnum",
+                            ),
+                        )
                     }
                 }
-            } else if (isSeeking) {
+            }
+            isSeeking -> {
                 val targetSec = (gestures.pendingSeekMs.floatValue / 1000f).coerceAtLeast(0f)
                 val delta = gestures.scrubDeltaSec.floatValue.roundToInt()
                 val sign = if (delta >= 0) "+" else ""
-                Text(
-                    text = "${formatSecondsToHms(targetSec.toInt())}  ($sign${delta}s)",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFeatureSettings = "tnum",
-                        shadow = OpticalGlassTokens.CrispTextShadow,
-                    ),
-                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xD80A0A0C))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        text = "${formatSecondsToHms(targetSec.toInt())}  ($sign${delta}s)",
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFeatureSettings = "tnum",
+                            shadow = OpticalGlassTokens.CrispTextShadow,
+                        ),
+                    )
+                }
+            }
+            isAspect -> {
+                val mode = AspectZoomMode.entries[ui.zoomIdx.intValue % AspectZoomMode.entries.size]
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xD80A0A0C))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        text = "Aspect: ${mode.label}",
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            shadow = OpticalGlassTokens.CrispTextShadow,
+                        ),
+                    )
+                }
             }
         }
     }

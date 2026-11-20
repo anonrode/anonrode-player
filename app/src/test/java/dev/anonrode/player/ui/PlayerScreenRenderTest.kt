@@ -146,16 +146,16 @@ class PlayerScreenRenderTest {
 
     @Composable
     private fun Chrome(actions: PlayerScreenActions, visible: Boolean) {
-        val ui = remember { PlayerUiState(initialIsPlaying = true).apply { controlsVisible.value = visible } }
-        val gestures = remember { GestureUiState() }
-        val quick = remember { QuickRowUiState() }
+        val ui = remember(actions) { actions.ui.apply { controlsVisible.value = visible } }
+        val gestures = remember(actions) { actions.gestures }
+        val quick = remember(actions) { actions.quick }
         val pos = remember { mutableFloatStateOf(46f * 60f + 23f) }
         val dur = remember { mutableFloatStateOf(53f * 60f + 52f) }
         val buf = remember { mutableFloatStateOf(34f * 60f) }
-        val cue = remember { mutableStateOf("") }
+        val cue = remember { mutableStateOf("Sir, let me help you get in.") }
         val res = remember { mutableStateOf("1080p • 24fps") }
-        val dec = remember { mutableStateOf("HW+SW") }
-        val off = remember { mutableStateOf(120L) }
+        val dec = remember { mutableStateOf("HW+") }
+        val off = remember { mutableStateOf(420L) }
 
         PlayerScreen(
             title = "The Great Protector S01E04 540p x265 AAC",
@@ -376,8 +376,20 @@ class PlayerScreenRenderTest {
     @Config(sdk = [34], qualifiers = "w850dp-h392dp", application = android.app.Application::class)
     fun landscape_chrome_on() {
         val actions = fixtureActions()
+        actions.quick.isSyncLocked.value = true
         compose.setContent { Stage(true) { Chrome(actions, visible = true) } }
         capture("landscape_chrome_on")
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w850dp-h392dp", application = android.app.Application::class)
+    fun landscape_ribbon_expanded() {
+        val actions = fixtureActions()
+        actions.quick.ribbonExpanded.value = true
+        actions.quick.isSyncLocked.value = true
+        actions.ui.boostActive.value = true
+        compose.setContent { Stage(true) { Chrome(actions, visible = true) } }
+        capture("landscape_ribbon_expanded")
     }
 
     // ══════════════ LIBRARY RENDER STATES (B3) ══════════════

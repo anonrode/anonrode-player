@@ -253,7 +253,10 @@ class PlayerActivity : ComponentActivity() {
     private var renderTick: Runnable? = null
 
     /** Last cue list handed to [restartRenderLoop]; [onStart] resumes from it. */
-    private var lastCues: List<SubtitleCue> = emptyList()
+    private var lastCues by mutableStateOf<List<SubtitleCue>>(emptyList())
+
+    /** Active sleep-timer countdown job; null when timer is off or end-of-episode. */
+    private var sleepTimerJob: Job? = null
 
     /**
      * v0.6.2 sub-sync UX pass: deferred sidecar parse. Video plays first
@@ -860,8 +863,26 @@ class PlayerActivity : ComponentActivity() {
                     val quick = remember { QuickRowUiState() }
 
                     LaunchedEffect(savedZoomIdx) { ui.zoomIdx.intValue = savedZoomIdx }
+                    LaunchedEffect(restoredSpeed) { ui.currentPlaybackSpeed.floatValue = restoredSpeed }
                     LaunchedEffect(settings.seekIncrementSec) { ui.seekStepSec.intValue = settings.seekIncrementSec }
-                    LaunchedEffect(resumedPillMs) { ui.resumePromptVisible.value = resumedPillMs != null }
+                    LaunchedEffect(resumedPillMs) {
+                        ui.resumePromptVisible.value = resumedPillMs != null
+                        ui.resumedFromSec.floatValue = (resumedPillMs ?: -1L) / 1000f
+                    }
+                    LaunchedEffect(abStartMs, abEndMs) {
+                        ui.abStartSec.floatValue = abStartMs?.let { it / 1000f } ?: -1f
+                        ui.abEndSec.floatValue = abEndMs?.let { it / 1000f } ?: -1f
+                    }
+                    LaunchedEffect(pendingNext, nextCountdownSec) {
+                        ui.upNextTitle.value = pendingNext?.title
+                        ui.upNextCountdownSec.intValue = nextCountdownSec
+                    }
+                    LaunchedEffect(title) {
+                        val savedPos = PlayerPrefs.subtitlePosition(this@PlayerActivity, currentUriStr.orEmpty())
+                        if (savedPos != null) {
+                            gestures.subPosFraction.floatValue = savedPos.second.coerceIn(0.10f, 0.85f)
+                        }
+                    }
                     LaunchedEffect(subSyncRunning) { quick.subSyncRunning.value = subSyncRunning }
                     LaunchedEffect(isSyncLocked) { quick.isSyncLocked.value = isSyncLocked }
                     LaunchedEffect(equalizerOn) { quick.equalizerOn.value = equalizerOn }
@@ -876,6 +897,14 @@ class PlayerActivity : ComponentActivity() {
                             else -> RepeatLoopMode.OFF
                         }
                     }
+
+                    var scrubPreviewBitmap by remember(title) { mutableStateOf<android.graphics.Bitmap?>(null) }
+                    dev.anonrode.player.ui.ScrubPreviewEffect(
+                        context = this@PlayerActivity,
+                        mediaUri = currentUriStr?.let { Uri.parse(it) },
+                        localSeekSec = ui.localSeek.floatValue,
+                        onFrameReady = { bmp -> scrubPreviewBitmap = bmp },
+                    )
 
                     LaunchedEffect(ui.zoomIdx.intValue) {
                         val idx = ui.zoomIdx.intValue
@@ -897,8 +926,16 @@ class PlayerActivity : ComponentActivity() {
                         }
                     }
 
-                    val combinedCueTextState = remember(cueText, embeddedCueText) {
-                        derivedStateOf { (cueText ?: embeddedCueText).orEmpty() }
+                    // Single stable State<String> reference: suppresses unsynced ExoPlayer
+                    // embeddedCueText whenever parsed/extracted lastCues are loaded.
+                    val combinedCueTextState = remember {
+                        derivedStateOf {
+                            if (lastCues.isNotEmpty()) {
+                                cueText.orEmpty()
+                            } else {
+                                (cueText ?: embeddedCueText).orEmpty()
+                            }
+                        }
                     }
 
                     val videoResolutionFpsLabel = remember {
@@ -917,6 +954,7 @@ class PlayerActivity : ComponentActivity() {
                                     title = v.title,
                                     durationSec = (v.durationMs / 1000f),
                                     isPlaying = idx == q.currentIndex,
+                                    videoPath = v.path,
                                 )
                             }
                         } ?: emptyList()
@@ -950,8 +988,10 @@ class PlayerActivity : ComponentActivity() {
                             performDecoderCycle(engine)
                         },
                         onApplyEngineSubtitleOffsetSec = { offsetSec ->
-                            val newNudgeMs = (offsetSec * 1000f).toLong()
+                            val newNudgeMs = (offsetSec * 1000f).roundToLong()
                             manualNudgeMs = newNudgeMs
+                            app.engine.setManualDelay(newNudgeMs)
+                            appliedOffsetSec = Double.NaN
                             val uri = currentUriStr
                             if (uri != null) {
                                 lifecycleScope.launch(Dispatchers.IO) {
@@ -964,6 +1004,131 @@ class PlayerActivity : ComponentActivity() {
                         },
                         onCaptureVideoFrame = {
                             captureVideoFrame()
+                        },
+                        onPersistSpeed = { spd ->
+                            sessionSpeed = spd
+                            restoredSpeed = spd
+                            PlayerPrefs.saveGlobalSpeed(this@PlayerActivity, spd)
+                            val uri = currentUriStr
+                            val vPath = currentVideoPath
+                            if (!vPath.isNullOrBlank()) {
+                                val parent = java.io.File(vPath).parent.orEmpty()
+                                if (parent.isNotBlank()) {
+                                    PlayerPrefs.saveSeriesSpeed(this@PlayerActivity, parent, spd)
+                                }
+                            }
+                            if (uri != null) {
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    app.stateStore.updateSpeed(uri, spd)
+                                }
+                            }
+                        },
+                        onSelectDecoderModeHost = { mode ->
+                            engine.pendingSpeedOnRebuild = sessionSpeed.takeIf { it > 0f } ?: 1f
+                            isRebuildingDecoder = true
+                            try {
+                                val newSessionId = engine.rebuildMode(mode)
+                                decoderModeLabel = engine.decoderModeLabel
+                                equalizer.setSessionId(newSessionId)
+                                if (equalizerOn) equalizer.setEnabled(true)
+                            } finally {
+                                lifecycleScope.launch {
+                                    delay(600L)
+                                    isRebuildingDecoder = false
+                                }
+                            }
+                        },
+                        onOpenEqualizerSheetHost = {
+                            equalizer.setSessionId(engine.currentAudioSessionId)
+                            eqPanelOpen = true
+                        },
+                        onOpenCastPickerHost = {
+                            requestOpenCastPicker()
+                        },
+                        onOpenOnlineSubtitlesHost = {
+                            subtitlePickerOpen = true
+                        },
+                        onCycleAbRepeatHost = {
+                            advanceAbRepeat()
+                        },
+                        onSelectSleepTimerHost = { minutes ->
+                            sleepTimerJob?.cancel()
+                            holdAutoAdvanceOnce = false
+                            if (minutes == -1) {
+                                holdAutoAdvance()
+                            } else if (minutes > 0) {
+                                sleepTimerJob = lifecycleScope.launch {
+                                    delay(minutes * 60_000L)
+                                    engine.player.pause()
+                                    ui.isPlaying.value = false
+                                    ui.sleepTimerMinutes.intValue = 0
+                                }
+                            }
+                        },
+                        onToggleBackgroundPlayHost = { enabled ->
+                            lifecycleScope.launch(Dispatchers.IO) {
+                                app.playerSettingsDataStore.updateData { it.copy(backgroundPlayback = enabled) }
+                            }
+                        },
+                        onToggleAudioEffectHost = { enabled ->
+                            lifecycleScope.launch(Dispatchers.IO) {
+                                app.playerSettingsDataStore.updateData { it.copy(audioEffectEnabled = enabled) }
+                            }
+                        },
+                        onSetAutoSyncEnabledHost = { enabled ->
+                            onSetSubSyncEnabled(enabled)
+                        },
+                        onUpdatePlaylistModeHost = { shuffle, repeat ->
+                            savedShuffleOn = shuffle
+                            val ord = when (repeat) {
+                                RepeatLoopMode.ONE -> 1
+                                RepeatLoopMode.ALL -> 2
+                                RepeatLoopMode.OFF -> 0
+                            }
+                            savedRepeatModeOrdinal = ord
+                            engine.player.repeatMode = when (repeat) {
+                                RepeatLoopMode.ONE -> Player.REPEAT_MODE_ONE
+                                RepeatLoopMode.ALL -> Player.REPEAT_MODE_ALL
+                                RepeatLoopMode.OFF -> Player.REPEAT_MODE_OFF
+                            }
+                            val uri = currentUriStr
+                            if (uri != null) {
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    app.stateStore.updatePlaylistMode(uri, shuffle, ord)
+                                }
+                            }
+                        },
+                        onSetRotateModeHost = { mode ->
+                            autoRotateEnabled = (mode == RotateMode.SENSOR)
+                            requestedOrientation = when (mode) {
+                                RotateMode.SENSOR -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR
+                                RotateMode.LANDSCAPE -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                RotateMode.PORTRAIT -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                                RotateMode.LOCKED -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                            }
+                        },
+                        onOpenFullSettingsHost = {
+                            settingsOpen = true
+                        },
+                        onReorderEpisodesHost = { orderedIds ->
+                            val q = episodeQueue
+                            if (q != null) {
+                                val updated = q.reordered(orderedIds)
+                                episodeQueue = updated
+                                val folder = updated.episodes.firstOrNull()?.parentPath.orEmpty()
+                                if (folder.isNotBlank()) {
+                                    QueueOrderStore.set(this@PlayerActivity, folder, orderedIds)
+                                }
+                            }
+                        },
+                        onRemoveEpisodeHost = { removedId ->
+                            val q = episodeQueue
+                            if (q != null && q.episodes.size > 1) {
+                                val remaining = q.episodes.filterNot { it.uri == removedId }
+                                val curUri = q.current?.uri
+                                val nextIdx = remaining.indexOfFirst { it.uri == curUri }.coerceAtLeast(0)
+                                episodeQueue = q.copy(episodes = remaining, currentIndex = nextIdx)
+                            }
                         },
                     )
 
@@ -985,7 +1150,7 @@ class PlayerActivity : ComponentActivity() {
                             subtitleTracks = subtitleTracks,
                             selectedSubtitleTrackId = subtitleChoice.ifEmpty { null },
                             episodes = playlistEpisodes,
-                            scrubPreviewBitmap = null,
+                            scrubPreviewBitmap = scrubPreviewBitmap,
                             isPipMode = pipMode,
                             ui = ui,
                             gestures = gestures,
@@ -1021,6 +1186,13 @@ class PlayerActivity : ComponentActivity() {
                             onNextEpisode = { playNextNow() },
                             onOpenAudioTracks = { audioTrackPickerOpen = true },
                             onEnterPip = { enterPip() },
+                            mediaId = currentUriStr.orEmpty(),
+                            autoHideTimeoutMs = settings.autoHideControlsMs,
+                            pinchZoomEnabled = settings.pinchZoom,
+                            doubleTapSeekEnabled = settings.doubleTapSeek,
+                            swipeToSeekEnabled = settings.swipeToSeek,
+                            volumeGestureEnabled = settings.volumeGesture,
+                            brightnessGestureEnabled = settings.brightnessGesture,
                         )
                     }
                     // ── Cast route picker (audio output) ───────────────
@@ -2240,11 +2412,9 @@ class PlayerActivity : ComponentActivity() {
                 lastTRaw = tRaw
                 lastTickWallMs = nowWallMs
 
-                // Smooth inter-cue micro-slew with strict monotonicity:
-                // Rate of change |d(appliedOffset)/dt_media| is bounded by 0.25,
-                // guaranteeing that (tRaw - appliedOffset) / spd is strictly monotonic
-                // during forward playback (d(tSub)/d(tRaw) >= 0.75 / spd > 0).
-                // When paused or buffering (dtMediaSec == 0.0), appliedOffsetSec never slews.
+                // Smooth inter-cue micro-slew:
+                // Only adapt offset during silence gaps between cues (cueText == null)
+                // so active subtitle text never hangs, stretches, or jumps while being read.
                 if (appliedOffsetSec.isNaN() || !isSyncLocked) {
                     appliedOffsetSec = targetOffsetSec
                 } else {
@@ -2252,8 +2422,8 @@ class PlayerActivity : ComponentActivity() {
                     if (abs(diff) > 2.0) {
                         // Commercial cut / large seek jump: snap immediately
                         appliedOffsetSec = targetOffsetSec
-                    } else if (abs(diff) > 0.0005) {
-                        // Rate-limited slew: at most 0.25 s offset change per media progression second
+                    } else if (cueText == null && abs(diff) > 0.0005) {
+                        // Rate-limited slew during inter-cue silence gaps
                         val maxSlew = 0.25 * dtMediaSec
                         appliedOffsetSec += diff.coerceIn(-maxSlew, maxSlew)
                     }

@@ -1826,7 +1826,7 @@ fun ContinueCard(
         modifier = modifier
             .size(width = 140.dp, height = 80.dp)
             .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFF111827))
+            .background(Color(0xFF121215))
             .clickable(onClick = onClick),
     ) {
         if (thumbnail != null && !thumbnail.isRecycled) {
@@ -1845,7 +1845,7 @@ fun ContinueCard(
                 .padding(start = 6.dp, bottom = 7.dp)
                 .opticalGlass(
                     shape = RoundedCornerShape(5.dp),
-                    baseColor = Color.Black.copy(alpha = 0.58f),
+                    baseColor = Color.Black.copy(alpha = 0.68f),
                     borderWidth = 0.8.dp,
                 )
                 .padding(horizontal = 6.dp, vertical = 2.dp),
@@ -1873,7 +1873,7 @@ fun ContinueCard(
                 modifier = Modifier
                     .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
                     .height(3.dp)
-                    .background(OpticalGlassTokens.CyanAccent),
+                    .background(OpticalGlassTokens.EmeraldAccent),
             )
         }
     }
@@ -1922,7 +1922,7 @@ fun SeriesCard(
                 modifier = Modifier
                     .size(width = 112.dp, height = 68.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF1E293B)),
+                    .background(Color(0xFF141418)),
             ) {
                 if (thumbnail != null && !thumbnail.isRecycled) {
                     Image(
@@ -1944,7 +1944,7 @@ fun SeriesCard(
                             modifier = Modifier
                                 .fillMaxWidth(watchedFraction.coerceIn(0f, 1f))
                                 .height(3.dp)
-                                .background(OpticalGlassTokens.CyanAccent),
+                                .background(OpticalGlassTokens.EmeraldAccent),
                         )
                     }
                 }
@@ -1979,7 +1979,7 @@ fun SeriesCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = TextStyle(
-                        color = OpticalGlassTokens.CyanAccent,
+                        color = OpticalGlassTokens.EmeraldSync,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                     ),
@@ -1991,7 +1991,7 @@ fun SeriesCard(
                 modifier = Modifier
                     .size(38.dp)
                     .clip(CircleShape)
-                    .background(OpticalGlassTokens.CyanAccent)
+                    .background(OpticalGlassTokens.EmeraldAccent)
                     .clickable(onClick = onQuickPlayClick),
                 contentAlignment = Alignment.Center,
             ) {

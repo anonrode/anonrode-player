@@ -177,6 +177,17 @@ class PlaybackEngine(
         subtitleSpeedFactor = 1f
     }
 
+    /**
+     * Update the live manual subtitle delay in memory without reloading the
+     * item so fine-trim nudges and horizontal subtitle drags apply on the
+     * next render tick while preserving any active auto-sync offset.
+     */
+    fun setManualDelay(delayMs: Long) {
+        val prevManual = manualDelayMs
+        manualDelayMs = delayMs
+        subtitleOffsetMs = (subtitleOffsetMs - prevManual) + delayMs
+    }
+
     private val syncProcessor = AudioSyncProcessor(this, appContext)
 
     /**

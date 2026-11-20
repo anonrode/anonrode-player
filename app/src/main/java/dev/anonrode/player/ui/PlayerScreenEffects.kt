@@ -15,13 +15,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.GenericShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.FastRewind
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -36,9 +42,9 @@ import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 /**
- * Layer 1 Double-Tap Seek Ripple Arcs (§3.1 & §5).
- * Renders an optical glass convex arc on the left or right 34% of the viewport with
- * expanding radial acoustic wave rings and accumulated seek seconds (`-10s`, `+20s`).
+ * Layer 1 Double-Tap Seek Ripple Arcs.
+ * Neutral smoked-black convex arc on the left or right 32% of the viewport with
+ * expanding soft white radial pulse and vector double-chevron icon. Zero blue, zero blur.
  */
 @Composable
 fun SeekRippleOverlay(
@@ -52,19 +58,18 @@ fun SeekRippleOverlay(
     LaunchedEffect(side, accumSec) {
         if (side != 0) {
             pulseAnim.snapTo(0f)
-            pulseAnim.animateTo(1f, tween(380, easing = OpticalGlassTokens.EaseReveal))
+            pulseAnim.animateTo(1f, tween(340, easing = OpticalGlassTokens.EaseReveal))
         }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Left Seek Ripple (<35% width)
         AnimatedVisibility(
             visible = side < 0,
-            enter = fadeIn(tween(120)),
-            exit = fadeOut(tween(180)),
+            enter = fadeIn(tween(110)),
+            exit = fadeOut(tween(160)),
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .fillMaxWidth(0.34f)
+                .fillMaxWidth(0.32f)
                 .fillMaxHeight(),
         ) {
             SeekArcSurface(
@@ -74,14 +79,13 @@ fun SeekRippleOverlay(
             )
         }
 
-        // Right Seek Ripple (>65% width)
         AnimatedVisibility(
             visible = side > 0,
-            enter = fadeIn(tween(120)),
-            exit = fadeOut(tween(180)),
+            enter = fadeIn(tween(110)),
+            exit = fadeOut(tween(160)),
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .fillMaxWidth(0.34f)
+                .fillMaxWidth(0.32f)
                 .fillMaxHeight(),
         ) {
             SeekArcSurface(
@@ -120,23 +124,19 @@ private fun SeekArcSurface(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .opticalGlass(
-                shape = arcShape,
-                baseColor = OpticalGlassTokens.CyanAccent.copy(alpha = 0.14f),
-                isActive = true,
-                borderWidth = 1.dp,
-            )
+            .clip(arcShape)
             .drawWithCache {
                 val center = Offset(
                     x = if (isLeft) size.width * 0.38f else size.width * 0.62f,
                     y = size.height * 0.5f,
                 )
                 onDrawBehind {
-                    val radius = (size.minDimension * 0.18f) + (size.minDimension * 0.45f * progress)
+                    drawRect(color = Color.Black.copy(alpha = 0.44f))
+                    val radius = (size.minDimension * 0.16f) + (size.minDimension * 0.42f * progress)
                     drawCircle(
                         brush = Brush.radialGradient(
                             colors = listOf(
-                                OpticalGlassTokens.CyanAccent.copy(alpha = (1f - progress) * 0.35f),
+                                Color.White.copy(alpha = (1f - progress) * 0.18f),
                                 Color.Transparent,
                             ),
                             center = center,
@@ -151,18 +151,20 @@ private fun SeekArcSurface(
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                text = if (isLeft) "⏪" else "⏩",
-                fontSize = 22.sp,
+            Icon(
+                imageVector = if (isLeft) Icons.Rounded.FastRewind else Icons.Rounded.FastForward,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(28.dp),
             )
             Text(
                 text = label,
                 style = TextStyle(
                     color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
                     fontFeatureSettings = "tnum",
                     shadow = OpticalGlassTokens.CrispTextShadow,
                 ),
@@ -172,9 +174,10 @@ private fun SeekArcSurface(
 }
 
 /**
- * §7.3 Transient Status Pill Auto-Dismiss Timers:
+ * Transient Status Pill Auto-Dismiss Timers:
  * - Resume Prompt Pill: fades out after 5.0 seconds.
  * - Subtitle Sync Pill: fades out after 2.5 seconds.
+ * - Aspect Ratio Badge: fades out after 1.1 seconds.
  */
 @Composable
 fun TransientStatusPillTimers(ui: PlayerUiState) {
@@ -190,10 +193,16 @@ fun TransientStatusPillTimers(ui: PlayerUiState) {
             ui.syncToastVisible.value = false
         }
     }
+    LaunchedEffect(ui.aspectBadgeVisible.value, ui.zoomIdx.intValue) {
+        if (ui.aspectBadgeVisible.value) {
+            delay(1100L)
+            ui.aspectBadgeVisible.value = false
+        }
+    }
 }
 
 /**
- * §7.2 Background Scrub Frame Extractor with LRU Bitmap Cache.
+ * Background Scrub Frame Extractor with LRU Bitmap Cache.
  * Extracts scaled 256x144 (16:9) thumbnails off the main thread when `ui.localSeek` changes.
  */
 @Composable

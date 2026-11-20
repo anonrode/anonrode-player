@@ -10,9 +10,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -32,6 +34,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AspectRatio
+import androidx.compose.material.icons.rounded.Forward10
+import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Replay10
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
@@ -71,6 +83,7 @@ fun PlayerScreenBottomBar(
     chapters: List<ChapterMarker>,
     scrubPreviewBitmap: Bitmap?,
     ui: PlayerUiState,
+    quick: QuickRowUiState? = null,
     onPreviewScrubSec: (Float) -> Unit,
     onCommitScrubSec: (Float) -> Unit,
     onStepSeekSec: (Int) -> Unit,
@@ -87,8 +100,8 @@ fun PlayerScreenBottomBar(
     AnimatedVisibility(
         visible = ui.controlsVisible.value && !ui.locked.value,
         modifier = modifier,
-        enter = fadeIn(tween(240)) + slideInVertically(tween(280, easing = OpticalGlassTokens.EaseReveal)) { 8 },
-        exit = fadeOut(tween(160)),
+        enter = fadeIn(tween(200)) + slideInVertically(tween(240, easing = OpticalGlassTokens.EaseReveal)) { 8 },
+        exit = fadeOut(tween(150)),
     ) {
         Column(
             modifier = Modifier
@@ -97,18 +110,19 @@ fun PlayerScreenBottomBar(
                 .background(
                     Brush.verticalGradient(
                         0.0f to Color.Transparent,
-                        0.32f to Color.Black.copy(alpha = 0.22f),
-                        1.0f to Color.Black.copy(alpha = 0.48f),
+                        0.32f to Color.Black.copy(alpha = 0.28f),
+                        1.0f to Color.Black.copy(alpha = 0.76f),
                     )
                 )
                 .windowInsetsPadding(safeBottomInsets)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // 1. Transient Status Pills (Resume Prompt 5.0s / Auto-Sync Lock 2.5s)
+            // 1. Transient Status Pills (Resume Prompt 5.0s / Auto-Sync Lock 2.5s / Up-Next)
             TransientStatusPillsRow(
                 ui = ui,
                 onStartOver = onStartOverFromZero,
+                onPlayNext = onNextEpisode,
             )
 
             // 2. Leaf Composable: SeekBarRow (0 Hz Track Recomp + 1 Hz Tnum Text Recomp)
@@ -119,11 +133,12 @@ fun PlayerScreenBottomBar(
                 chapters = chapters,
                 scrubPreviewBitmap = scrubPreviewBitmap,
                 ui = ui,
+                quick = quick,
                 onPreviewScrubSec = onPreviewScrubSec,
                 onCommitScrubSec = onCommitScrubSec,
             )
 
-            // 3. Transport Controls Cluster
+            // 3. Borderless Transport Controls Cluster
             TransportRow(
                 ui = ui,
                 onStepSeekSec = onStepSeekSec,
@@ -131,7 +146,7 @@ fun PlayerScreenBottomBar(
                 onPreviousEpisode = onPreviousEpisode,
                 onNextEpisode = onNextEpisode,
                 onCycleAspectRatio = onCycleAspectRatio,
-                onToggleRotateMode = onToggleRotateMode,
+                onOpenSpeedBar = { ui.speedCardOpen.value = !ui.speedCardOpen.value },
             )
         }
     }
@@ -141,6 +156,7 @@ fun PlayerScreenBottomBar(
 private fun TransientStatusPillsRow(
     ui: PlayerUiState,
     onStartOver: () -> Unit,
+    onPlayNext: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -149,36 +165,40 @@ private fun TransientStatusPillsRow(
     ) {
         AnimatedVisibility(
             visible = ui.resumePromptVisible.value,
-            enter = fadeIn(tween(180)),
-            exit = fadeOut(tween(200)),
+            enter = fadeIn(tween(160)),
+            exit = fadeOut(tween(160)),
         ) {
+            val resumeTime = if (ui.resumedFromSec.floatValue > 0f) {
+                "Resumed at ${formatSecondsToHms(ui.resumedFromSec.floatValue.toInt())}"
+            } else {
+                "Resumed playback"
+            }
             Row(
                 modifier = Modifier
-                    .opticalGlass(
-                        shape = RoundedCornerShape(50),
-                        baseColor = OpticalGlassTokens.SmokedHudPillBase,
-                    )
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xD80A0A0C))
                     .padding(horizontal = 12.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = "Continue playing from where you stopped.",
+                    text = resumeTime,
                     style = TextStyle(
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        shadow = OpticalGlassTokens.CrispTextShadow,
+                        color = Color.White.copy(alpha = 0.88f),
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        fontFeatureSettings = "tnum",
                     ),
                 )
                 Text(
-                    text = "Start Over",
+                    text = "Start over",
                     modifier = Modifier.clickable {
                         ui.resumePromptVisible.value = false
                         onStartOver()
                     },
                     style = TextStyle(
-                        color = OpticalGlassTokens.CyanAccent,
-                        fontSize = 12.sp,
+                        color = OpticalGlassTokens.EmeraldSync,
+                        fontSize = 11.5.sp,
                         fontWeight = FontWeight.Bold,
                     ),
                 )
@@ -186,27 +206,34 @@ private fun TransientStatusPillsRow(
         }
 
         AnimatedVisibility(
-            visible = ui.syncToastVisible.value,
-            enter = fadeIn(tween(180)),
-            exit = fadeOut(tween(200)),
+            visible = ui.upNextTitle.value != null && ui.upNextCountdownSec.intValue >= 0,
+            enter = fadeIn(tween(160)),
+            exit = fadeOut(tween(160)),
         ) {
-            val offset = ui.subtitleOffsetSec.floatValue
-            Box(
+            Row(
                 modifier = Modifier
-                    .opticalGlass(
-                        shape = RoundedCornerShape(50),
-                        isActive = true,
-                        accentColor = OpticalGlassTokens.EmeraldSync,
-                    )
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xD80A0A0C))
+                    .clickable(onClick = onPlayNext)
                     .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = "⟳ Synced %+.2fs".format(offset),
+                    text = "Up Next in ${ui.upNextCountdownSec.intValue}s",
                     style = TextStyle(
-                        color = Color.White,
-                        fontSize = 12.sp,
+                        color = OpticalGlassTokens.EmeraldSync,
+                        fontSize = 11.5.sp,
                         fontWeight = FontWeight.Bold,
                         fontFeatureSettings = "tnum",
+                    ),
+                )
+                Text(
+                    text = "Play Now",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold,
                     ),
                 )
             }
@@ -214,122 +241,113 @@ private fun TransientStatusPillsRow(
     }
 }
 
-/**
- * Leaf Composable: SeekBarRow.
- * - Text timestamps are quantized to 1 Hz via [derivedStateOf] (95% reduction in leaf recompositions).
- * - Track rails, buffer rail, chapter ticks, and thumb knob render inside [Modifier.drawWithCache]
- *   at 0 Hz recomposition!
- */
 @Composable
-fun SeekBarRow(
+private fun SeekBarRow(
     positionSec: State<Float>,
     durationSec: State<Float>,
     bufferedSec: State<Float>,
     chapters: List<ChapterMarker>,
     scrubPreviewBitmap: Bitmap?,
     ui: PlayerUiState,
+    quick: QuickRowUiState?,
     onPreviewScrubSec: (Float) -> Unit,
     onCommitScrubSec: (Float) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
-    var showRemaining by remember { mutableStateOf(true) }
-
-    // 1 Hz Quantized Timestamp Reads (Only recomposes when the whole second integer changes!)
-    val displayPosIntSec by remember {
+    val elapsedIntSec by remember {
         derivedStateOf {
-            val activeSeek = ui.localSeek.floatValue
-            (if (activeSeek >= 0f) activeSeek else positionSec.value).toInt().coerceAtLeast(0)
+            val active = if (ui.localSeek.floatValue >= 0f) ui.localSeek.floatValue else positionSec.value
+            active.toInt().coerceAtLeast(0)
         }
     }
-    val displayDurIntSec by remember {
-        derivedStateOf { durationSec.value.toInt().coerceAtLeast(1) }
+    val totalIntSec by remember {
+        derivedStateOf { durationSec.value.toInt().coerceAtLeast(0) }
     }
+    var localRemainingToggle by remember { mutableStateOf(true) }
+    val showRemaining = quick?.remainingTimeMode?.value ?: localRemainingToggle
 
-    val isScrubbing by remember {
-        derivedStateOf { ui.localSeek.floatValue >= 0f }
-    }
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val viewportWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        val isScrubbing = ui.localSeek.floatValue >= 0f
 
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val viewportWidthPx = constraints.maxWidth.toFloat()
-
-        // ScrubBubble 128dp x 72dp floating directly above the active thumb
-        if (isScrubbing) {
-            val dur = durationSec.value.coerceAtLeast(1f)
-            val seekSec = ui.localSeek.floatValue.coerceIn(0f, dur)
-            val deltaSec = (seekSec - positionSec.value).roundToInt()
-            ScrubBubble(
-                targetSec = seekSec,
-                deltaSec = deltaSec,
-                durationSec = dur,
-                viewportWidthPx = viewportWidthPx,
-                previewBitmap = scrubPreviewBitmap,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(bottom = 36.dp),
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(32.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            // Left Elapsed Time (Tnum)
-            Text(
-                text = formatSecondsToHms(displayPosIntSec),
-                modifier = Modifier.width(52.dp),
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    fontFeatureSettings = "tnum",
-                    shadow = OpticalGlassTokens.CrispTextShadow,
-                ),
-            )
-
-            // Center 5-Layer Optical Scrubber Canvas (0 Hz Recomposition on Playback Ticks!)
-            OpticalSeekBarCanvas(
-                positionSec = positionSec,
-                durationSec = durationSec,
-                bufferedSec = bufferedSec,
-                chapters = chapters,
-                ui = ui,
-                onPreviewScrubSec = onPreviewScrubSec,
-                onCommitScrubSec = onCommitScrubSec,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(32.dp)
-                    .padding(horizontal = 7.dp),
-            )
-
-            // Right Duration / Remaining Time (Tnum)
-            val rightLabel = if (showRemaining) {
-                "-${formatSecondsToHms((displayDurIntSec - displayPosIntSec).coerceAtLeast(0))}"
-            } else {
-                formatSecondsToHms(displayDurIntSec)
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (isScrubbing) {
+                val delta = (ui.localSeek.floatValue - positionSec.value).roundToInt()
+                ScrubBubble(
+                    targetSec = ui.localSeek.floatValue,
+                    deltaSec = delta,
+                    durationSec = durationSec.value,
+                    viewportWidthPx = viewportWidthPx,
+                    previewBitmap = scrubPreviewBitmap,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
             }
-            Text(
-                text = rightLabel,
-                modifier = Modifier
-                    .width(56.dp)
-                    .clickable { showRemaining = !showRemaining },
-                textAlign = TextAlign.End,
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    fontFeatureSettings = "tnum",
-                    shadow = OpticalGlassTokens.CrispTextShadow,
-                ),
-            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = formatSecondsToHms(elapsedIntSec),
+                    modifier = Modifier.width(PlayerDimens.timeLabelMinW),
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        fontFeatureSettings = "tnum",
+                        shadow = OpticalGlassTokens.CrispTextShadow,
+                    ),
+                )
+
+                DrawPhaseScrubberTrack(
+                    positionSec = positionSec,
+                    durationSec = durationSec,
+                    bufferedSec = bufferedSec,
+                    chapters = chapters,
+                    ui = ui,
+                    onPreviewScrubSec = onPreviewScrubSec,
+                    onCommitScrubSec = onCommitScrubSec,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(26.dp),
+                )
+
+                val rightLabel = if (showRemaining && totalIntSec > 0) {
+                    "-${formatSecondsToHms((totalIntSec - elapsedIntSec).coerceAtLeast(0))}"
+                } else {
+                    formatSecondsToHms(totalIntSec)
+                }
+                Text(
+                    text = rightLabel,
+                    modifier = Modifier
+                        .width(PlayerDimens.timeLabelMinW)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {
+                                if (quick != null) {
+                                    quick.remainingTimeMode.value = !quick.remainingTimeMode.value
+                                } else {
+                                    localRemainingToggle = !localRemainingToggle
+                                }
+                            },
+                        ),
+                    textAlign = TextAlign.End,
+                    style = TextStyle(
+                        color = Color.White.copy(alpha = 0.88f),
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        fontFeatureSettings = "tnum",
+                        shadow = OpticalGlassTokens.CrispTextShadow,
+                    ),
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun OpticalSeekBarCanvas(
+private fun DrawPhaseScrubberTrack(
     positionSec: State<Float>,
     durationSec: State<Float>,
     bufferedSec: State<Float>,
@@ -340,11 +358,16 @@ private fun OpticalSeekBarCanvas(
     modifier: Modifier = Modifier,
 ) {
     val view = LocalView.current
-    val isScrubbing by remember { derivedStateOf { ui.localSeek.floatValue >= 0f } }
-    val railHeightDp by animateDpAsState(
-        targetValue = if (isScrubbing) 5.dp else 3.dp,
-        animationSpec = tween(140),
-        label = "railHeight",
+    val isDragging = ui.localSeek.floatValue >= 0f
+    val trackHeightDp by animateDpAsState(
+        targetValue = if (isDragging) 4.5.dp else 2.8.dp,
+        animationSpec = tween(120),
+        label = "trackHeight",
+    )
+    val thumbRadiusDp by animateDpAsState(
+        targetValue = if (isDragging) 8.dp else 6.dp,
+        animationSpec = tween(120),
+        label = "thumbRadius",
     )
 
     Box(
@@ -352,123 +375,126 @@ private fun OpticalSeekBarCanvas(
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
                     ui.bumpInteraction()
-                    val dur = durationSec.value.coerceAtLeast(1f)
-                    val frac = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                    val targetSec = frac * dur
+                    val frac = (offset.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    val targetSec = frac * durationSec.value.coerceAtLeast(1f)
+                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                     onCommitScrubSec(targetSec)
                 }
             }
-            .pointerInput(chapters) {
-                var lastChapterIdx = -1
+            .pointerInput(Unit) {
                 detectHorizontalDragGestures(
                     onDragStart = { offset ->
                         ui.bumpInteraction()
-                        val dur = durationSec.value.coerceAtLeast(1f)
-                        val frac = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                        val targetSec = frac * dur
+                        val frac = (offset.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        val targetSec = frac * durationSec.value.coerceAtLeast(1f)
                         ui.localSeek.floatValue = targetSec
+                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                         onPreviewScrubSec(targetSec)
                     },
                     onHorizontalDrag = { change, _ ->
                         change.consume()
-                        val dur = durationSec.value.coerceAtLeast(1f)
-                        val frac = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
-                        val targetSec = frac * dur
-
-                        // Magnetic haptic tick when crossing chapter boundaries
-                        val chIdx = chapters.indexOfLast { it.timeSec <= targetSec }
-                        if (chIdx != lastChapterIdx && lastChapterIdx != -1) {
-                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                        }
-                        lastChapterIdx = chIdx
-
+                        ui.bumpInteraction()
+                        val frac = (change.position.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        val targetSec = frac * durationSec.value.coerceAtLeast(1f)
                         ui.localSeek.floatValue = targetSec
                         onPreviewScrubSec(targetSec)
                     },
                     onDragEnd = {
                         val finalSec = ui.localSeek.floatValue
+                        ui.localSeek.floatValue = -1f
                         if (finalSec >= 0f) {
                             onCommitScrubSec(finalSec)
                         }
-                        ui.localSeek.floatValue = -1f
-                        lastChapterIdx = -1
                     },
                     onDragCancel = {
                         ui.localSeek.floatValue = -1f
-                        lastChapterIdx = -1
                     },
                 )
             }
             .drawWithCache {
-                val trackH = railHeightDp.toPx()
-                val cornerRadius = CornerRadius(trackH / 2f, trackH / 2f)
-                val thumbRadiusPx = 7.dp.toPx()
-                val glowRadiusPx = 10.dp.toPx()
-                val chapterTickW = 2.dp.toPx()
+                val trackH = trackHeightDp.toPx()
+                val thumbR = thumbRadiusDp.toPx()
+                val cornerR = CornerRadius(trackH / 2f, trackH / 2f)
 
                 onDrawBehind {
-                    val w = size.width
-                    val cy = size.height / 2f
-                    val topY = cy - trackH / 2f
-
                     val dur = durationSec.value.coerceAtLeast(1f)
-                    val activeSeek = ui.localSeek.floatValue
-                    val currentPos = if (activeSeek >= 0f) activeSeek else positionSec.value
-                    val posFrac = (currentPos / dur).coerceIn(0f, 1f)
-                    // INVARIANT: Buffered rail is NEVER coerced up to played fraction!
+                    val activePos = if (ui.localSeek.floatValue >= 0f) ui.localSeek.floatValue else positionSec.value
+                    val playFrac = (activePos / dur).coerceIn(0f, 1f)
                     val bufFrac = (bufferedSec.value / dur).coerceIn(0f, 1f)
+                    val centerY = size.height / 2f
+                    val topY = centerY - trackH / 2f
 
-                    // 1. Background Rail (0.22f white)
+                    // 1. Unplayed rail
                     drawRoundRect(
-                        color = Color.White.copy(alpha = 0.22f),
+                        color = Color.White.copy(alpha = 0.30f),
                         topLeft = Offset(0f, topY),
-                        size = Size(w, trackH),
-                        cornerRadius = cornerRadius,
+                        size = Size(size.width, trackH),
+                        cornerRadius = cornerR,
                     )
 
-                    // 2. Honest Unclamped Buffered Rail (0.45f white)
+                    // 2. Buffered rail
                     if (bufFrac > 0f) {
                         drawRoundRect(
-                            color = Color.White.copy(alpha = 0.45f),
+                            color = Color.White.copy(alpha = 0.50f),
                             topLeft = Offset(0f, topY),
-                            size = Size(w * bufFrac, trackH),
-                            cornerRadius = cornerRadius,
+                            size = Size(size.width * bufFrac, trackH),
+                            cornerRadius = cornerR,
                         )
                     }
 
-                    // 3. Active Played Rail (Accent)
-                    if (posFrac > 0f) {
+                    // 3. Played fill (Emerald)
+                    if (playFrac > 0f) {
                         drawRoundRect(
-                            color = OpticalGlassTokens.CyanAccent,
+                            color = OpticalGlassTokens.EmeraldAccent,
                             topLeft = Offset(0f, topY),
-                            size = Size(w * posFrac, trackH),
-                            cornerRadius = cornerRadius,
+                            size = Size(size.width * playFrac, trackH),
+                            cornerRadius = cornerR,
                         )
                     }
 
-                    // 4. Chapter Boundary Ticks & A-B Repeat Pins
+                    // 4. Chapter ticks
                     chapters.forEach { ch ->
-                        val chFrac = (ch.timeSec / dur).coerceIn(0f, 1f)
-                        if (chFrac in 0.01f..0.99f) {
-                            drawRect(
-                                color = Color.Black.copy(alpha = 0.78f),
-                                topLeft = Offset(w * chFrac - chapterTickW / 2f, topY),
-                                size = Size(chapterTickW, trackH),
-                            )
-                        }
+                        val cFrac = (ch.timeSec / dur).coerceIn(0f, 1f)
+                        drawCircle(
+                            color = Color.Black.copy(alpha = 0.7f),
+                            radius = trackH * 0.6f,
+                            center = Offset(size.width * cFrac, centerY),
+                        )
                     }
 
-                    // 5. 14dp White Thumb with 20dp Accent Glow
-                    val thumbCenter = Offset(w * posFrac, cy)
-                    drawCircle(
-                        color = OpticalGlassTokens.CyanAccent.copy(alpha = 0.26f),
-                        radius = glowRadiusPx,
-                        center = thumbCenter,
-                    )
+                    // 5. Amber A-B repeat pins
+                    if (ui.abStartSec.floatValue >= 0f) {
+                        val aX = ((ui.abStartSec.floatValue / dur).coerceIn(0f, 1f)) * size.width
+                        drawRoundRect(
+                            color = OpticalGlassTokens.AmberBoost,
+                            topLeft = Offset(aX - 2f, centerY - trackH * 1.8f),
+                            size = Size(4f, trackH * 3.6f),
+                            cornerRadius = CornerRadius(2f, 2f),
+                        )
+                    }
+                    if (ui.abEndSec.floatValue >= 0f) {
+                        val bX = ((ui.abEndSec.floatValue / dur).coerceIn(0f, 1f)) * size.width
+                        drawRoundRect(
+                            color = OpticalGlassTokens.AmberBoost,
+                            topLeft = Offset(bX - 2f, centerY - trackH * 1.8f),
+                            size = Size(4f, trackH * 3.6f),
+                            cornerRadius = CornerRadius(2f, 2f),
+                        )
+                    }
+
+                    // 6. Crisp white thumb
+                    val thumbX = (size.width * playFrac).coerceIn(thumbR, (size.width - thumbR).coerceAtLeast(thumbR))
+                    if (isDragging) {
+                        drawCircle(
+                            color = OpticalGlassTokens.EmeraldAccent.copy(alpha = 0.28f),
+                            radius = thumbR * 1.75f,
+                            center = Offset(thumbX, centerY),
+                        )
+                    }
                     drawCircle(
                         color = Color.White,
-                        radius = thumbRadiusPx,
-                        center = thumbCenter,
+                        radius = thumbR,
+                        center = Offset(thumbX, centerY),
                     )
                 }
             }
@@ -485,8 +511,8 @@ fun ScrubBubble(
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
-    val bubbleWidthPx = with(density) { 128.dp.toPx() }
-    val sidePadPx = with(density) { 16.dp.toPx() }
+    val bubbleWidthPx = with(density) { 124.dp.toPx() }
+    val sidePadPx = with(density) { 12.dp.toPx() }
     val frac = (targetSec / durationSec.coerceAtLeast(1f)).coerceIn(0f, 1f)
     val rawCenterX = frac * viewportWidthPx
     val clampedX = (rawCenterX - bubbleWidthPx / 2f)
@@ -495,14 +521,10 @@ fun ScrubBubble(
     Box(
         modifier = modifier
             .offset { IntOffset(clampedX.roundToInt(), 0) }
-            .size(width = 128.dp, height = 72.dp)
-            .opticalGlass(
-                shape = RoundedCornerShape(10.dp),
-                baseColor = Color(0xFF080C14).copy(alpha = 0.72f),
-                isActive = true,
-                accentColor = OpticalGlassTokens.CyanAccent,
-                borderWidth = 1.5.dp,
-            ),
+            .size(width = 124.dp, height = 70.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xE60A0A0C))
+            .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(8.dp)),
     ) {
         if (previewBitmap != null && !previewBitmap.isRecycled) {
             Image(
@@ -513,7 +535,6 @@ fun ScrubBubble(
             )
         }
 
-        // Bottom glass metadata strip: Timestamp + Signed Delta
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -540,9 +561,9 @@ fun ScrubBubble(
             Text(
                 text = "$sign${deltaSec}s",
                 style = TextStyle(
-                    color = OpticalGlassTokens.CyanAccent,
+                    color = OpticalGlassTokens.EmeraldSync,
                     fontSize = 10.sp,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Bold,
                     fontFeatureSettings = "tnum",
                 ),
             )
@@ -550,6 +571,12 @@ fun ScrubBubble(
     }
 }
 
+/**
+ * Borderless Transport Row:
+ * - Left Wing: bare Lock icon
+ * - Center Cluster: Replay10, SkipPrevious, 44dp Ringed Play/Pause, SkipNext, Forward10
+ * - Right Wing: Speed text trigger + Aspect Ratio icon & label
+ */
 @Composable
 private fun TransportRow(
     ui: PlayerUiState,
@@ -558,99 +585,178 @@ private fun TransportRow(
     onPreviousEpisode: () -> Unit,
     onNextEpisode: () -> Unit,
     onCycleAspectRatio: () -> Unit,
-    onToggleRotateMode: () -> Unit,
+    onOpenSpeedBar: () -> Unit,
 ) {
     val stepSec = ui.seekStepSec.intValue
     val zoomLabel = AspectZoomMode.entries[ui.zoomIdx.intValue % AspectZoomMode.entries.size].label
+    val spd = ui.currentPlaybackSpeed.floatValue
+    val speedBtnText = if (abs(spd - 1.0f) < 0.02f) "Speed" else "%.2fx".format(spd).replace(".00x", ".0x")
 
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Left Wing: Screen Lock
+        // Left Wing: Bare Lock Button
         Row(
             modifier = Modifier.width(116.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OpticalGlassDiscButton(
-                onClick = {
-                    ui.locked.value = true
-                    ui.lockScrimVisible.value = true
-                },
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .clickable {
+                        ui.locked.value = true
+                        ui.lockScrimVisible.value = true
+                    },
+                contentAlignment = Alignment.Center,
             ) {
-                Text("🔒", fontSize = 14.sp)
+                Icon(
+                    imageVector = Icons.Rounded.LockOpen,
+                    contentDescription = "Lock Screen",
+                    tint = Color.White,
+                    modifier = Modifier.size(21.dp),
+                )
             }
         }
 
-        // Center Cluster: Prev, -Step, 56dp Primary Play/Pause Knob, +Step, Next
+        // Center Cluster: -10s, Prev, Ringed Play/Pause, Next, +10s
         Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OpticalGlassDiscButton(onClick = onPreviousEpisode) {
-                Text("⏮", color = Color.White, fontSize = 14.sp)
-            }
-            OpticalGlassDiscButton(onClick = { onStepSeekSec(-stepSec) }) {
-                Text(
-                    text = "-${stepSec}s",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontFeatureSettings = "tnum",
-                    ),
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .clickable { onStepSeekSec(-stepSec) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Replay10,
+                    contentDescription = "Rewind ${stepSec}s",
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp),
                 )
             }
 
-            // 56dp Primary Optical Play/Pause Knob
-            OpticalGlassDiscButton(
-                onClick = onPlayPauseToggle,
-                isActive = true,
-                discSize = 56.dp,
-                touchTargetSize = 60.dp,
-                accentColor = OpticalGlassTokens.CyanAccent,
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onPreviousEpisode),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.SkipPrevious,
+                    contentDescription = "Previous",
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
+
+            // 46dp Clean Thin-Ringed Play/Pause Hero
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .border(1.6.dp, Color.White.copy(alpha = 0.90f), CircleShape)
+                    .clickable(onClick = onPlayPauseToggle),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (ui.isPlaying.value) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    contentDescription = if (ui.isPlaying.value) "Pause" else "Play",
+                    tint = Color.White,
+                    modifier = Modifier.size(25.dp),
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onNextEpisode),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.SkipNext,
+                    contentDescription = "Next",
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .clickable { onStepSeekSec(+stepSec) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Forward10,
+                    contentDescription = "Forward ${stepSec}s",
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+
+        // Right Wing: Speed trigger + Unmistakable Aspect Ratio control
+        Row(
+            modifier = Modifier.width(116.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onOpenSpeedBar)
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = if (ui.isPlaying.value) "⏸" else "▶",
+                    text = speedBtnText,
                     style = TextStyle(
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
+                        color = if (abs(spd - 1.0f) > 0.02f) OpticalGlassTokens.EmeraldSync else Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFeatureSettings = "tnum",
                         shadow = OpticalGlassTokens.CrispTextShadow,
                     ),
                 )
             }
 
-            OpticalGlassDiscButton(onClick = { onStepSeekSec(+stepSec) }) {
+            Row(
+                modifier = Modifier
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable {
+                        onCycleAspectRatio()
+                        ui.aspectBadgeVisible.value = true
+                    }
+                    .padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AspectRatio,
+                    contentDescription = "Aspect Ratio ($zoomLabel)",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
                 Text(
-                    text = "+${stepSec}s",
+                    text = zoomLabel,
                     style = TextStyle(
                         color = Color.White,
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontFeatureSettings = "tnum",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        shadow = OpticalGlassTokens.CrispTextShadow,
                     ),
                 )
-            }
-            OpticalGlassDiscButton(onClick = onNextEpisode) {
-                Text("⏭", color = Color.White, fontSize = 14.sp)
-            }
-        }
-
-        // Right Wing: Aspect Ratio Cycle (`FIT`, `FILL`, `ZOOM`, `16:9`, `4:3`) + Rotate
-        Row(
-            modifier = Modifier.width(116.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OpticalGlassChip(
-                label = zoomLabel,
-                onClick = onCycleAspectRatio,
-                height = 36.dp,
-            )
-            OpticalGlassDiscButton(onClick = onToggleRotateMode) {
-                Text("🔄", fontSize = 14.sp)
             }
         }
     }

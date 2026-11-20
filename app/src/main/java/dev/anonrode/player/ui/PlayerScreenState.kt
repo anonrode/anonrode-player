@@ -93,6 +93,7 @@ data class PlaylistEpisodeItem(
     val durationSec: Float,
     val watchedFraction: Float = 0f,
     val isPlaying: Boolean = false,
+    val videoPath: String? = null,
 )
 
 @Stable
@@ -143,16 +144,21 @@ class PlayerUiState(initialIsPlaying: Boolean = false) {
     val subtitleOffsetSec = mutableFloatStateOf(0f)
     val subtitleBaseOffsetSec = mutableFloatStateOf(0f) // Dynamic center for [base - 5f .. base + 5f]
 
-    // Transient bottom pills
+    // Transient bottom pills & overlays
     val resumePromptVisible = mutableStateOf(false)
+    val resumedFromSec = mutableFloatStateOf(-1f)
     val syncToastVisible = mutableStateOf(false)
+    val aspectBadgeVisible = mutableStateOf(false)
+    val sleepTimerMinutes = mutableIntStateOf(0)
+    val upNextTitle = mutableStateOf<String?>(null)
+    val upNextCountdownSec = mutableIntStateOf(-1)
 
     fun bumpInteraction() {
         userInteractionKey.longValue += 1L
     }
 
     companion object {
-        val SpeedMilestones = floatArrayOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f)
+        val SpeedMilestones = floatArrayOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 4.0f)
     }
 }
 
@@ -181,6 +187,7 @@ class QuickRowUiState {
     var ribbonHidden by mutableStateOf<Set<RibbonTool>>(emptySet())
     val ribbonScroll = ScrollState(0)
     val ribbonExpanded = mutableStateOf(false)
+    val ribbonProgress = mutableFloatStateOf(0f)
     val subSyncEnabled = mutableStateOf(true)
     val subSyncRunning = mutableStateOf(false)
     val isSyncLocked = mutableStateOf(false)
@@ -188,4 +195,5 @@ class QuickRowUiState {
     val equalizerOn = mutableStateOf(false)
     val showSyncPopover = mutableStateOf(false)
     val showRibbonCustomise = mutableStateOf(false)
+    val remainingTimeMode = mutableStateOf(false)
 }

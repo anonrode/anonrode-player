@@ -5,21 +5,35 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
 /**
- * §3. Four-Slot Screen Architecture (`AGENT.md` §2.2).
+ * Four-Slot Screen Architecture (`AGENT.md` §2.2).
  */
 @Composable
 fun PlayerScreenLayout(
@@ -36,8 +50,8 @@ fun PlayerScreenLayout(
     ) {
         videoSurfaceSlot()      // Layer 0: SurfaceView decoder, poster art cache, night mode scrim
         gestureOverlaySlot()    // Layer 1: Gesture layer, ripples, vertical pills, lock scrim, subtitle overlay
-        hudControlsSlot()       // Layer 2: Top bar, quick ribbon, scrubber dock, transport
-        sideDrawerSlot()        // Layer 3: 350dp optical glass right-aligned drawers
+        hudControlsSlot()       // Layer 2: Top bar, quick ribbon, scrubber dock, transport, floating speed bar
+        sideDrawerSlot()        // Layer 3: Full-height flat right-aligned drawers
     }
 }
 
@@ -76,17 +90,36 @@ fun PlayerScreen(
     onNextEpisode: () -> Unit,
     onOpenAudioTracks: () -> Unit,
     onEnterPip: () -> Unit,
+    mediaId: String = "",
+    autoHideTimeoutMs: Long = 5500L,
+    pinchZoomEnabled: Boolean = true,
+    doubleTapSeekEnabled: Boolean = true,
+    swipeToSeekEnabled: Boolean = true,
+    volumeGestureEnabled: Boolean = true,
+    brightnessGestureEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
-    // 5.5-second Auto-Hide Timer reset by userInteractionKey
+    val anyDrawerOrSheetOpen = ui.playlistDrawerOpen.value ||
+        ui.subtitleDrawerOpen.value ||
+        ui.threeDotsMenuOpen.value ||
+        ui.speedCardOpen.value ||
+        quick.showRibbonCustomise.value
+
+    // Auto-Hide Timer reset by userInteractionKey (paused while any drawer/speed bar/scrub is open)
     LaunchedEffect(
         ui.controlsVisible.value,
         ui.isPlaying.value,
         ui.userInteractionKey.longValue,
         ui.localSeek.floatValue >= 0f,
+        anyDrawerOrSheetOpen,
+        autoHideTimeoutMs,
     ) {
-        if (ui.controlsVisible.value && ui.isPlaying.value && ui.localSeek.floatValue < 0f) {
-            delay(5500L)
+        if (ui.controlsVisible.value &&
+            ui.isPlaying.value &&
+            ui.localSeek.floatValue < 0f &&
+            !anyDrawerOrSheetOpen
+        ) {
+            delay(autoHideTimeoutMs.coerceAtLeast(2500L))
             ui.controlsVisible.value = false
             quick.showSyncPopover.value = false
         }
@@ -101,7 +134,7 @@ fun PlayerScreen(
         }
     }
 
-    // 5.0s Resume Prompt & 2.5s Sync Toast Auto-Dismiss Timers
+    // 5.0s Resume Prompt, 2.5s Sync Toast & 1.1s Aspect Badge Auto-Dismiss Timers
     TransientStatusPillTimers(ui = ui)
 
     PlayerScreenLayout(
@@ -132,6 +165,12 @@ fun PlayerScreen(
                         gestures = gestures,
                         durationSecProvider = { durationSec.value },
                         currentPositionMsProvider = { positionSec.value * 1000f },
+                        isPipMode = isPipMode,
+                        pinchZoomEnabled = pinchZoomEnabled,
+                        doubleTapSeekEnabled = doubleTapSeekEnabled,
+                        swipeToSeekEnabled = swipeToSeekEnabled,
+                        volumeGestureEnabled = volumeGestureEnabled,
+                        brightnessGestureEnabled = brightnessGestureEnabled,
                         onToggleControls = { ui.controlsVisible.value = !ui.controlsVisible.value },
                         onDoubleTapSeek = { deltaSec, _ -> actions.onStepSeekSec(deltaSec) },
                         onPlayPauseToggle = actions::onPlayPauseToggle,
@@ -140,7 +179,7 @@ fun PlayerScreen(
                         onCancelKeyframeSeek = actions::onCancelKeyframeSeek,
                         onApplyVolumeBoostPercent = actions::onApplyVolumeBoostPercent,
                         onApplyBrightnessFraction = actions::onApplyBrightnessFraction,
-                        onSetPlaybackSpeed = actions::onSetPlaybackSpeed,
+                        onSetPlaybackSpeed = { spd -> actions.onSetPlaybackSpeed(spd, persist = false) },
                         onCycleZoomMode = {
                             ui.zoomIdx.intValue = (ui.zoomIdx.intValue + 1) % AspectZoomMode.entries.size
                         },
@@ -157,7 +196,7 @@ fun PlayerScreen(
                 percentage = (ui.screenBrightnessFraction.floatValue * 100f).toInt(),
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .padding(start = 20.dp),
+                    .padding(start = 24.dp),
             )
             VerticalGestureHudPill(
                 visible = gestures.mode.value == GestureMode.VOLUME,
@@ -165,16 +204,16 @@ fun PlayerScreen(
                 percentage = ui.volumeBoostPercent.intValue,
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 20.dp),
+                    .padding(end = 24.dp),
             )
 
-            // 1D. Center Hold-to-Boost Milestones & Progressive Scrub Pill
+            // 1D. Top-Center Hold-to-Boost Milestone Capsule, Seek Readout & Aspect Badge
             CenterGestureHudPill(
                 ui = ui,
                 gestures = gestures,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 84.dp),
+                    .padding(top = 18.dp),
             )
 
             // 1E. CRITICAL HIT-TEST INVARIANT: Subtitle Overlay sits ABOVE playerGestureLayer
@@ -184,30 +223,51 @@ fun PlayerScreen(
                 ui = ui,
                 gestures = gestures,
                 onUpdateSubOffsetSec = actions::onApplySubtitleOffsetSec,
+                mediaId = mediaId,
             )
 
-            // 1F. Screen Lock Scrim Unlock Chip
+            // 1F. Screen Lock Unlock Pill (Clean vector Lock icon, zero emoji)
             AnimatedVisibility(
                 visible = ui.locked.value && ui.lockScrimVisible.value,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier
-                    .align(Alignment.TopStart)
+                    .align(Alignment.BottomStart)
                     .padding(24.dp),
             ) {
-                OpticalGlassChip(
-                    label = "🔒 Locked • Tap to Unlock",
-                    isActive = true,
-                    onClick = {
-                        ui.locked.value = false
-                        ui.lockScrimVisible.value = false
-                        ui.controlsVisible.value = true
-                    },
-                )
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xD80A0A0C))
+                        .border(1.dp, OpticalGlassTokens.EmeraldAccent.copy(alpha = 0.55f), RoundedCornerShape(50))
+                        .clickable {
+                            ui.locked.value = false
+                            ui.lockScrimVisible.value = false
+                            ui.controlsVisible.value = true
+                        }
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Lock,
+                        contentDescription = "Unlock",
+                        tint = OpticalGlassTokens.EmeraldSync,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = "Locked · Tap to Unlock",
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                }
             }
         },
         // =====================================================================
-        // LAYER 2: HUD CHROME (TOP BAR + BOTTOM DOCK)
+        // LAYER 2: HUD CHROME (TOP BAR + BOTTOM DOCK + FLOATING BOTTOM SPEED BAR)
         // =====================================================================
         hudControlsSlot = {
             PlayerScreenTopBar(
@@ -218,6 +278,7 @@ fun PlayerScreen(
                 episodeCount = episodes.size,
                 ui = ui,
                 quick = quick,
+                actions = actions,
                 onNavigateBack = onNavigateBack,
                 onCycleDecoderMode = actions::onCycleDecoderMode,
                 onNudgeSubtitleOffsetSec = { delta ->
@@ -239,6 +300,7 @@ fun PlayerScreen(
                 chapters = chapters,
                 scrubPreviewBitmap = scrubPreviewBitmap,
                 ui = ui,
+                quick = quick,
                 onPreviewScrubSec = { sec -> actions.onPreviewKeyFrameSeekMs((sec * 1000f).toLong()) },
                 onCommitScrubSec = { sec -> actions.onCommitExactSeekMs((sec * 1000f).toLong()) },
                 onStepSeekSec = actions::onStepSeekSec,
@@ -247,17 +309,30 @@ fun PlayerScreen(
                 onNextEpisode = onNextEpisode,
                 onCycleAspectRatio = {
                     ui.zoomIdx.intValue = (ui.zoomIdx.intValue + 1) % AspectZoomMode.entries.size
+                    ui.aspectBadgeVisible.value = true
                 },
                 onToggleRotateMode = {
                     val modes = RotateMode.entries
-                    quick.rotateMode.value = modes[(quick.rotateMode.value.ordinal + 1) % modes.size]
+                    val next = modes[(quick.rotateMode.value.ordinal + 1) % modes.size]
+                    actions.onSetRotateMode(next)
                 },
                 onStartOverFromZero = { actions.onCommitExactSeekMs(0L) },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
+
+            // Floating Bottom Precision Speed Bar
+            PrecisionSpeedCard(
+                visible = ui.speedCardOpen.value,
+                ui = ui,
+                onApplySpeed = { spd -> actions.onSetPlaybackSpeed(spd, persist = true) },
+                onDismiss = { ui.speedCardOpen.value = false },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 22.dp),
+            )
         },
         // =====================================================================
-        // LAYER 3: 350dp OPTICAL GLASS RIGHT-ALIGNED DRAWERS
+        // LAYER 3: FULL-HEIGHT FLAT RIGHT-ALIGNED DRAWERS
         // =====================================================================
         sideDrawerSlot = {
             PlayerSubtitleDrawer(
@@ -266,6 +341,7 @@ fun PlayerScreen(
                 selectedTrackId = selectedSubtitleTrackId,
                 ui = ui,
                 gestures = gestures,
+                actions = actions,
                 onSelectTrack = onSelectSubtitleTrack,
                 onOpenLocalFilePicker = onOpenLocalSubtitlePicker,
                 onTriggerAutoSync = actions::onTriggerAutoSync,
@@ -276,6 +352,8 @@ fun PlayerScreen(
             PlayerPlaylistDrawer(
                 visible = ui.playlistDrawerOpen.value,
                 episodes = episodes,
+                seriesTitle = title.substringBeforeLast('.').take(22).ifBlank { "Episodes" },
+                actions = actions,
                 onSelectEpisode = onSelectEpisode,
                 onDismiss = { ui.playlistDrawerOpen.value = false },
             )
@@ -284,11 +362,18 @@ fun PlayerScreen(
                 visible = ui.threeDotsMenuOpen.value,
                 ui = ui,
                 quick = quick,
-                onApplySpeed = actions::onSetPlaybackSpeed,
+                actions = actions,
+                onApplySpeed = { spd -> actions.onSetPlaybackSpeed(spd, persist = true) },
                 onOpenAudioTracks = onOpenAudioTracks,
                 onEnterPip = onEnterPip,
                 onCaptureScreenshot = actions::onCaptureScreenshot,
                 onDismiss = { ui.threeDotsMenuOpen.value = false },
+            )
+
+            PlayerRibbonCustomiseDrawer(
+                visible = quick.showRibbonCustomise.value,
+                quick = quick,
+                onDismiss = { quick.showRibbonCustomise.value = false },
             )
         },
     )

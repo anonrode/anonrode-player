@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import dev.anonrode.player.PlayerPrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -32,6 +33,21 @@ class PlayerScreenActions(
     private val onApplyEngineSubtitleOffsetSec: (Float) -> Unit,
     private val onTriggerEngineAutoSync: () -> Unit,
     private val onCaptureVideoFrame: () -> Unit,
+    private val onPersistSpeed: (Float) -> Unit = {},
+    private val onSelectDecoderModeHost: (Int) -> Unit = {},
+    private val onOpenEqualizerSheetHost: () -> Unit = {},
+    private val onOpenCastPickerHost: () -> Unit = {},
+    private val onOpenOnlineSubtitlesHost: () -> Unit = {},
+    private val onCycleAbRepeatHost: () -> Unit = {},
+    private val onSelectSleepTimerHost: (Int) -> Unit = {},
+    private val onToggleBackgroundPlayHost: (Boolean) -> Unit = {},
+    private val onToggleAudioEffectHost: (Boolean) -> Unit = {},
+    private val onSetAutoSyncEnabledHost: (Boolean) -> Unit = {},
+    private val onUpdatePlaylistModeHost: (Boolean, RepeatLoopMode) -> Unit = { _, _ -> },
+    private val onSetRotateModeHost: (RotateMode) -> Unit = {},
+    private val onOpenFullSettingsHost: () -> Unit = {},
+    private val onReorderEpisodesHost: (List<String>) -> Unit = {},
+    private val onRemoveEpisodeHost: (String) -> Unit = {},
 ) {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val maxHardwareVolume: Int =
@@ -72,7 +88,7 @@ class PlayerScreenActions(
     }
 
     /**
-     * Commits final scrub position and restores `SeekParameters.EXACT` 500ms after touch release (§5.2.1).
+     * Commits final scrub position and restores `SeekParameters.EXACT` 500ms after touch release.
      */
     fun onCommitExactSeekMs(targetMs: Long) {
         val player = livePlayer ?: return
@@ -86,7 +102,7 @@ class PlayerScreenActions(
     }
 
     /**
-     * §5.2.2 Gesture Cancellation Recovery: immediately restores `SeekParameters.EXACT`
+     * Gesture Cancellation Recovery: immediately restores `SeekParameters.EXACT`
      * so aborted drags never leave ExoPlayer stuck in coarse keyframe seek mode.
      */
     fun onCancelKeyframeSeek() {
@@ -98,7 +114,7 @@ class PlayerScreenActions(
     }
 
     /**
-     * Step seek (±10s default) shared between transport buttons and double-tap seek ripples (§7.4).
+     * Step seek (±10s default) shared between transport buttons and double-tap seek ripples.
      */
     fun onStepSeekSec(deltaSec: Int) {
         ui.bumpInteraction()
@@ -122,6 +138,7 @@ class PlayerScreenActions(
         val hwFraction = (clamped.coerceAtMost(100) / 100f)
         val targetHwIndex = (hwFraction * maxHardwareVolume).roundToInt().coerceIn(0, maxHardwareVolume)
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetHwIndex, 0)
+        PlayerPrefs.saveVolume(context, targetHwIndex)
 
         val boostPct = (clamped - 100).coerceAtLeast(0)
         val playerSessionId = livePlayer?.audioSessionId ?: 0
@@ -147,20 +164,30 @@ class PlayerScreenActions(
     fun onApplyBrightnessFraction(fraction: Float) {
         val clamped = fraction.coerceIn(0.02f, 1.0f)
         ui.screenBrightnessFraction.floatValue = clamped
+        PlayerPrefs.saveScreenBrightness(context, clamped)
         val window = activity?.window ?: return
         val params = window.attributes
         params.screenBrightness = clamped
         window.attributes = params
     }
 
-    fun onSetPlaybackSpeed(speed: Float) {
+    fun onSetPlaybackSpeed(speed: Float, persist: Boolean = false) {
         val clamped = speed.coerceIn(0.25f, 4.0f)
         livePlayer?.playbackParameters = PlaybackParameters(clamped)
+        if (persist) {
+            ui.currentPlaybackSpeed.floatValue = clamped
+            onPersistSpeed(clamped)
+        }
     }
 
     fun onCycleDecoderMode() {
         ui.bumpInteraction()
         onRebuildDecoderCycle()
+    }
+
+    fun onSelectDecoderMode(mode: Int) {
+        ui.bumpInteraction()
+        onSelectDecoderModeHost(mode)
     }
 
     fun onApplySubtitleOffsetSec(offsetSec: Float) {
@@ -177,6 +204,78 @@ class PlayerScreenActions(
     fun onCaptureScreenshot() {
         ui.bumpInteraction()
         onCaptureVideoFrame()
+    }
+
+    fun onOpenEqualizerSheet() {
+        ui.bumpInteraction()
+        onOpenEqualizerSheetHost()
+    }
+
+    fun onOpenCastPicker() {
+        ui.bumpInteraction()
+        onOpenCastPickerHost()
+    }
+
+    fun onOpenOnlineSubtitles() {
+        ui.bumpInteraction()
+        onOpenOnlineSubtitlesHost()
+    }
+
+    fun onCycleAbRepeat() {
+        ui.bumpInteraction()
+        onCycleAbRepeatHost()
+    }
+
+    fun onSelectSleepTimer(minutes: Int) {
+        ui.bumpInteraction()
+        ui.sleepTimerMinutes.intValue = minutes
+        onSelectSleepTimerHost(minutes)
+    }
+
+    fun onToggleBackgroundPlay(enabled: Boolean) {
+        ui.bumpInteraction()
+        ui.backgroundPlayOn.value = enabled
+        onToggleBackgroundPlayHost(enabled)
+    }
+
+    fun onToggleAudioEffect(enabled: Boolean) {
+        ui.bumpInteraction()
+        ui.audioEffectOn.value = enabled
+        onToggleAudioEffectHost(enabled)
+    }
+
+    fun onSetAutoSyncEnabled(enabled: Boolean) {
+        ui.bumpInteraction()
+        quick.subSyncEnabled.value = enabled
+        onSetAutoSyncEnabledHost(enabled)
+    }
+
+    fun onUpdatePlaylistMode(shuffle: Boolean, repeat: RepeatLoopMode) {
+        ui.bumpInteraction()
+        ui.shuffleOn.value = shuffle
+        ui.repeatMode.value = repeat
+        onUpdatePlaylistModeHost(shuffle, repeat)
+    }
+
+    fun onSetRotateMode(mode: RotateMode) {
+        ui.bumpInteraction()
+        quick.rotateMode.value = mode
+        onSetRotateModeHost(mode)
+    }
+
+    fun onOpenFullSettings() {
+        ui.bumpInteraction()
+        onOpenFullSettingsHost()
+    }
+
+    fun onReorderEpisodes(orderedIds: List<String>) {
+        ui.bumpInteraction()
+        onReorderEpisodesHost(orderedIds)
+    }
+
+    fun onRemoveEpisode(id: String) {
+        ui.bumpInteraction()
+        onRemoveEpisodeHost(id)
     }
 
     fun release() {
@@ -204,6 +303,21 @@ fun rememberPlayerScreenActions(
     onApplyEngineSubtitleOffsetSec: (Float) -> Unit,
     onTriggerEngineAutoSync: () -> Unit,
     onCaptureVideoFrame: () -> Unit,
+    onPersistSpeed: (Float) -> Unit = {},
+    onSelectDecoderModeHost: (Int) -> Unit = {},
+    onOpenEqualizerSheetHost: () -> Unit = {},
+    onOpenCastPickerHost: () -> Unit = {},
+    onOpenOnlineSubtitlesHost: () -> Unit = {},
+    onCycleAbRepeatHost: () -> Unit = {},
+    onSelectSleepTimerHost: (Int) -> Unit = {},
+    onToggleBackgroundPlayHost: (Boolean) -> Unit = {},
+    onToggleAudioEffectHost: (Boolean) -> Unit = {},
+    onSetAutoSyncEnabledHost: (Boolean) -> Unit = {},
+    onUpdatePlaylistModeHost: (Boolean, RepeatLoopMode) -> Unit = { _, _ -> },
+    onSetRotateModeHost: (RotateMode) -> Unit = {},
+    onOpenFullSettingsHost: () -> Unit = {},
+    onReorderEpisodesHost: (List<String>) -> Unit = {},
+    onRemoveEpisodeHost: (String) -> Unit = {},
 ): PlayerScreenActions = remember(
     livePlayer,
     ui,
@@ -227,5 +341,20 @@ fun rememberPlayerScreenActions(
         onApplyEngineSubtitleOffsetSec = onApplyEngineSubtitleOffsetSec,
         onTriggerEngineAutoSync = onTriggerEngineAutoSync,
         onCaptureVideoFrame = onCaptureVideoFrame,
+        onPersistSpeed = onPersistSpeed,
+        onSelectDecoderModeHost = onSelectDecoderModeHost,
+        onOpenEqualizerSheetHost = onOpenEqualizerSheetHost,
+        onOpenCastPickerHost = onOpenCastPickerHost,
+        onOpenOnlineSubtitlesHost = onOpenOnlineSubtitlesHost,
+        onCycleAbRepeatHost = onCycleAbRepeatHost,
+        onSelectSleepTimerHost = onSelectSleepTimerHost,
+        onToggleBackgroundPlayHost = onToggleBackgroundPlayHost,
+        onToggleAudioEffectHost = onToggleAudioEffectHost,
+        onSetAutoSyncEnabledHost = onSetAutoSyncEnabledHost,
+        onUpdatePlaylistModeHost = onUpdatePlaylistModeHost,
+        onSetRotateModeHost = onSetRotateModeHost,
+        onOpenFullSettingsHost = onOpenFullSettingsHost,
+        onReorderEpisodesHost = onReorderEpisodesHost,
+        onRemoveEpisodeHost = onRemoveEpisodeHost,
     )
 }

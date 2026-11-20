@@ -17,13 +17,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
@@ -33,9 +36,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.anonrode.player.PlayerPrefs
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+/**
+ * Subtitle cue overlay with smooth, axis-locked vertical drag (10%..85%),
+ * per-video + global position persistence via [PlayerPrefs.saveSubtitlePosition],
+ * horizontal fine-sync drag, and two-finger pinch font scaling.
+ *
+ * [BoxWithConstraints] stays mounted across inter-cue gaps so pointer and layout
+ * nodes never tear down between lines.
+ */
 @Composable
 fun PlayerSubtitleOverlay(
     cueText: State<String>,
@@ -43,20 +55,24 @@ fun PlayerSubtitleOverlay(
     ui: PlayerUiState,
     gestures: GestureUiState,
     onUpdateSubOffsetSec: (Float) -> Unit,
+    mediaId: String = "",
     modifier: Modifier = Modifier,
 ) {
     val text = cueText.value
-    if (!ui.showCC.value || text.isBlank()) {
+    val visible = ui.showCC.value && text.isNotBlank()
+    if (!visible) {
         gestures.subBounds.value = Rect.Zero
-        return
     }
 
+    val context = LocalContext.current
     val view = LocalView.current
     val density = LocalDensity.current.density
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        if (!visible) return@BoxWithConstraints
+
         val containerH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-        val anchorFrac = gestures.subPosFraction.floatValue.coerceIn(0.10f, 0.85f)
+        val anchorFrac = gestures.subPosFraction.floatValue.coerceIn(SUB_Y_MIN, SUB_Y_MAX)
         val targetY = (containerH * anchorFrac).roundToInt()
 
         val isInteractingWithSub = gestures.mode.value == GestureMode.SUBTITLE_VERTICAL_DRAG ||
@@ -67,28 +83,17 @@ fun PlayerSubtitleOverlay(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .offset { IntOffset(0, targetY) }
+                .graphicsLayer {
+                    val scale = if (isInteractingWithSub && !isPipMode) 1.03f else 1f
+                    scaleX = scale
+                    scaleY = scale
+                }
                 .onGloballyPositioned { coords ->
                     gestures.subBounds.value = coords.boundsInRoot()
                 }
-                .then(
-                    if (isInteractingWithSub) {
-                        Modifier.opticalGlass(
-                            shape = RoundedCornerShape(10.dp),
-                            baseColor = OpticalGlassTokens.SmokedHudPillBase,
-                            isActive = true,
-                        )
-                    } else if (ui.subtitleBgEnabled.value) {
-                        Modifier
-                            .background(
-                                Color.Black.copy(alpha = 0.48f),
-                                RoundedCornerShape(8.dp),
-                            )
-                    } else {
-                        Modifier
-                    }
-                )
-                // 1. Long-press opens Subtitle Drawer Style page
-                .pointerInput(Unit) {
+                // 1. Long-press opens Subtitle Drawer on the Style page
+                .pointerInput(isPipMode) {
+                    if (isPipMode) return@pointerInput
                     detectTapGestures(
                         onLongPress = {
                             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -96,12 +101,14 @@ fun PlayerSubtitleOverlay(
                         }
                     )
                 }
-                // 2. Vertical Drag (Anchor 0.10..0.85) & Horizontal Drag (Live Cue-Sync Nudge)
-                .pointerInput(containerH) {
+                // 2. Axis-locked Drag: Vertical Position (0.10..0.85) OR Horizontal Sync Nudge
+                .pointerInput(containerH, isPipMode, mediaId) {
+                    if (isPipMode) return@pointerInput
                     var startFrac = gestures.subPosFraction.floatValue
                     var startOffsetSec = ui.subtitleOffsetSec.floatValue
                     var accumDx = 0f
                     var accumDy = 0f
+                    var lockedAxis = GestureMode.NONE
 
                     detectDragGestures(
                         onDragStart = {
@@ -109,34 +116,60 @@ fun PlayerSubtitleOverlay(
                             startOffsetSec = ui.subtitleOffsetSec.floatValue
                             accumDx = 0f
                             accumDy = 0f
-                            gestures.mode.value = GestureMode.SUBTITLE_VERTICAL_DRAG
+                            lockedAxis = GestureMode.NONE
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                         },
                         onDrag = { change, dragAmount ->
                             change.consume()
                             accumDx += dragAmount.x
                             accumDy += dragAmount.y
 
-                            if (abs(accumDx) > 1.4f * abs(accumDy) && abs(accumDx) > 18f * density) {
-                                gestures.mode.value = GestureMode.SUBTITLE_HORIZONTAL_SYNC
-                                val stepSec = ((accumDx / (12f * density)).roundToInt()) * 0.05f
-                                val newOffset = startOffsetSec + stepSec
-                                onUpdateSubOffsetSec(newOffset)
-                            } else {
-                                gestures.mode.value = GestureMode.SUBTITLE_VERTICAL_DRAG
-                                val newFrac = (startFrac + accumDy / containerH).coerceIn(0.10f, 0.85f)
-                                gestures.subPosFraction.floatValue = newFrac
+                            if (lockedAxis == GestureMode.NONE) {
+                                val slopPx = 10f * density
+                                if (abs(accumDy) >= slopPx || abs(accumDx) >= slopPx) {
+                                    lockedAxis = if (abs(accumDx) > 1.6f * abs(accumDy)) {
+                                        GestureMode.SUBTITLE_HORIZONTAL_SYNC
+                                    } else {
+                                        GestureMode.SUBTITLE_VERTICAL_DRAG
+                                    }
+                                    gestures.mode.value = lockedAxis
+                                }
+                            }
+
+                            when (lockedAxis) {
+                                GestureMode.SUBTITLE_HORIZONTAL_SYNC -> {
+                                    val stepSec = ((accumDx / (14f * density)).roundToInt()) * 0.05f
+                                    val newOffset = startOffsetSec + stepSec
+                                    onUpdateSubOffsetSec(newOffset)
+                                }
+                                GestureMode.SUBTITLE_VERTICAL_DRAG -> {
+                                    val newFrac = (startFrac + accumDy / containerH).coerceIn(SUB_Y_MIN, SUB_Y_MAX)
+                                    gestures.subPosFraction.floatValue = newFrac
+                                }
+                                else -> Unit
                             }
                         },
                         onDragEnd = {
+                            if (lockedAxis == GestureMode.SUBTITLE_VERTICAL_DRAG) {
+                                PlayerPrefs.saveSubtitlePosition(
+                                    context,
+                                    mediaId,
+                                    SUB_DEFAULT_X,
+                                    gestures.subPosFraction.floatValue,
+                                )
+                            }
+                            lockedAxis = GestureMode.NONE
                             gestures.mode.value = GestureMode.NONE
                         },
                         onDragCancel = {
+                            lockedAxis = GestureMode.NONE
                             gestures.mode.value = GestureMode.NONE
                         },
                     )
                 }
                 // 3. Two-Finger Pinch on Subtitle to Scale Font Size (14sp..42sp)
-                .pointerInput(Unit) {
+                .pointerInput(isPipMode) {
+                    if (isPipMode) return@pointerInput
                     detectTransformGestures { _, _, zoom, _ ->
                         if (zoom != 1f) {
                             gestures.mode.value = GestureMode.SUBTITLE_PINCH_SCALE
@@ -147,32 +180,49 @@ fun PlayerSubtitleOverlay(
                 },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            OutlinedSubtitleText(
-                text = text,
-                isPipMode = isPipMode,
-                fontSizeSp = ui.subtitleFontSizeSp.floatValue,
-                fillColor = ui.subtitleTextColor.value,
-                isBold = ui.subtitleBold.value,
-            )
-
             if (isInteractingWithSub) {
                 val badgeText = when (gestures.mode.value) {
                     GestureMode.SUBTITLE_HORIZONTAL_SYNC ->
-                        "↔ Sync Offset: %+.2fs".format(ui.subtitleOffsetSec.floatValue)
+                        "Offset %+.2fs".format(ui.subtitleOffsetSec.floatValue)
                     GestureMode.SUBTITLE_PINCH_SCALE ->
-                        "🔍 Size: ${ui.subtitleFontSizeSp.floatValue.roundToInt()}sp"
+                        "Size ${ui.subtitleFontSizeSp.floatValue.roundToInt()}sp"
                     else ->
-                        "↕ Anchor: ${(gestures.subPosFraction.floatValue * 100).roundToInt()}%"
+                        "Position ${(gestures.subPosFraction.floatValue * 100).roundToInt()}%"
                 }
-                Text(
-                    text = badgeText,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                    style = TextStyle(
-                        color = OpticalGlassTokens.CyanAccent,
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFeatureSettings = "tnum",
-                    ),
+                Box(
+                    modifier = Modifier
+                        .padding(bottom = 4.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xD80A0A0C))
+                        .padding(horizontal = 10.dp, vertical = 3.dp),
+                ) {
+                    Text(
+                        text = badgeText,
+                        style = TextStyle(
+                            color = OpticalGlassTokens.EmeraldSync,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFeatureSettings = "tnum",
+                        ),
+                    )
+                }
+            }
+
+            Box(
+                modifier = if (ui.subtitleBgEnabled.value) {
+                    Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color.Black.copy(alpha = 0.56f))
+                } else {
+                    Modifier
+                }
+            ) {
+                OutlinedSubtitleText(
+                    text = text,
+                    isPipMode = isPipMode,
+                    fontSizeSp = ui.subtitleFontSizeSp.floatValue,
+                    fillColor = ui.subtitleTextColor.value,
+                    isBold = ui.subtitleBold.value,
                 )
             }
         }
@@ -180,9 +230,7 @@ fun PlayerSubtitleOverlay(
 }
 
 /**
- * High-Performance 2-Pass Hardware Stroke Subtitle Renderer (§9.1).
- * Converts 4.dp (or 2.dp in PiP) via LocalDensity to guarantee an honest 2.0dp outer border
- * on 3.0x–3.5x high-DPI screens with 75% fewer layout passes than legacy 8-offset shadows.
+ * High-Performance 2-Pass Hardware Stroke Subtitle Renderer.
  */
 @Composable
 fun OutlinedSubtitleText(
@@ -194,16 +242,15 @@ fun OutlinedSubtitleText(
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
-    val strokeWidthPx = with(density) { (if (isPipMode) 2.dp else 4.dp).toPx() }
+    val strokeWidthPx = with(density) { (if (isPipMode) 2.dp else 3.8.dp).toPx() }
     val sizeSp = (if (isPipMode) fontSizeSp * 0.62f else fontSizeSp).sp
     val lineSp = (if (isPipMode) fontSizeSp * 0.78f else fontSizeSp * 1.28f).sp
-    val weight = if (isBold) FontWeight.Bold else FontWeight.Medium
+    val weight = if (isBold) FontWeight.SemiBold else FontWeight.Medium
 
     Box(
-        modifier = modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+        modifier = modifier.padding(horizontal = 12.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center,
     ) {
-        // Pass 1: Density-scaled outline stroke pass (Round join eliminates corner spikes)
         Text(
             text = text,
             style = TextStyle(
@@ -217,11 +264,10 @@ fun OutlinedSubtitleText(
                     join = StrokeJoin.Round,
                 ),
             ),
-            maxLines = 3,
+            maxLines = 4,
             softWrap = true,
             overflow = TextOverflow.Visible,
         )
-        // Pass 2: Interior fill pass
         Text(
             text = text,
             style = TextStyle(
@@ -231,7 +277,7 @@ fun OutlinedSubtitleText(
                 lineHeight = lineSp,
                 textAlign = TextAlign.Center,
             ),
-            maxLines = 3,
+            maxLines = 4,
             softWrap = true,
             overflow = TextOverflow.Visible,
         )
