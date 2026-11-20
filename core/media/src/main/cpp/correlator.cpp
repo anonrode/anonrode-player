@@ -66,9 +66,10 @@ SyncResult MultiScaleAligner::align(
     double minAudio = sortedOnsets.front();
     double maxAudio = sortedOnsets.back();
 
-    // Trial slopes for PAL drift (1.0 default, plus 23.976 <-> 25 fps conversions)
+    // Trial slopes: only test PAL conversions on long spans (>=120s) when explicitly enabled;
+    // on short spot probes (6–25s) deep in an episode, testing 1.0427 shifts cues by ±77s.
     const double trialSlopes[] = {1.0, 0.95904, 1.0427};
-    constexpr size_t numSlopes = sizeof(trialSlopes) / sizeof(trialSlopes[0]);
+    const size_t numSlopes = (mConfig.allowSlopeSearch && (maxAudio - minAudio) >= 120.0) ? 3 : 1;
 
     double bestScore = 0.0;
     double bestOffset = activeOffsetSec;
@@ -76,7 +77,7 @@ SyncResult MultiScaleAligner::align(
     int bestHits = 0;
     int bestLocalCues = 0;
 
-    // Coarse search grid (50ms step across search radius)
+    // Coarse search grid (50ms step across configured search bounds)
     for (size_t sIdx = 0; sIdx < numSlopes; ++sIdx) {
         double alpha = trialSlopes[sIdx];
         double b = mConfig.minSearchOffsetSec;
@@ -99,9 +100,9 @@ SyncResult MultiScaleAligner::align(
 
     if (bestHits == 0) return result;
 
-    // Fine refinement (10ms steps within +- 60ms of best candidate)
-    double fineStart = bestOffset - 0.06;
-    double fineEnd = bestOffset + 0.06;
+    // Fine refinement (10ms steps within +- 60ms of best candidate, clamped to bounds)
+    double fineStart = std::max(mConfig.minSearchOffsetSec, bestOffset - 0.06);
+    double fineEnd = std::min(mConfig.maxSearchOffsetSec, bestOffset + 0.06);
     double fineB = fineStart;
     while (fineB <= fineEnd + 1e-6) {
         int hits = 0;
@@ -117,11 +118,14 @@ SyncResult MultiScaleAligner::align(
         fineB += 0.01;
     }
 
-    // Runner-up search (strictly outside +- 2.0s of bestOffset to eliminate harmonic cadence aliases)
+    // Runner-up search outside exclusion band to reject harmonic cadence aliases.
+    // On wide searches (>4s span), exclude +-2.0s; on narrow local leashes (<=4s), exclude +-0.6s.
+    const double searchSpan = mConfig.maxSearchOffsetSec - mConfig.minSearchOffsetSec;
+    const double exclRadius = (searchSpan > 4.0) ? 2.0 : 0.6;
     double runnerScore = 0.0;
     double b = mConfig.minSearchOffsetSec;
     while (b <= mConfig.maxSearchOffsetSec + 1e-6) {
-        if (std::abs(b - bestOffset) > 2.0) {
+        if (std::abs(b - bestOffset) > exclRadius) {
             int hits = 0;
             int localCues = 0;
             double score = 0.0;

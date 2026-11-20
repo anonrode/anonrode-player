@@ -11,6 +11,34 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+namespace {
+
+struct StreamingOnsetSession {
+    anonsync::VoiceBandpassFilter filter;
+    anonsync::SilenceDetector detector;
+    int sampleRate{0};
+    int channels{0};
+    double effectiveSampleRate{16000.0};
+    std::vector<float> monoScratch;
+
+    StreamingOnsetSession(int sr, int ch)
+        : filter(anonsync::VoiceBandpassFilter::computeEffectiveSampleRate(sr), 300.0, 3400.0),
+          detector(makeSilenceConfig(anonsync::VoiceBandpassFilter::computeEffectiveSampleRate(sr))),
+          sampleRate(sr),
+          channels(ch),
+          effectiveSampleRate(anonsync::VoiceBandpassFilter::computeEffectiveSampleRate(sr)) {
+        monoScratch.reserve(4096);
+    }
+
+    static anonsync::SilenceDetectConfig makeSilenceConfig(double effSr) {
+        anonsync::SilenceDetectConfig cfg;
+        cfg.sampleRate = effSr;
+        cfg.noiseThresholdDb = -36.0;
+        cfg.minSilenceDurationSec = 0.18;
+        return cfg;
+    }
+};
+
 static inline void getBufferBounds(JNIEnv* env, jobject byteBuffer, jlong bufCap, jint& outPos, jint& outRem) {
     outPos = 0;
     outRem = static_cast<jint>(bufCap);
@@ -30,8 +58,25 @@ static inline void getBufferBounds(JNIEnv* env, jobject byteBuffer, jlong bufCap
                 env->ExceptionClear();
             }
         }
+        env->DeleteLocalRef(bufClass);
     }
 }
+
+static inline anonsync::AlignerConfig buildAlignerConfig(
+    double searchMinOffsetSec,
+    double searchMaxOffsetSec,
+    bool allowSlopeSearch
+) {
+    anonsync::AlignerConfig cfg;
+    if (searchMaxOffsetSec >= searchMinOffsetSec) {
+        cfg.minSearchOffsetSec = searchMinOffsetSec;
+        cfg.maxSearchOffsetSec = searchMaxOffsetSec;
+    }
+    cfg.allowSlopeSearch = allowSlopeSearch;
+    return cfg;
+}
+
+} // namespace
 
 extern "C" {
 
@@ -47,6 +92,97 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeIsNeonSupported(
 #endif
 }
 
+JNIEXPORT jlong JNICALL
+Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeCreateOnsetSession(
+    JNIEnv* /* env */,
+    jclass /* clazz */,
+    jint sampleRate,
+    jint channels
+) {
+    if (sampleRate <= 0 || channels <= 0) return 0;
+    auto* session = new StreamingOnsetSession(sampleRate, channels);
+    return reinterpret_cast<jlong>(session);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeFeedOnsetBuffer(
+    JNIEnv* env,
+    jclass /* clazz */,
+    jlong handle,
+    jobject byteBuffer,
+    jboolean isFloat,
+    jdouble offsetSec
+) {
+    if (handle == 0 || !byteBuffer) return JNI_FALSE;
+    auto* session = reinterpret_cast<StreamingOnsetSession*>(handle);
+
+    void* rawBufPtr = env->GetDirectBufferAddress(byteBuffer);
+    jlong bufCap = env->GetDirectBufferCapacity(byteBuffer);
+    if (!rawBufPtr || bufCap <= 0) return JNI_FALSE;
+
+    jint pos = 0;
+    jint rem = 0;
+    getBufferBounds(env, byteBuffer, bufCap, pos, rem);
+    if (rem <= 0) return JNI_TRUE;
+
+    uint8_t* bufPtr = static_cast<uint8_t*>(rawBufPtr) + pos;
+    uintptr_t addr = reinterpret_cast<uintptr_t>(bufPtr);
+    if ((isFloat && (addr % sizeof(float) != 0)) || (!isFloat && (addr % sizeof(int16_t) != 0))) {
+        return JNI_FALSE;
+    }
+
+    size_t bytesPerSample = isFloat ? 4 : 2;
+    size_t frameCount = static_cast<size_t>(rem) / (bytesPerSample * static_cast<size_t>(session->channels));
+    if (frameCount == 0) return JNI_TRUE;
+
+    session->monoScratch.clear();
+    if (isFloat) {
+        const float* floatPtr = reinterpret_cast<const float*>(bufPtr);
+        session->filter.downsampleAndFilterFloat(
+            floatPtr, frameCount, session->sampleRate, session->channels, session->monoScratch
+        );
+    } else {
+        const int16_t* shortPtr = reinterpret_cast<const int16_t*>(bufPtr);
+        session->filter.downsampleAndFilter(
+            shortPtr, frameCount, session->sampleRate, session->channels, session->monoScratch
+        );
+    }
+
+    if (!session->monoScratch.empty()) {
+        session->detector.process(session->monoScratch.data(), session->monoScratch.size(), offsetSec);
+    }
+    return JNI_TRUE;
+}
+
+JNIEXPORT jdoubleArray JNICALL
+Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeFinishOnsetSession(
+    JNIEnv* env,
+    jclass /* clazz */,
+    jlong handle
+) {
+    if (handle == 0) return nullptr;
+    auto* session = reinterpret_cast<StreamingOnsetSession*>(handle);
+    session->detector.flush();
+    const auto& onsets = session->detector.getOnsets();
+    jsize n = static_cast<jsize>(onsets.size());
+    jdoubleArray result = env->NewDoubleArray(n);
+    if (result && n > 0) {
+        env->SetDoubleArrayRegion(result, 0, n, onsets.data());
+    }
+    return result;
+}
+
+JNIEXPORT void JNICALL
+Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeDestroyOnsetSession(
+    JNIEnv* /* env */,
+    jclass /* clazz */,
+    jlong handle
+) {
+    if (handle == 0) return;
+    auto* session = reinterpret_cast<StreamingOnsetSession*>(handle);
+    delete session;
+}
+
 JNIEXPORT jdoubleArray JNICALL
 Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeCorrelate(
     JNIEnv* env,
@@ -54,7 +190,10 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeCorrelate(
     jdoubleArray jAudioOnsets,
     jdoubleArray jCueStarts,
     jdoubleArray jCueEnds,
-    jdouble activeOffsetSec
+    jdouble activeOffsetSec,
+    jdouble searchMinOffsetSec,
+    jdouble searchMaxOffsetSec,
+    jboolean allowSlopeSearch
 ) {
     if (!jAudioOnsets || !jCueStarts) {
         return nullptr;
@@ -88,7 +227,8 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeCorrelate(
         }
     }
 
-    anonsync::MultiScaleAligner aligner;
+    anonsync::AlignerConfig cfg = buildAlignerConfig(searchMinOffsetSec, searchMaxOffsetSec, allowSlopeSearch == JNI_TRUE);
+    anonsync::MultiScaleAligner aligner(cfg);
     anonsync::SyncResult sync = aligner.align(audioOnsets, cueStarts, cueEnds, activeOffsetSec);
 
     jdouble outData[11] = {
@@ -122,7 +262,10 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeAlignPcm(
     jboolean isFloat,
     jdoubleArray jCueStarts,
     jdoubleArray jCueEnds,
-    jdouble activeOffsetSec
+    jdouble activeOffsetSec,
+    jdouble searchMinOffsetSec,
+    jdouble searchMaxOffsetSec,
+    jboolean allowSlopeSearch
 ) {
     if (!byteBuffer || !jCueStarts || channels <= 0 || sampleRate <= 0) {
         return nullptr;
@@ -145,7 +288,6 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeAlignPcm(
         return nullptr;
     }
 
-    // 1. Convert cues from JNI array
     jsize cueCount = env->GetArrayLength(jCueStarts);
     if (cueCount == 0) return nullptr;
 
@@ -166,12 +308,12 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeAlignPcm(
         }
     }
 
-    // 2. Downsample and bandpass filter audio
-    anonsync::VoiceBandpassFilter filter(16000.0, 300.0, 3400.0);
+    const double effRate = anonsync::VoiceBandpassFilter::computeEffectiveSampleRate(sampleRate);
+    anonsync::VoiceBandpassFilter filter(effRate, 300.0, 3400.0);
     std::vector<float> monoAudio;
 
     size_t bytesPerSample = isFloat ? 4 : 2;
-    size_t frameCount = static_cast<size_t>(rem) / (bytesPerSample * channels);
+    size_t frameCount = static_cast<size_t>(rem) / (bytesPerSample * static_cast<size_t>(channels));
     if (frameCount == 0) return nullptr;
 
     if (isFloat) {
@@ -186,21 +328,19 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeAlignPcm(
         return nullptr;
     }
 
-    // 3. Detect speech onsets using FFmpeg adaptive silence detector
-    anonsync::SilenceDetector detector;
+    anonsync::SilenceDetector detector(StreamingOnsetSession::makeSilenceConfig(effRate));
     detector.process(monoAudio.data(), monoAudio.size(), 0.0);
-    detector.flush(static_cast<double>(monoAudio.size()) / 16000.0);
+    detector.flush();
 
     const auto& onsets = detector.getOnsets();
     if (onsets.empty()) {
         return nullptr;
     }
 
-    // 4. Align onsets against cues
-    anonsync::MultiScaleAligner aligner;
+    anonsync::AlignerConfig cfg = buildAlignerConfig(searchMinOffsetSec, searchMaxOffsetSec, allowSlopeSearch == JNI_TRUE);
+    anonsync::MultiScaleAligner aligner(cfg);
     anonsync::SyncResult sync = aligner.align(onsets, cueStarts, cueEnds, activeOffsetSec);
 
-    // Pack results into jdoubleArray
     jdouble outData[11] = {
         sync.locked ? 1.0 : 0.0,
         sync.offsetSec,
@@ -249,11 +389,12 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeExtractOnsets(
         return nullptr;
     }
 
-    anonsync::VoiceBandpassFilter filter(16000.0, 300.0, 3400.0);
+    const double effRate = anonsync::VoiceBandpassFilter::computeEffectiveSampleRate(sampleRate);
+    anonsync::VoiceBandpassFilter filter(effRate, 300.0, 3400.0);
     std::vector<float> monoAudio;
 
     size_t bytesPerSample = isFloat ? 4 : 2;
-    size_t frameCount = static_cast<size_t>(rem) / (bytesPerSample * channels);
+    size_t frameCount = static_cast<size_t>(rem) / (bytesPerSample * static_cast<size_t>(channels));
     if (frameCount == 0) return nullptr;
 
     if (isFloat) {
@@ -266,9 +407,9 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeExtractOnsets(
 
     if (monoAudio.empty()) return nullptr;
 
-    anonsync::SilenceDetector detector;
+    anonsync::SilenceDetector detector(StreamingOnsetSession::makeSilenceConfig(effRate));
     detector.process(monoAudio.data(), monoAudio.size(), offsetSec);
-    detector.flush(offsetSec + static_cast<double>(monoAudio.size()) / 16000.0);
+    detector.flush();
 
     const auto& onsets = detector.getOnsets();
     jsize n = static_cast<jsize>(onsets.size());
@@ -296,19 +437,20 @@ Java_dev_anonrode_player_core_media_sync_NativeSyncEngine_nativeExtractOnsetsSho
     jshort* shortsPtr = env->GetShortArrayElements(jPcmShorts, nullptr);
     if (!shortsPtr) return nullptr;
 
-    anonsync::VoiceBandpassFilter filter(16000.0, 300.0, 3400.0);
+    const double effRate = anonsync::VoiceBandpassFilter::computeEffectiveSampleRate(sampleRate);
+    anonsync::VoiceBandpassFilter filter(effRate, 300.0, 3400.0);
     std::vector<float> monoAudio;
 
-    size_t frameCount = static_cast<size_t>(shortCount) / channels;
+    size_t frameCount = static_cast<size_t>(shortCount) / static_cast<size_t>(channels);
     filter.downsampleAndFilter(reinterpret_cast<const int16_t*>(shortsPtr), frameCount, sampleRate, channels, monoAudio);
 
     env->ReleaseShortArrayElements(jPcmShorts, shortsPtr, JNI_ABORT);
 
     if (monoAudio.empty()) return nullptr;
 
-    anonsync::SilenceDetector detector;
+    anonsync::SilenceDetector detector(StreamingOnsetSession::makeSilenceConfig(effRate));
     detector.process(monoAudio.data(), monoAudio.size(), offsetSec);
-    detector.flush(offsetSec + static_cast<double>(monoAudio.size()) / 16000.0);
+    detector.flush();
 
     const auto& onsets = detector.getOnsets();
     jsize n = static_cast<jsize>(onsets.size());

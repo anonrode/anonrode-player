@@ -57,6 +57,8 @@ class SyncAnalysisWorker(
 
     private val inFlight = AtomicBoolean(false)
 
+    fun isBusy(): Boolean = inFlight.get()
+
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { r ->
         Thread(r, "sync-eval").apply {
             isDaemon = true

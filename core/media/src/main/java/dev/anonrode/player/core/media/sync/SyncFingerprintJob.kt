@@ -219,9 +219,11 @@ class SyncFingerprintJob(
             // it forever. A forced "Resync now" re-fits regardless.
             val forced = inputData.getBoolean(KEY_FORCE, false)
             val existing = store.get(videoUri)
-            val hasValidOffset = existing?.autoSyncOffsetMs != null && existing.autoSyncOffsetMs != 0L
-            if (!forced && existing != null && existing.autoSyncCheckedAtMs != 0L && hasValidOffset) {
-                AppLog.d("SYNC_JOB", "fingerprint verdict already recorded (${existing.autoSyncOffsetMs}ms), skipping")
+            val hasValidLock = existing != null && (
+                existing.autoSyncOffsetMs != 0L || existing.autoSyncPiecewise.isNotBlank()
+            )
+            if (!forced && existing != null && existing.autoSyncCheckedAtMs != 0L && hasValidLock) {
+                AppLog.d("SYNC_JOB", "fingerprint verdict already recorded (${existing.autoSyncOffsetMs}ms pw='${existing.autoSyncPiecewise}'), skipping")
                 return@withContext Result.success()
             }
 
@@ -262,56 +264,42 @@ class SyncFingerprintJob(
                 AppLog.d("SYNC_JOB", "syncing chosen source: $choice (${resolved.size} cues)")
                 resolved
             } else {
-                // AUTO path — resolve exactly the way playback does (see the
-                // deferred parser in the player): a picked sidecar first,
-                // else the first embedded text track. Without the embedded
-                // fallback an MKV with muxed subs (the common release
-                // format) had NO route to the engine at all — the old code
-                // bailed here with "no sidecar subtitle found", so even a
-                // forced "Resync now" was a silent no-op for embedded-only
-                // videos, leaving the (unvalidated) live analyser as their
-                // only possible sync path.
-                val sub = findSidecarSubtitle(videoUri, videoPath)
-                if (sub != null) {
-                    val parsed = SubtitleParser.parse(sub.first, sub.second)
-                    if (parsed.size < 10) {
-                        AppLog.d("SYNC_JOB", "too few cues (${parsed.size}), skipping")
-                        store.markAutoSyncChecked(videoUri)
-                        return@withContext Result.success()
-                    }
-                    parsed
+                // AUTO path — MUST match PlayerActivity / SubtitleSourceResolver.resolveAutoCues:
+                // embedded text track FIRST, canonical scored sidecar SECOND, so playback and
+                // background sync never fit/render different tracks when both exist.
+                var probeFailed = false
+                val embedded: List<SubtitleCue> = try {
+                    val tracks = SubtitleSourceResolver.listEmbedded(
+                        applicationContext, videoUri, videoPath,
+                    )
+                    if (tracks.isEmpty()) emptyList()
+                    else SubtitleSourceResolver.resolveCues(
+                        applicationContext, videoUri, videoPath,
+                        "embedded:${tracks.first().index}",
+                    ).sortedBy { it.start }
+                } catch (t: Throwable) {
+                    probeFailed = true
+                    AppLog.e("SYNC_JOB", "embedded subtitle probe failed", t)
+                    emptyList()
+                }
+                if (embedded.size >= 10) {
+                    AppLog.d("SYNC_JOB", "syncing auto-embedded track (${embedded.size} cues)")
+                    embedded
                 } else {
-                    var probeFailed = false
-                    val embedded: List<SubtitleCue> = try {
-                        val tracks = SubtitleSourceResolver.listEmbedded(
-                            applicationContext, videoUri, videoPath,
-                        )
-                        if (tracks.isEmpty()) emptyList()
-                        else SubtitleSourceResolver.resolveCues(
-                            applicationContext, videoUri, videoPath,
-                            "embedded:${tracks.first().index}",
-                        ).sortedBy { it.start }
-                    } catch (t: Throwable) {
-                        probeFailed = true
-                        AppLog.e("SYNC_JOB", "embedded subtitle probe failed", t)
-                        emptyList()
-                    }
-                    if (embedded.size < 10) {
-                        AppLog.d("SYNC_JOB", "no sidecar and no embedded track, nothing to sync")
-                        // v0.7.4 P0-1: a DEFINITE "this video has no usable
-                        // subtitle source" verdict is marked checked like any
-                        // other, so the every-open 90 s-delayed no-op enqueue
-                        // storm ends (a sidecarless file can never sync by
-                        // definition — the live engine has nothing either).
-                        // A PROBE FAILURE is not a verdict — leave it
-                        // unmarked so the next open retries. Recovery when a
-                        // sidecar appears later: the subtitle-choice setter
-                        // clears the mark, and "Resync now" ignores it.
+                    val sub = findSidecarSubtitle(videoUri, videoPath)
+                    if (sub != null) {
+                        val parsed = SubtitleParser.parse(sub.first, sub.second)
+                        if (parsed.size < 10) {
+                            AppLog.d("SYNC_JOB", "too few cues (${parsed.size}), skipping")
+                            store.markAutoSyncChecked(videoUri)
+                            return@withContext Result.success()
+                        }
+                        parsed
+                    } else {
+                        AppLog.d("SYNC_JOB", "no embedded track and no sidecar, nothing to sync")
                         if (!probeFailed) store.markAutoSyncChecked(videoUri)
                         return@withContext Result.success()
                     }
-                    AppLog.d("SYNC_JOB", "syncing embedded track (${embedded.size} cues)")
-                    embedded
                 }
             }
 
@@ -345,6 +333,8 @@ class SyncFingerprintJob(
             var sources: OnsetExtractor.OnsetSources = OnsetExtractor.OnsetSources(emptyList(), emptyList())
             var extractionComplete: Boolean = false
             var lock: LockCandidate? = null
+            var persistedInitialLock: Boolean = false
+            var tier2StartSec: Double = 0.0
             if (cached != null && cached.complete) {
                 AppLog.d(
                     "SYNC_JOB",
@@ -352,6 +342,7 @@ class SyncFingerprintJob(
                 )
                 sources = cached.asSources()
                 extractionComplete = true
+                tier2StartSec = cached.coveredSec
             } else {
                 val resumeFrom = cached?.coveredSec ?: -1.0
                 if (resumeFrom > 0.0) {
@@ -367,24 +358,14 @@ class SyncFingerprintJob(
                 val initialSpanSec = if (resumeFrom <= 0.0) 600.0 else 300.0
 
                 // ── Stage 0: Cue-Guided Anchor Search (20s dense cluster seek) ──
-                var anchorLock: LockCandidate? = null
+                // Commits an instant sub-2s lock to Room, then falls through to Tier 2
+                // progressive 300s cut crawling from 0.0s so mid-episode commercial/recap
+                // shifts across the full episode are mapped even on passthrough audio.
                 if (cached == null && starts.size >= 12) {
                     val anchorSpan = 20.0
                     val (denseStart, _) = findDensestDialogueCluster(cues, anchorSpan)
                     val anchorStart = (denseStart - 1.0).coerceAtLeast(0.0)
                     AppLog.d("SYNC_JOB", "Stage 0 dense cluster probe at %.1fs (span %.0fs)".format(anchorStart, anchorSpan))
-                    // v0.9.13 (device-log fix): the anchor probe ran
-                    // silencedetect-only, which finds NOTHING on
-                    // continuous-mix / silence-sparse content — the 10-16
-                    // Mandarin device log shows "0 onsets" on every probe,
-                    // so the sub-2s fast lock never fired there and the live
-                    // path boot-locked aliased offsets (-5.7s / -6.5s) for
-                    // roughly a minute until the full pass landed. The
-                    // hybrid union (silencedetect + Silero-VAD) is the
-                    // documented rescue for exactly this content; the
-                    // anchor takes it here like every later stage already
-                    // does. Same gate bars (8 onsets / 8 cues / recall
-                    // 0.65) — only the onset source is stronger.
                     val anchorPass = extractor.extractSources(
                         videoPath,
                         Uri.parse(videoUri),
@@ -398,44 +379,34 @@ class SyncFingerprintJob(
                     if (anchorOnsets.size >= 8 && anchorStarts.size >= 8) {
                         val candidate = attemptLock(anchorOnsets, anchorStarts, "cue-anchor")
                         if (candidate != null && candidate.recall >= 0.65 && abs(candidate.offsetMs / 1000.0) <= 30.0) {
-                            sources = anchorPass
-                            extractionComplete = false
                             val durMs = getVideoDurationMs(videoUri, videoPath)
                             val pw = buildMultiSpotPiecewise(
                                 extractor, videoPath, videoUri, cues,
                                 candidate.offsetMs / 1000.0, durMs,
-                                isCancelled = { !coroutineContext.isActive || isStopped }
+                                isCancelled = { !coroutineContext.isActive || isStopped },
                             ).ifEmpty { "" }
 
-                            val lockCandidate = candidate.copy(piecewise = pw)
+                            val lockCandidate = candidate.copy(
+                                piecewise = canonicalPiecewise(candidate.offsetMs, candidate.speed, pw),
+                            )
                             lock = lockCandidate
+                            persistedInitialLock = true
+                            extractionComplete = false
+                            tier2StartSec = 0.0
                             withContext(kotlinx.coroutines.NonCancellable) {
                                 store.updateAutoSync(videoUri, lockCandidate.offsetMs, lockCandidate.speed, lockCandidate.piecewise)
                             }
-                            OnsetCache.store(
-                                applicationContext, videoUri, videoFile,
-                                OnsetCache.Entry(
-                                    silencedetect = sources.silencedetect,
-                                    vad = sources.vad,
-                                    envelope = FloatArray(0),
-                                    coveredSec = extractor.lastCoveredSec,
-                                    complete = false,
-                                ),
-                            )
                             AppLog.d(
                                 "SYNC_JOB",
-                                "Stage 0 CUE-ANCHOR FAST LOCKED in <1.5s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall}"
+                                "Stage 0 CUE-ANCHOR FAST LOCKED in <1.5s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall} (continuing Tier 2 cut crawl)",
                             )
-                            return@withContext Result.success()
                         }
                     }
                 }
 
                 // ── Stage 0.5: Multi-Cluster Sparse Seek Probe (|beta| in [30s, 180s]) ──
-                // Avoids whole-file 50-minute extraction when |beta| is in [30s, 180s]
-                // (e.g. uncut cold opens, broadcast title cards, or extended intro gaps).
                 val totalDurationMs = getVideoDurationMs(videoUri, videoPath)
-                if (cached == null && starts.size >= 16 && totalDurationMs >= 180_000L) {
+                if (lock == null && cached == null && starts.size >= 16 && totalDurationMs >= 180_000L) {
                     val durSec = totalDurationMs / 1000.0
                     val clusterSpan = 25.0
                     val targetPositions = listOf(
@@ -446,7 +417,6 @@ class SyncFingerprintJob(
 
                     val allClusterOnsets = mutableListOf<Double>()
                     val clusterRanges = mutableListOf<Pair<Double, Double>>()
-                    var clusterPassSources: OnsetExtractor.OnsetSources? = null
 
                     for (targetSec in targetPositions) {
                         if (!coroutineContext.isActive || isStopped) break
@@ -473,13 +443,6 @@ class SyncFingerprintJob(
                         if (onsets.isNotEmpty()) {
                             allClusterOnsets.addAll(onsets)
                             clusterRanges.add(probeStart to (probeStart + clusterSpan))
-                            clusterPassSources = if (clusterPassSources == null) pass else {
-                                OnsetExtractor.OnsetSources(
-                                    silencedetect = clusterPassSources.silencedetect + pass.silencedetect,
-                                    vad = clusterPassSources.vad + pass.vad,
-                                    envelope = FloatArray(0),
-                                )
-                            }
                         }
                     }
 
@@ -495,149 +458,154 @@ class SyncFingerprintJob(
                                 val pw = buildMultiSpotPiecewise(
                                     extractor, videoPath, videoUri, cues,
                                     candidate.offsetMs / 1000.0, totalDurationMs,
-                                    isCancelled = { !coroutineContext.isActive || isStopped }
+                                    isCancelled = { !coroutineContext.isActive || isStopped },
                                 ).ifEmpty { "" }
 
-                                val lockCandidate = candidate.copy(piecewise = pw)
+                                val lockCandidate = candidate.copy(
+                                    piecewise = canonicalPiecewise(candidate.offsetMs, candidate.speed, pw),
+                                )
                                 lock = lockCandidate
+                                persistedInitialLock = true
+                                extractionComplete = false
+                                tier2StartSec = 0.0
                                 withContext(kotlinx.coroutines.NonCancellable) {
                                     store.updateAutoSync(videoUri, lockCandidate.offsetMs, lockCandidate.speed, lockCandidate.piecewise)
                                 }
-                                if (clusterPassSources != null) {
-                                    OnsetCache.store(
-                                        applicationContext, videoUri, videoFile,
-                                        OnsetCache.Entry(
-                                            silencedetect = clusterPassSources.silencedetect,
-                                            vad = clusterPassSources.vad,
-                                            envelope = FloatArray(0),
-                                            coveredSec = extractor.lastCoveredSec,
-                                            complete = false,
-                                        ),
-                                    )
-                                }
                                 AppLog.d(
                                     "SYNC_JOB",
-                                    "Stage 0.5 MULTI-CLUSTER SPARSE LOCKED in <3s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall}"
+                                    "Stage 0.5 MULTI-CLUSTER SPARSE LOCKED in <3s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall} (continuing Tier 2 cut crawl)",
                                 )
-                                return@withContext Result.success()
                             }
                         }
                     }
                 }
 
-                // Stage 1: Fast silencedetect pass first (MediaCodec @ 200x realtime, ~2.5s on device)
-                val fastPass = if (cached != null && cached.silencedetect.isNotEmpty()) {
-                    cached.asSources()
-                } else {
-                    extractor.extractSources(
-                        videoPath,
-                        Uri.parse(videoUri),
-                        resumeFrom,
-                        maxMediaDurationSec = initialSpanSec,
-                        includeVad = false,
-                        isCancelled = { !coroutineContext.isActive || isStopped },
-                    )
-                }
-                val isFastCancelled = !coroutineContext.isActive || isStopped
-                if (isFastCancelled) {
-                    OnsetCache.store(
-                        applicationContext, videoUri, videoFile,
-                        OnsetCache.Entry(
-                            silencedetect = fastPass.silencedetect,
-                            vad = emptyList(),
-                            envelope = FloatArray(0),
-                            coveredSec = extractor.lastCoveredSec,
-                            complete = extractor.isEndOfStream,
-                        ),
-                    )
-                    AppLog.d("SYNC_JOB", "extraction cancelled/stopped by WorkManager — cache saved, retrying")
-                    return@withContext Result.retry()
-                }
-
-                // Check if fast silencedetect can lock immediately on the covered horizon
-                val fastHorizonSec = extractor.lastCoveredSec + 60.0
-                val fastTierStarts = if (extractor.isEndOfStream) starts else starts.filter { it <= fastHorizonSec }
-                var fastLock: LockCandidate? = null
-                if (fastPass.silencedetect.size >= MIN_ONSETS && fastTierStarts.size >= 10) {
-                    fastLock = attemptLock(fastPass.silencedetect, fastTierStarts, "silencedetect-fast")
-                }
-
-                if (fastLock != null) {
-                    sources = fastPass
-                    extractionComplete = extractor.isEndOfStream
-                    val durMs = getVideoDurationMs(videoUri, videoPath)
-                    val pw = buildMultiSpotPiecewise(
-                        extractor, videoPath, videoUri, cues,
-                        fastLock.offsetMs / 1000.0, durMs,
-                        isCancelled = { !coroutineContext.isActive || isStopped }
-                    ).ifEmpty { fastLock.piecewise }
-
-                    val lockCandidate = fastLock.copy(piecewise = pw)
-                    lock = lockCandidate
-                    OnsetCache.store(
-                        applicationContext, videoUri, videoFile,
-                        OnsetCache.Entry(
-                            silencedetect = sources.silencedetect,
-                            vad = emptyList(),
-                            envelope = FloatArray(0),
-                            coveredSec = extractor.lastCoveredSec,
-                            complete = extractionComplete,
-                        ),
-                    )
-                    withContext(kotlinx.coroutines.NonCancellable) {
-                        store.updateAutoSync(videoUri, lockCandidate.offsetMs, lockCandidate.speed, lockCandidate.piecewise)
-                    }
-                    AppLog.d(
-                        "SYNC_JOB",
-                        "Tier 1 FAST LOCKED in 2s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall}"
-                    )
-                } else {
-                    // Stage 2: Silero VAD fallback (extracts full neural envelope and hybrid onsets)
-                    val fresh = extractor.extractSources(
-                        videoPath,
-                        Uri.parse(videoUri),
-                        resumeFrom,
-                        maxMediaDurationSec = initialSpanSec,
-                        includeVad = true,
-                        isCancelled = { !coroutineContext.isActive || isStopped },
-                    )
-                    sources = if (resumeFrom > 0.0 && cached != null) {
-                        OnsetExtractor.OnsetSources(
-                            silencedetect = OnsetCache.mergeOnsets(cached.silencedetect, fresh.silencedetect),
-                            vad = OnsetCache.mergeOnsets(cached.vad, fresh.vad),
-                            envelope = OnsetCache.mergeEnvelope(cached.envelope, fresh.envelope, resumeFrom),
-                        )
+                // Stage 1: Fast silencedetect pass first (MediaCodec + stateful C++ NEON @ ~200x realtime)
+                if (lock == null) {
+                    val fastPass = if (cached != null && cached.silencedetect.isNotEmpty()) {
+                        cached.asSources()
                     } else {
-                        fresh
+                        extractor.extractSources(
+                            videoPath,
+                            Uri.parse(videoUri),
+                            resumeFrom,
+                            maxMediaDurationSec = initialSpanSec,
+                            includeVad = false,
+                            isCancelled = { !coroutineContext.isActive || isStopped },
+                        )
                     }
-                    val isJobCancelled = !coroutineContext.isActive || isStopped
-                    extractionComplete = extractor.isEndOfStream
-                    OnsetCache.store(
-                        applicationContext, videoUri, videoFile,
-                        OnsetCache.Entry(
-                            silencedetect = sources.silencedetect,
-                            vad = sources.vad,
-                            envelope = sources.envelope,
-                            coveredSec = extractor.lastCoveredSec,
-                            complete = extractionComplete,
-                        ),
-                    )
-                    if (isJobCancelled) {
+                    val isFastCancelled = !coroutineContext.isActive || isStopped
+                    if (isFastCancelled) {
+                        OnsetCache.store(
+                            applicationContext, videoUri, videoFile,
+                            OnsetCache.Entry(
+                                silencedetect = fastPass.silencedetect,
+                                vad = emptyList(),
+                                envelope = FloatArray(0),
+                                coveredSec = extractor.lastCoveredSec,
+                                complete = extractor.isEndOfStream,
+                            ),
+                        )
                         AppLog.d("SYNC_JOB", "extraction cancelled/stopped by WorkManager — cache saved, retrying")
                         return@withContext Result.retry()
+                    }
+
+                    // Check if fast silencedetect can lock immediately on the covered horizon
+                    val fastHorizonSec = extractor.lastCoveredSec + 60.0
+                    val fastTierStarts = if (extractor.isEndOfStream) starts else starts.filter { it <= fastHorizonSec }
+                    var fastLock: LockCandidate? = null
+                    if (fastPass.silencedetect.size >= MIN_ONSETS && fastTierStarts.size >= 10) {
+                        fastLock = attemptLock(fastPass.silencedetect, fastTierStarts, "silencedetect-fast")
+                    }
+
+                    if (fastLock != null) {
+                        sources = fastPass
+                        extractionComplete = extractor.isEndOfStream
+                        tier2StartSec = extractor.lastCoveredSec
+                        val durMs = getVideoDurationMs(videoUri, videoPath)
+                        val pw = buildMultiSpotPiecewise(
+                            extractor, videoPath, videoUri, cues,
+                            fastLock.offsetMs / 1000.0, durMs,
+                            isCancelled = { !coroutineContext.isActive || isStopped },
+                        ).ifEmpty { fastLock.piecewise }
+
+                        val lockCandidate = fastLock.copy(
+                            piecewise = canonicalPiecewise(fastLock.offsetMs, fastLock.speed, pw),
+                        )
+                        lock = lockCandidate
+                        persistedInitialLock = true
+                        OnsetCache.store(
+                            applicationContext, videoUri, videoFile,
+                            OnsetCache.Entry(
+                                silencedetect = sources.silencedetect,
+                                vad = emptyList(),
+                                envelope = FloatArray(0),
+                                coveredSec = tier2StartSec,
+                                complete = extractionComplete,
+                            ),
+                        )
+                        withContext(kotlinx.coroutines.NonCancellable) {
+                            store.updateAutoSync(videoUri, lockCandidate.offsetMs, lockCandidate.speed, lockCandidate.piecewise)
+                        }
+                        AppLog.d(
+                            "SYNC_JOB",
+                            "Tier 1 FAST LOCKED in 2s: uri=$videoUri offset=${lockCandidate.offsetMs}ms speed=${lockCandidate.speed} piecewise=${lockCandidate.piecewise} recall=${lockCandidate.recall}",
+                        )
+                    } else {
+                        // Stage 2: Silero VAD fallback (extracts full neural envelope and hybrid onsets)
+                        val fresh = extractor.extractSources(
+                            videoPath,
+                            Uri.parse(videoUri),
+                            resumeFrom,
+                            maxMediaDurationSec = initialSpanSec,
+                            includeVad = true,
+                            isCancelled = { !coroutineContext.isActive || isStopped },
+                        )
+                        sources = if (resumeFrom > 0.0 && cached != null) {
+                            OnsetExtractor.OnsetSources(
+                                silencedetect = OnsetCache.mergeOnsets(cached.silencedetect, fresh.silencedetect),
+                                vad = OnsetCache.mergeOnsets(cached.vad, fresh.vad),
+                                envelope = OnsetCache.mergeEnvelope(cached.envelope, fresh.envelope, resumeFrom),
+                                envelopeBaseSec = 0.0,
+                            )
+                        } else {
+                            fresh
+                        }
+                        val isJobCancelled = !coroutineContext.isActive || isStopped
+                        extractionComplete = extractor.isEndOfStream
+                        tier2StartSec = extractor.lastCoveredSec
+                        OnsetCache.store(
+                            applicationContext, videoUri, videoFile,
+                            OnsetCache.Entry(
+                                silencedetect = sources.silencedetect,
+                                vad = sources.vad,
+                                envelope = sources.envelope,
+                                coveredSec = tier2StartSec,
+                                complete = extractionComplete,
+                            ),
+                        )
+                        if (isJobCancelled) {
+                            AppLog.d("SYNC_JOB", "extraction cancelled/stopped by WorkManager — cache saved, retrying")
+                            return@withContext Result.retry()
+                        }
                     }
                 }
             }
 
             // Align cue horizon to covered audio span so recall denominator is honest
-            val coveredSec = extractor.lastCoveredSec
+            val coveredSec = tier2StartSec
             val horizonSec = if (extractionComplete) Double.MAX_VALUE else (coveredSec + 60.0)
             val tierCues = if (extractionComplete) cues else cues.filter { it.start <= horizonSec }
             val tierStarts = if (extractionComplete) starts else starts.filter { it <= horizonSec }
 
             // Tier 1: Continuous soft-envelope 2D Pearson correlator (immune to onset sparsity in music)
             if (lock == null && sources.envelope.isNotEmpty() && tierCues.size >= 5) {
-                val model = SyncOrchestrator.syncWithEnvelope(sources.envelope, tierCues, sources.hybrid)
+                val model = SyncOrchestrator.syncWithEnvelope(
+                    envelope = sources.envelope,
+                    cues = tierCues,
+                    onsets = sources.hybrid,
+                    envelopeBaseSec = sources.envelopeBaseSec,
+                )
                 if (model != null) {
                     val candidate = toLockCandidate(model, "envelope")
                     lock = candidate
@@ -668,51 +636,81 @@ class SyncFingerprintJob(
                 }
             }
 
-            // Commit initial lock immediately so the player syncs subtitles within seconds
-            val initialLock = lock
-            if (initialLock != null && !extractionComplete) {
-                withContext(kotlinx.coroutines.NonCancellable) {
-                    store.updateAutoSync(videoUri, initialLock.offsetMs, initialLock.speed, initialLock.piecewise)
+            // Commit initial lock immediately (including short/cached files where extractionComplete is already true)
+            val initialLock = lock?.let {
+                it.copy(piecewise = canonicalPiecewise(it.offsetMs, it.speed, it.piecewise))
+            }
+            if (initialLock != null) {
+                lock = initialLock
+                if (!persistedInitialLock) {
+                    persistedInitialLock = true
+                    withContext(kotlinx.coroutines.NonCancellable) {
+                        store.updateAutoSync(videoUri, initialLock.offsetMs, initialLock.speed, initialLock.piecewise)
+                    }
+                    AppLog.d(
+                        "SYNC_JOB",
+                        "Tier 1 LOCKED: uri=$videoUri offset=${initialLock.offsetMs}ms speed=${initialLock.speed} piecewise='${initialLock.piecewise}' recall=${initialLock.recall}",
+                    )
                 }
-                AppLog.d(
-                    "SYNC_JOB",
-                    "Tier 1 LOCKED: uri=$videoUri offset=${initialLock.offsetMs}ms speed=${initialLock.speed} recall=${initialLock.recall}"
-                )
             }
 
-            // Tier 2: Progressive background crawler (runs in lazy 300s chunks ahead of playback)
+            // Tier 2: Progressive background crawler (runs in lazy 300s chunks across the full file)
             var activeSources = sources
             var activePiecewise = lock?.piecewise.orEmpty()
-            var activeBeta = (lock?.offsetMs ?: 0L) / 1000.0
+            var baseSegmentBeta = (lock?.offsetMs ?: 0L) / 1000.0
+            var activeBeta = baseSegmentBeta
             var activeAlpha = lock?.speed?.toDouble() ?: 1.0
             var isComplete = extractionComplete
+            var nextChunkResumeSec = tier2StartSec
 
             while (!isComplete && coroutineContext.isActive && !isStopped) {
-                kotlinx.coroutines.delay(4000L)
+                kotlinx.coroutines.delay(2500L)
                 if (!coroutineContext.isActive || isStopped) break
 
-                val chunkResumeFrom = extractor.lastCoveredSec
-                val chunk = extractor.extractSources(
+                val chunkResumeFrom = nextChunkResumeSec
+                // Fast native silencedetect first (~200x realtime); only invoke Silero VAD
+                // on sparse/music-heavy chunks (<15 onsets) to keep background CPU minimal.
+                var chunk = extractor.extractSources(
                     videoPath,
                     Uri.parse(videoUri),
                     resumeFromSec = chunkResumeFrom,
                     maxMediaDurationSec = 300.0,
+                    includeVad = false,
                     isCancelled = { !coroutineContext.isActive || isStopped },
                 )
-                val atEof = extractor.isEndOfStream
+                var atEof = extractor.isEndOfStream
+                var chunkCovered = extractor.lastCoveredSec
+                if (!isStopped && coroutineContext.isActive && chunk.silencedetect.size < 15 && (chunkCovered - chunkResumeFrom) >= 30.0) {
+                    chunk = extractor.extractSources(
+                        videoPath,
+                        Uri.parse(videoUri),
+                        resumeFromSec = chunkResumeFrom,
+                        maxMediaDurationSec = 300.0,
+                        includeVad = true,
+                        isCancelled = { !coroutineContext.isActive || isStopped },
+                    )
+                    atEof = extractor.isEndOfStream
+                    chunkCovered = extractor.lastCoveredSec
+                }
                 if (atEof) {
                     isComplete = true
                 }
+                // Guard against stagnant decoder seek returning <= chunkResumeFrom
+                if (!atEof && chunkCovered <= chunkResumeFrom + 1.0) {
+                    isComplete = true
+                } else {
+                    nextChunkResumeSec = chunkCovered
+                }
 
                 if (chunk.hybrid.isEmpty() && chunk.envelope.isEmpty()) {
-                    if (atEof) {
+                    if (isComplete) {
                         OnsetCache.store(
                             applicationContext, videoUri, videoFile,
                             OnsetCache.Entry(
                                 silencedetect = activeSources.silencedetect,
                                 vad = activeSources.vad,
                                 envelope = activeSources.envelope,
-                                coveredSec = extractor.lastCoveredSec,
+                                coveredSec = nextChunkResumeSec,
                                 complete = true,
                             ),
                         )
@@ -732,19 +730,20 @@ class SyncFingerprintJob(
                         silencedetect = activeSources.silencedetect,
                         vad = activeSources.vad,
                         envelope = activeSources.envelope,
-                        coveredSec = extractor.lastCoveredSec,
-                        complete = atEof,
+                        coveredSec = nextChunkResumeSec,
+                        complete = isComplete,
                     ),
                 )
 
                 // If initial Tier 1 was deferred due to sparse opening speech, try fitting with accumulated audio
                 if (lock == null && activeSources.hybrid.size >= MIN_ONSETS) {
-                    val rescueHorizonSec = if (atEof) Double.MAX_VALUE else (extractor.lastCoveredSec + 60.0)
-                    val rescueStarts = if (atEof) starts else starts.filter { it <= rescueHorizonSec }
+                    val rescueHorizonSec = if (isComplete) Double.MAX_VALUE else (nextChunkResumeSec + 60.0)
+                    val rescueStarts = if (isComplete) starts else starts.filter { it <= rescueHorizonSec }
                     val promoted = attemptLock(activeSources.hybrid, rescueStarts, "progressive-rescue")
                     if (promoted != null) {
                         lock = promoted
-                        activeBeta = promoted.offsetMs / 1000.0
+                        baseSegmentBeta = promoted.offsetMs / 1000.0
+                        activeBeta = baseSegmentBeta
                         activeAlpha = promoted.speed.toDouble()
                         activePiecewise = promoted.piecewise
                         withContext(kotlinx.coroutines.NonCancellable) {
@@ -754,40 +753,53 @@ class SyncFingerprintJob(
                     }
                 }
 
-                // Check chunk recall in subtitle time coordinates to detect cuts or shifts
+                // Check chunk recall in subtitle time coordinates to detect mid-episode cuts or shifts
                 if (lock != null) {
-                    val chunkEndSec = extractor.lastCoveredSec
+                    val chunkEndSec = maxOf(chunkCovered, chunkResumeFrom + 1.0)
+                    val chunkOnsets = chunk.hybrid
                     val subStart = (chunkResumeFrom - activeBeta) / activeAlpha
                     val subEnd = (chunkEndSec - activeBeta) / activeAlpha
-                    val chunkCues = starts.filter { it in minOf(subStart, subEnd)..maxOf(subStart, subEnd) }
+                    val loSub = minOf(subStart, subEnd)
+                    val hiSub = maxOf(subStart, subEnd)
+                    val activeChunkCues = starts.filter { it in loSub..hiSub }
 
-                    if (chunkCues.size >= 15 && chunk.hybrid.isNotEmpty()) {
-                        val recActive = SyncFinder.evaluate(chunk.hybrid, chunkCues, activeAlpha, activeBeta)
+                    if (activeChunkCues.size >= 8 && chunkOnsets.isNotEmpty()) {
+                        val recActive = SyncFinder.evaluate(chunkOnsets, activeChunkCues, activeAlpha, activeBeta)
                         if (recActive < 0.25) {
-                            val cand = SyncFinder.findBestShift(
-                                chunk.hybrid, chunkCues, activeAlpha, centerBeta = activeBeta, radius = 150.0,
+                            // Include full ±155s margin of candidate cues so large commercial/recap jumps
+                            // are not clipped out before searching!
+                            val wideChunkCues = starts.filter { it in (loSub - 155.0)..(hiSub + 155.0) }
+                            val cand = SyncFinder.findBestShiftInWindow(
+                                onsets = chunkOnsets,
+                                cueStarts = wideChunkCues,
+                                alpha = activeAlpha,
+                                audioStartSec = chunkResumeFrom,
+                                audioEndSec = chunkEndSec,
+                                centerBeta = activeBeta,
+                                radius = 150.0,
                             )
                             val shift = cand.beta - activeBeta
-                            if (cand.recall >= 0.45 && cand.margin >= 0.12 && cand.containment >= 0.18 && kotlin.math.abs(shift) >= 1.0) {
+                            if (cand.recall >= 0.45 && cand.margin >= 0.12 && cand.containment >= 0.18 && abs(shift) >= 1.0) {
                                 AppLog.d(
                                     "SYNC_JOB",
                                     "Tier 2 Progressive Cut at %.0fs: shift=%+.2fs newBeta=%+.2fs (recall=%.1f%%, margin=%.1f%%, cont=%.1f%%)"
-                                        .format(chunkResumeFrom, shift, cand.beta, cand.recall * 100, cand.margin * 100, cand.containment * 100)
+                                        .format(chunkResumeFrom, shift, cand.beta, cand.recall * 100, cand.margin * 100, cand.containment * 100),
                                 )
-                                val cutAudioSec = SyncFinder.findCutBoundary(
-                                    chunk.hybrid, chunkCues, activeAlpha, activeBeta, cand.beta, chunkResumeFrom,
-                                )
-                                val newPiecewise = if (activePiecewise.isEmpty()) {
-                                    SyncFinder.piecewiseToStorage(cutAudioSec, activeBeta, cand.beta)
-                                } else {
-                                    val base = if (!activePiecewise.startsWith("0.0:") && !activePiecewise.startsWith("0:")) {
-                                        "0.0:$activeBeta;$activePiecewise"
-                                    } else {
-                                        activePiecewise
-                                    }
-                                    "$base;$cutAudioSec:${cand.beta}"
+                                val boundaryCues = wideChunkCues.filter { s ->
+                                    val tOld = activeAlpha * s + activeBeta
+                                    val tNew = activeAlpha * s + cand.beta
+                                    (tOld in chunkResumeFrom..chunkEndSec) || (tNew in chunkResumeFrom..chunkEndSec)
                                 }
-                                activePiecewise = newPiecewise
+                                val cutAudioSec = SyncFinder.findCutBoundary(
+                                    chunkOnsets, boundaryCues, activeAlpha, activeBeta, cand.beta, chunkResumeFrom,
+                                )
+                                val mergedSegments = mergePiecewiseSegment(
+                                    existingStorage = activePiecewise,
+                                    baseBeta = baseSegmentBeta,
+                                    cutAudioSec = cutAudioSec,
+                                    newBeta = cand.beta,
+                                )
+                                activePiecewise = mergedSegments
                                 activeBeta = cand.beta
                                 val currentLock = lock
                                 withContext(kotlinx.coroutines.NonCancellable) {
@@ -795,7 +807,7 @@ class SyncFingerprintJob(
                                         videoUri,
                                         currentLock?.offsetMs ?: 0L,
                                         currentLock?.speed ?: 1f,
-                                        newPiecewise,
+                                        mergedSegments,
                                     )
                                 }
                             }
@@ -803,7 +815,7 @@ class SyncFingerprintJob(
                     }
                 }
 
-                if (atEof) break
+                if (isComplete) break
             }
 
             if (isComplete) {
@@ -897,12 +909,13 @@ class SyncFingerprintJob(
         is SyncOrchestrator.Model.Cut -> {
             val bb = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.betaBefore) <= 0.20) 0.0 else model.betaBefore
             val ba = if (kotlin.math.abs(model.alpha - 1.0) <= 0.0005 && kotlin.math.abs(model.betaAfter) <= 0.20) 0.0 else model.betaAfter
+            val pwStorage = model.piecewiseStorage.ifBlank {
+                SyncFinder.piecewiseToStorage(model.cutAudio, bb, ba)
+            }
             LockCandidate(
                 offsetMs = (bb * 1000).toLong(),
                 speed = model.alpha.toFloat(),
-                piecewise = SyncFinder.piecewiseToStorage(
-                    model.cutAudio, bb, ba,
-                ),
+                piecewise = pwStorage,
                 recall = model.recallTwo,
                 tag = "$tag/cut-${model.confidence}",
             )
@@ -967,8 +980,8 @@ class SyncFingerprintJob(
                 cues = cues,
                 positionSec = pt,
                 activeOffsetSec = lastOffset,
-                probeDurationSec = 6.0,
-                radiusSec = 45.0,
+                probeDurationSec = 20.0,
+                radiusSec = 60.0,
                 isCancelled = isCancelled,
             )
             if (spotOffset != null && abs(spotOffset - lastOffset) > 0.80) {
@@ -981,6 +994,55 @@ class SyncFingerprintJob(
             pwSegments.joinToString(";") { "%.1f:%.3f".format(java.util.Locale.US, it.first, it.second) }
         } else ""
     }
+
+    /**
+     * Merges a newly detected cut segment into an existing piecewise storage string,
+     * preserving segment 0 (`0.0:baseBeta`) and replacing any coarse pre-mapped spot
+     * within ±90s of the refined [cutAudioSec].
+     */
+    private fun mergePiecewiseSegment(
+        existingStorage: String,
+        baseBeta: Double,
+        cutAudioSec: Double,
+        newBeta: Double,
+    ): String {
+        val segs = if (existingStorage.isBlank()) {
+            mutableListOf(0.0 to baseBeta)
+        } else {
+            existingStorage.split(';').mapNotNull { entry ->
+                val parts = entry.split(':')
+                if (parts.size != 2) return@mapNotNull null
+                val s = parts[0].toDoubleOrNull() ?: return@mapNotNull null
+                val b = parts[1].toDoubleOrNull() ?: return@mapNotNull null
+                s to b
+            }.sortedBy { it.first }.toMutableList().also { list ->
+                if (list.isEmpty() || list.first().first > 0.5) {
+                    list.add(0, 0.0 to baseBeta)
+                }
+            }
+        }
+        val nearIdx = segs.indexOfLast { it.first > 0.5 && abs(it.first - cutAudioSec) <= 90.0 }
+        if (nearIdx >= 0) {
+            segs[nearIdx] = cutAudioSec to newBeta
+        } else {
+            segs.add(cutAudioSec to newBeta)
+        }
+        return segs.sortedBy { it.first }.joinToString(";") { (startA, beta) ->
+            "%.1f:%.3f".format(java.util.Locale.US, startA, beta)
+        }
+    }
+
+    /**
+     * Ensures verified in-sync 0.0s locks carry `"0.0:0.000"` in Room so the player can
+     * distinguish a confirmed 0.0s lock (arm continuous cut tracking) from a refused/failed
+     * fingerprint verdict (`offset=0, speed=1, piecewise=""`).
+     */
+    private fun canonicalPiecewise(offsetMs: Long, speed: Float, piecewise: String): String =
+        when {
+            piecewise.isNotBlank() -> piecewise
+            offsetMs == 0L && speed == 1f -> "0.0:0.000"
+            else -> ""
+        }
 
     /**
      * v0.8 P2-2: caller-scaled decode budget. Floor is the old fixed

@@ -467,11 +467,13 @@ object SubtitleSourceResolver {
         return out.toByteArray()
     }
 
-    private fun parseFile(file: File): List<SubtitleCue> = try {
-        if (file.length() > MAX_SIDECAR_BYTES) return emptyList()
-        SubtitleParser.parseBytes(file.name, file.readBytes())
-    } catch (t: Throwable) {
-        AppLog.e(TAG, "parse failed: ${file.name}", t)
-        emptyList()
+    private fun parseFile(file: File): List<SubtitleCue> {
+        return try {
+            if (file.length() > MAX_SIDECAR_BYTES) return emptyList()
+            SubtitleParser.parseBytes(file.name, file.readBytes())
+        } catch (t: Throwable) {
+            AppLog.e(TAG, "parse failed: ${file.name}", t)
+            emptyList()
+        }
     }
 }

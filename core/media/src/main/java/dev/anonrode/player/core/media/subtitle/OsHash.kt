@@ -35,27 +35,29 @@ object OsHash {
     private const val CHUNK = 64 * 1024
 
     /** Returns null if the file can't be read or is too small to hash. */
-    fun compute(path: String): Result? = try {
-        val file = File(path)
-        if (!file.isFile) return null
-        RandomAccessFile(file, "r").use { raf ->
-            val size = raf.length()
-            // The algorithm needs at least one full 64KB window; the
-            // reference seeks to (size - 64KB), which is only valid from
-            // 64KB up. (Real videos are far larger; OpenSubtitles has no
-            // subtitles for smaller files anyway.)
-            if (size < CHUNK) return null
+    fun compute(path: String): Result? {
+        return try {
+            val file = File(path)
+            if (!file.isFile) return null
+            RandomAccessFile(file, "r").use { raf ->
+                val size = raf.length()
+                // The algorithm needs at least one full 64KB window; the
+                // reference seeks to (size - 64KB), which is only valid from
+                // 64KB up. (Real videos are far larger; OpenSubtitles has no
+                // subtitles for smaller files anyway.)
+                if (size < CHUNK) return null
 
-            val buf = ByteArray(CHUNK)
-            var sum = size // hash seed = file size
-            raf.seek(0)
-            sum += sumChunk(raf, buf)
-            raf.seek(size - CHUNK)
-            sum += sumChunk(raf, buf)
-            Result("%016x".format(sum), size)
+                val buf = ByteArray(CHUNK)
+                var sum = size // hash seed = file size
+                raf.seek(0)
+                sum += sumChunk(raf, buf)
+                raf.seek(size - CHUNK)
+                sum += sumChunk(raf, buf)
+                Result("%016x".format(sum), size)
+            }
+        } catch (t: Throwable) {
+            null
         }
-    } catch (t: Throwable) {
-        null
     }
 
     /** Reads up to one CHUNK into [buf] and sums its LE u64 words. */

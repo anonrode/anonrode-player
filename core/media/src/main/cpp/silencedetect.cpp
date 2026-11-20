@@ -32,69 +32,90 @@ static inline float computeRmsNeon(const float* data, size_t count) {
 
 SilenceDetector::SilenceDetector(const SilenceDetectConfig& config)
     : mConfig(config) {
+    if (mConfig.sampleRate <= 0.0) mConfig.sampleRate = 16000.0;
+    mConfig.frameLengthSamples = std::max(1, static_cast<int>(std::llround(mConfig.sampleRate * 0.01)));
     mLinearThreshold = std::pow(10.0, mConfig.noiseThresholdDb / 20.0);
     reset();
 }
 
 void SilenceDetector::reset() {
+    mAnchored = false;
+    mAnchorPtsSec = 0.0;
+    mSamplesProcessed = 0;
     mInSilence = false;
     mSilenceStartSec = -1.0;
-    mCurrentTimeSec = 0.0;
-    mLocalFloor = 0.015;
+    mLocalFloor = 0.02;
     mOnsets.clear();
-    mEnergyEnvelope.clear();
     mRemainder.clear();
 }
 
-void SilenceDetector::processFrame(const float* frame, size_t len, double framePtsSec) {
-    float rms = computeRmsNeon(frame, len);
+double SilenceDetector::getCoveredSec() const {
+    if (!mAnchored) return 0.0;
+    return mAnchorPtsSec + static_cast<double>(mSamplesProcessed + mRemainder.size()) / mConfig.sampleRate;
+}
 
-    // Adaptive noise floor tracking (leaky update)
+void SilenceDetector::processFrame(const float* frame, size_t len, double frameStartSec, double frameEndSec) {
+    if (len == 0) return;
+    double rms = static_cast<double>(computeRmsNeon(frame, len));
+
+    // Adaptive background noise floor matching Kotlin SilenceState:
+    // drops rapidly on quiet passages, leaks up slowly during sustained loud sections.
     if (rms < mLocalFloor) {
-        mLocalFloor = mLocalFloor * 0.95 + rms * 0.05;
+        mLocalFloor = std::max(mLinearThreshold, rms * 0.9 + mLocalFloor * 0.1);
     } else {
-        mLocalFloor = mLocalFloor * 0.9995 + rms * 0.0005;
+        mLocalFloor = std::min(0.15, mLocalFloor * 1.0005);
     }
 
-    // Dynamic threshold: base -25dB threshold or 2x local noise floor
-    double activeThreshold = std::max(mLinearThreshold, mLocalFloor * 1.8);
+    // Dynamic speech threshold: +4 dB above local noise floor (x1.6) or static floor.
+    double activeThreshold = std::max(mLinearThreshold, mLocalFloor * 1.6);
 
-    mEnergyEnvelope.push_back(rms);
-
-    if (rms < activeThreshold) {
-        // Current frame is silence
+    if (rms <= activeThreshold) {
         if (!mInSilence) {
             mInSilence = true;
-            mSilenceStartSec = framePtsSec;
+            mSilenceStartSec = frameStartSec;
         }
-    } else {
-        // Current frame is sound / speech
-        if (mInSilence) {
-            double silenceDuration = framePtsSec - mSilenceStartSec;
-            if (silenceDuration >= mConfig.minSilenceDurationSec) {
-                // Speech onset: silence just ended!
-                mOnsets.push_back(framePtsSec);
-            }
-            mInSilence = false;
-            mSilenceStartSec = -1.0;
+    } else if (mInSilence) {
+        double silenceDuration = frameEndSec - mSilenceStartSec;
+        if (silenceDuration >= mConfig.minSilenceDurationSec) {
+            mOnsets.push_back(frameEndSec);
         }
+        mInSilence = false;
+        mSilenceStartSec = -1.0;
     }
 }
 
 void SilenceDetector::process(const float* samples, size_t sampleCount, double offsetSec) {
     if (sampleCount == 0) return;
 
-    size_t frameLen = mConfig.frameLengthSamples;
-    double frameDuration = static_cast<double>(frameLen) / mConfig.sampleRate;
+    const size_t frameLen = static_cast<size_t>(mConfig.frameLengthSamples);
+    const double sr = mConfig.sampleRate;
+
+    if (!mAnchored) {
+        mAnchored = true;
+        mAnchorPtsSec = (offsetSec >= 0.0) ? offsetSec : 0.0;
+        mSamplesProcessed = 0;
+    } else if (offsetSec >= 0.0) {
+        double expectedPts = mAnchorPtsSec + static_cast<double>(mSamplesProcessed + mRemainder.size()) / sr;
+        if (std::abs(offsetSec - expectedPts) > 0.50) {
+            // Genuine container timestamp discontinuity: re-anchor cleanly.
+            mAnchorPtsSec = offsetSec - static_cast<double>(mRemainder.size()) / sr;
+            mSamplesProcessed = 0;
+            mInSilence = false;
+            mSilenceStartSec = -1.0;
+        }
+    }
 
     size_t processed = 0;
 
-    // Handle any leftover samples from the previous batch
+    // Complete any leftover samples from the previous streaming buffer.
     if (!mRemainder.empty()) {
         size_t needed = frameLen - mRemainder.size();
         if (sampleCount >= needed) {
             mRemainder.insert(mRemainder.end(), samples, samples + needed);
-            processFrame(mRemainder.data(), frameLen, offsetSec);
+            double fStart = mAnchorPtsSec + static_cast<double>(mSamplesProcessed) / sr;
+            double fEnd = mAnchorPtsSec + static_cast<double>(mSamplesProcessed + frameLen) / sr;
+            mSamplesProcessed += frameLen;
+            processFrame(mRemainder.data(), frameLen, fStart, fEnd);
             mRemainder.clear();
             processed += needed;
         } else {
@@ -103,14 +124,16 @@ void SilenceDetector::process(const float* samples, size_t sampleCount, double o
         }
     }
 
-    // Process full 10ms frames directly from input buffer
+    // Process full 10ms frames directly from input buffer.
     while (processed + frameLen <= sampleCount) {
-        double currentPts = offsetSec + (static_cast<double>(processed) / mConfig.sampleRate);
-        processFrame(samples + processed, frameLen, currentPts);
+        double fStart = mAnchorPtsSec + static_cast<double>(mSamplesProcessed) / sr;
+        double fEnd = mAnchorPtsSec + static_cast<double>(mSamplesProcessed + frameLen) / sr;
+        mSamplesProcessed += frameLen;
+        processFrame(samples + processed, frameLen, fStart, fEnd);
         processed += frameLen;
     }
 
-    // Store remaining samples for next call
+    // Carry trailing partial frame to the next streaming buffer.
     if (processed < sampleCount) {
         mRemainder.assign(samples + processed, samples + sampleCount);
     }
@@ -118,7 +141,13 @@ void SilenceDetector::process(const float* samples, size_t sampleCount, double o
 
 void SilenceDetector::flush(double finalPtsSec) {
     if (!mRemainder.empty()) {
-        processFrame(mRemainder.data(), mRemainder.size(), finalPtsSec);
+        const double sr = mConfig.sampleRate;
+        double fStart = mAnchored
+            ? (mAnchorPtsSec + static_cast<double>(mSamplesProcessed) / sr)
+            : (finalPtsSec >= 0.0 ? finalPtsSec : 0.0);
+        double fEnd = fStart + static_cast<double>(mRemainder.size()) / sr;
+        mSamplesProcessed += mRemainder.size();
+        processFrame(mRemainder.data(), mRemainder.size(), fStart, fEnd);
         mRemainder.clear();
     }
 }

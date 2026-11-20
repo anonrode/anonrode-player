@@ -17,6 +17,7 @@ VoiceBandpassFilter::VoiceBandpassFilter(double sampleRate, double hpCutoff, dou
 }
 
 void VoiceBandpassFilter::reset() {
+    mDecimPhase = 0;
     mHpState.reset();
     mLpState.reset();
 }
@@ -83,25 +84,26 @@ size_t VoiceBandpassFilter::downsampleAndFilter(
     int inSampleRate, int inChannels,
     std::vector<float>& outMono
 ) {
-    if (frameCount == 0 || inChannels <= 0) return 0;
+    if (frameCount == 0 || inChannels <= 0 || inSampleRate <= 0) return 0;
     constexpr double scale = 1.0 / 32768.0;
 
-    // Determine decimation factor to target ~16000 Hz
-    int step = 1;
-    if (inSampleRate >= 44100) {
-        step = 3; // 48000 -> 16000, 44100 -> 14700
-    } else if (inSampleRate >= 32000) {
-        step = 2; // 32000 -> 16000
+    const size_t step = static_cast<size_t>(computeDecimationStep(inSampleRate));
+    if (frameCount <= mDecimPhase) {
+        mDecimPhase -= frameCount;
+        return 0;
     }
 
-    size_t outFrames = frameCount / step;
-    size_t startOffset = outMono.size();
+    const size_t firstF = mDecimPhase;
+    const size_t outFrames = (frameCount - firstF + step - 1) / step;
+    const size_t startOffset = outMono.size();
     outMono.resize(startOffset + outFrames);
     float* outPtr = outMono.data() + startOffset;
 
     size_t outIdx = 0;
-    for (size_t f = 0; f < frameCount; f += step) {
-        const int16_t* framePtr = input + (f * inChannels);
+    size_t lastF = firstF;
+    for (size_t f = firstF; f < frameCount; f += step) {
+        lastF = f;
+        const int16_t* framePtr = input + (f * static_cast<size_t>(inChannels));
         double monoSum = 0.0;
         for (int c = 0; c < inChannels; ++c) {
             monoSum += framePtr[c];
@@ -111,6 +113,7 @@ size_t VoiceBandpassFilter::downsampleAndFilter(
         double bp = mLpState.process(hp, mLpCoeffs);
         outPtr[outIdx++] = static_cast<float>(bp);
     }
+    mDecimPhase = (lastF + step) - frameCount;
     return outIdx;
 }
 
@@ -119,23 +122,25 @@ size_t VoiceBandpassFilter::downsampleAndFilterFloat(
     int inSampleRate, int inChannels,
     std::vector<float>& outMono
 ) {
-    if (frameCount == 0 || inChannels <= 0) return 0;
+    if (frameCount == 0 || inChannels <= 0 || inSampleRate <= 0) return 0;
 
-    int step = 1;
-    if (inSampleRate >= 44100) {
-        step = 3;
-    } else if (inSampleRate >= 32000) {
-        step = 2;
+    const size_t step = static_cast<size_t>(computeDecimationStep(inSampleRate));
+    if (frameCount <= mDecimPhase) {
+        mDecimPhase -= frameCount;
+        return 0;
     }
 
-    size_t outFrames = frameCount / step;
-    size_t startOffset = outMono.size();
+    const size_t firstF = mDecimPhase;
+    const size_t outFrames = (frameCount - firstF + step - 1) / step;
+    const size_t startOffset = outMono.size();
     outMono.resize(startOffset + outFrames);
     float* outPtr = outMono.data() + startOffset;
 
     size_t outIdx = 0;
-    for (size_t f = 0; f < frameCount; f += step) {
-        const float* framePtr = input + (f * inChannels);
+    size_t lastF = firstF;
+    for (size_t f = firstF; f < frameCount; f += step) {
+        lastF = f;
+        const float* framePtr = input + (f * static_cast<size_t>(inChannels));
         double monoSum = 0.0;
         for (int c = 0; c < inChannels; ++c) {
             monoSum += framePtr[c];
@@ -145,6 +150,7 @@ size_t VoiceBandpassFilter::downsampleAndFilterFloat(
         double bp = mLpState.process(hp, mLpCoeffs);
         outPtr[outIdx++] = static_cast<float>(bp);
     }
+    mDecimPhase = (lastF + step) - frameCount;
     return outIdx;
 }
 

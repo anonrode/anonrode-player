@@ -30,7 +30,10 @@ import kotlin.math.floor
  * Input buffers arrive already positioned (offset applied, limit = end of
  * valid data) by the caller; remaining() is the valid byte count.
  */
-class SileroVad(context: Context) : AutoCloseable {
+class SileroVad(
+    context: Context,
+    private val ringCapacity: Int = RING_CAPACITY,
+) : AutoCloseable {
 
     companion object {
         private const val MODEL_ASSET = "silero_vad.onnx"
@@ -43,7 +46,8 @@ class SileroVad(context: Context) : AutoCloseable {
         private const val MIN_SPEECH_MS = 150
         private const val MIN_SILENCE_MS = 100
         private val FRAME_SEC = WINDOW.toDouble() / SR.toDouble() // 0.032
-        private const val RING_CAPACITY = 4000 // 400 seconds of 100ms bins
+        const val RING_CAPACITY = 4000 // 400 seconds of 100ms bins (live path)
+        const val OFFLINE_RING_CAPACITY = 12_000 // 1200 seconds (20 min) for Tier-1 offline decode
 
         fun modelAvailable(context: Context): Boolean = try {
             context.assets.open(MODEL_ASSET).use { true }
@@ -72,10 +76,10 @@ class SileroVad(context: Context) : AutoCloseable {
     private var regionFirstLen = 0
     private val detectedOnsets = ArrayList<Double>()
 
-    // Bounded circular 100ms envelope ring buffer (4000 bins = 400s)
-    private val ringBuffer = FloatArray(RING_CAPACITY)
-    private val envelopeSums = FloatArray(RING_CAPACITY)
-    private val envelopeCounts = IntArray(RING_CAPACITY)
+    // Bounded circular 100ms envelope ring buffer
+    private val ringBuffer = FloatArray(ringCapacity)
+    private val envelopeSums = FloatArray(ringCapacity)
+    private val envelopeCounts = IntArray(ringCapacity)
     private var totalBins = 0
     private var currentEnvIdx = -1
 
@@ -186,11 +190,11 @@ class SileroVad(context: Context) : AutoCloseable {
                         curRunLen = 1
                     }
 
-                    // 2. Incremental 100ms envelope ring buffer (capacity 4000 bins = 400s)
+                    // 2. Incremental 100ms envelope ring buffer
                     val envIdx = (frameIdx * FRAME_SEC / 0.1).toInt()
                     if (envIdx > currentEnvIdx) {
                         for (b in (currentEnvIdx + 1)..envIdx) {
-                            val slot = b % RING_CAPACITY
+                            val slot = b % ringCapacity
                             envelopeSums[slot] = 0f
                             envelopeCounts[slot] = 0
                             ringBuffer[slot] = 0f
@@ -198,7 +202,7 @@ class SileroVad(context: Context) : AutoCloseable {
                         currentEnvIdx = envIdx
                         totalBins = envIdx + 1
                     }
-                    val slot = envIdx % RING_CAPACITY
+                    val slot = envIdx % ringCapacity
                     envelopeSums[slot] += prob
                     envelopeCounts[slot]++
                     ringBuffer[slot] = envelopeSums[slot] / envelopeCounts[slot]
@@ -252,24 +256,33 @@ class SileroVad(context: Context) : AutoCloseable {
 
     /**
      * Resamples the continuous 32ms model probability bins into a 100ms
-     * soft speech envelope (FloatArray) covering the entire analyzed audio (capped at 400s).
+     * soft speech envelope (FloatArray) covering the trailing [ringCapacity] bins.
      */
     fun getSpeechEnvelope(targetBinSec: Double = 0.1): FloatArray {
         val total = totalBins
         if (total == 0) return FloatArray(0)
-        val count = minOf(total, RING_CAPACITY)
+        val count = minOf(total, ringCapacity)
         val out = FloatArray(count)
-        if (total <= RING_CAPACITY) {
+        if (total <= ringCapacity) {
             System.arraycopy(ringBuffer, 0, out, 0, count)
         } else {
-            val start = (total - RING_CAPACITY) % RING_CAPACITY
-            val len1 = RING_CAPACITY - start
+            val start = (total - ringCapacity) % ringCapacity
+            val len1 = ringCapacity - start
             System.arraycopy(ringBuffer, start, out, 0, len1)
             if (start > 0) {
                 System.arraycopy(ringBuffer, 0, out, len1, start)
             }
         }
         return out
+    }
+
+    /**
+     * Exact absolute media time (seconds) corresponding to index 0 of [getSpeechEnvelope].
+     * Accounts for ring-buffer wraparound once playback/decoding exceeds [ringCapacity] bins.
+     */
+    fun envelopeBaseSec(): Double {
+        val droppedBins = maxOf(0, totalBins - ringCapacity)
+        return onsetOffsetSec + droppedBins * 0.1
     }
 
     /** Absolute media time (s) the collected bins cover (call after [finish]). */

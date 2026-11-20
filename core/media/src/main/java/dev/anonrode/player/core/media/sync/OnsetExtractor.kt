@@ -83,6 +83,7 @@ class OnsetExtractor(private val context: Context) {
         val silencedetect: List<Double>,
         val vad: List<Double>,
         val envelope: FloatArray = FloatArray(0),
+        val envelopeBaseSec: Double = 0.0,
     ) {
         /** Union with 50 ms dedup — the fix-1 hybrid source. */
         val hybrid: List<Double> by lazy {
@@ -96,7 +97,7 @@ class OnsetExtractor(private val context: Context) {
 
     /**
      * Extract BOTH onset sources. silencedetect uses the ffmpeg binary
-     * when available (exact reference pipeline), else the Kotlin
+     * when available (exact reference pipeline), else the native/Kotlin
      * equivalent; VAD runs only when the Silero model asset is present.
      * [videoUri] (v0.8 P1-5) is the content:// fallback used for the
      * MediaCodec decode when the path is missing/unreadable.
@@ -129,7 +130,7 @@ class OnsetExtractor(private val context: Context) {
 
         // Single MediaCodec decode pass feeding detectors.
         val silence = SilenceState()
-        val vad = if (vadAvailable) SileroVad(context) else null
+        val vad = if (vadAvailable) SileroVad(context, ringCapacity = SileroVad.OFFLINE_RING_CAPACITY) else null
         // The resumed segment's onset clock must start where the decoder
         // actually begins emitting samples (post-seek pts of the FIRST
         // output buffer), not at the nominal seek target — the detectors
@@ -137,39 +138,40 @@ class OnsetExtractor(private val context: Context) {
         // first callback below.
         var offsetSec = 0.0
         var offsetSet = false
-        decodeAudio(videoPath, videoUri, resumeFromSec, maxMediaDurationSec, isCancelled) { buf, sr, ch, isFloat, ptsUs ->
-            if (isCancelled()) return@decodeAudio false
-            if (!offsetSet) {
-                if (resumeFromSec >= 0.0) {
-                    offsetSec = if (ptsUs > 0L) ptsUs / 1_000_000.0 else resumeFromSec
-                    silence.onsetOffset = offsetSec
-                    vad?.onsetOffsetSec = offsetSec
+        try {
+            decodeAudio(videoPath, videoUri, resumeFromSec, maxMediaDurationSec, isCancelled) { buf, sr, ch, isFloat, ptsUs ->
+                if (isCancelled()) return@decodeAudio false
+                if (!offsetSet) {
+                    if (resumeFromSec >= 0.0) {
+                        offsetSec = if (ptsUs > 0L) ptsUs / 1_000_000.0 else resumeFromSec
+                        silence.onsetOffset = offsetSec
+                        vad?.onsetOffsetSec = offsetSec
+                    }
+                    offsetSet = true
                 }
-                offsetSet = true
+                val bufOffsetSec = if (ptsUs > 0L) ptsUs / 1_000_000.0 else silence.coveredSec()
+                silence.process(buf, sr, ch, isFloat, bufOffsetSec)
+                vad?.processPcm(buf, sr, ch, isFloat)
+                !isCancelled()
             }
-            val bufOffsetSec = if (ptsUs > 0L) ptsUs / 1_000_000.0 else silence.coveredSec()
-            silence.process(buf, sr, ch, isFloat, bufOffsetSec)
-            vad?.processPcm(buf, sr, ch, isFloat)
-            !isCancelled()
-        }
-        val silOnsets = sil ?: silence.finish()
-        val (vadOnsets, vadEnvelope) = if (vad != null) {
-            try {
-                Pair(vad.finish(), vad.getSpeechEnvelope())
-            } finally {
-                vad.close()
+            val silOnsets = sil ?: silence.finish()
+            val (vadOnsets, vadEnvelope, vadEnvBase) = if (vad != null) {
+                Triple(vad.finish(), vad.getSpeechEnvelope(), vad.envelopeBaseSec())
+            } else Triple(emptyList(), FloatArray(0), 0.0)
+            lastCoveredSec = if (vad != null) vad.coveredSec() else silence.coveredSec()
+            if (isCancelled()) {
+                lastDecodeTruncated = true
             }
-        } else Pair(emptyList(), FloatArray(0))
-        lastCoveredSec = if (vad != null) vad.coveredSec() else silence.coveredSec()
-        if (isCancelled()) {
-            lastDecodeTruncated = true
+            return OnsetSources(silOnsets, vadOnsets, vadEnvelope, vadEnvBase)
+        } finally {
+            silence.close()
+            try { vad?.close() } catch (_: Throwable) {}
         }
-        return OnsetSources(silOnsets, vadOnsets, vadEnvelope)
     }
 
     /**
-     * Spot-Sync fast seek probe (<500ms): decodes a short window (default 6s)
-     * at [positionSec] and matches local cues via [SyncFinder.findBestShift].
+     * Spot-Sync fast seek probe: decodes a short dialogue window (default 20s)
+     * at [positionSec] and matches local cues around [activeOffsetSec] ± [radiusSec].
      */
     fun probeSpotSync(
         videoPath: String?,
@@ -177,8 +179,8 @@ class OnsetExtractor(private val context: Context) {
         cues: List<SubtitleCue>,
         positionSec: Double,
         activeOffsetSec: Double = 0.0,
-        probeDurationSec: Double = 6.0,
-        radiusSec: Double = 1.5,
+        probeDurationSec: Double = 20.0,
+        radiusSec: Double = 60.0,
         pcmBuffer: ByteBuffer? = null,
         sampleRate: Int = 0,
         channels: Int = 0,
@@ -187,18 +189,18 @@ class OnsetExtractor(private val context: Context) {
     ): Double? {
         if (cues.isEmpty() || positionSec < 0.0 || (videoPath.isNullOrEmpty() && videoUri == null && pcmBuffer == null)) return null
 
-        val effectiveRadius = radiusSec.coerceAtMost(1.5)
+        val effectiveRadius = radiusSec.coerceIn(1.5, 120.0)
         val startB = activeOffsetSec - effectiveRadius
         val endB = activeOffsetSec + effectiveRadius
 
-        // Require at least 12 candidate dialogue cues (N >= 12) within the probe window under active hypothesis
+        // Require at least 6 candidate dialogue cues within the probe search corridor
         val minCueSec = positionSec - endB - 1.0
         val maxCueSec = (positionSec + probeDurationSec) - startB + 1.0
         val candidateCues = cues.filter { it.start in minCueSec..maxCueSec }
-        if (candidateCues.size < 12) {
+        if (candidateCues.size < 6) {
             AppLog.d(
                 "SPOT_SYNC",
-                "spot probe refused at pos=%.1fs: sparse candidate cues (%d < 12 in probe window)".format(
+                "spot probe refused at pos=%.1fs: sparse candidate cues (%d < 6 in probe window)".format(
                     positionSec,
                     candidateCues.size,
                 ),
@@ -220,6 +222,9 @@ class OnsetExtractor(private val context: Context) {
                     cueStarts = cueStartsArr,
                     cueEnds = cueEndsArr,
                     activeOffsetSec = activeOffsetSec,
+                    searchMinOffsetSec = startB,
+                    searchMaxOffsetSec = endB,
+                    allowSlopeSearch = false,
                 )
                 if (nativeRes != null) {
                     if (nativeRes.locked && abs(nativeRes.offsetSec - activeOffsetSec) <= effectiveRadius) {
@@ -276,10 +281,10 @@ class OnsetExtractor(private val context: Context) {
         val refinedMinCue = minAudio - endB - 1.0
         val refinedMaxCue = maxAudio - startB + 1.0
         val refinedCandidateCues = candidateCues.filter { it.start in refinedMinCue..refinedMaxCue }
-        if (refinedCandidateCues.size < 12) {
+        if (refinedCandidateCues.size < 6) {
             AppLog.d(
                 "SPOT_SYNC",
-                "spot probe refused at pos=%.1fs: sparse refined cues (%d < 12)".format(
+                "spot probe refused at pos=%.1fs: sparse refined cues (%d < 6)".format(
                     positionSec,
                     refinedCandidateCues.size,
                 ),
@@ -299,6 +304,9 @@ class OnsetExtractor(private val context: Context) {
                 cueStarts = cueStartsArr,
                 cueEnds = cueEndsArr,
                 activeOffsetSec = activeOffsetSec,
+                searchMinOffsetSec = startB,
+                searchMaxOffsetSec = endB,
+                allowSlopeSearch = false,
             )
             if (nativeResult != null) {
                 if (nativeResult.locked && abs(nativeResult.offsetSec - activeOffsetSec) <= effectiveRadius) {
@@ -397,11 +405,12 @@ class OnsetExtractor(private val context: Context) {
             bf += 0.02
         }
 
-        // Runner-up check outside +-2.0s
+        // Runner-up check outside exclusion band
+        val exclRadius = if (endB - startB > 4.0) 2.0 else 0.6
         var runner = 0.0
         b = startB
         while (b <= endB + 1e-9) {
-            if (abs(b - bestBeta) > 2.0) {
+            if (abs(b - bestBeta) > exclRadius) {
                 var hits = 0
                 var localCueCount = 0
                 for (s in sortedStarts) {
@@ -451,12 +460,16 @@ class OnsetExtractor(private val context: Context) {
             AppLog.d("ONSET", "ffmpeg path failed, falling back to MediaCodec")
         }
         val silence = SilenceState(maxSeconds)
-        decodeAudio(videoPath, null) { buf, sr, ch, isFloat, ptsUs ->
-            val bufOffsetSec = if (ptsUs > 0L) ptsUs / 1_000_000.0 else silence.coveredSec()
-            silence.process(buf, sr, ch, isFloat, bufOffsetSec)
-            !silence.limitReached
+        try {
+            decodeAudio(videoPath, null) { buf, sr, ch, isFloat, ptsUs ->
+                val bufOffsetSec = if (ptsUs > 0L) ptsUs / 1_000_000.0 else silence.coveredSec()
+                silence.process(buf, sr, ch, isFloat, bufOffsetSec)
+                !silence.limitReached
+            }
+            return silence.finish()
+        } finally {
+            silence.close()
         }
-        return silence.finish()
     }
 
     /** Returns null when ffmpeg failed (bad exit / exec error) so the
@@ -701,10 +714,13 @@ class OnsetExtractor(private val context: Context) {
      * 10ms RMS windows on the mono downmix, onset = silence_end after
      * >= 0.3s below -25dB.
      */
-    private class SilenceState(private val maxSeconds: Double = 0.0) {
+    private class SilenceState(private val maxSeconds: Double = 0.0) : AutoCloseable {
         val onsets = mutableListOf<Double>()
         private var sampleRate = 0
         private var channels = 0
+        private var nativeSession: NativeSyncEngine.OnsetSession? = null
+        private var nativeAttempted = false
+        private var nativeFailed = false
 
         /** v0.8.3: absolute media time the first decoded sample belongs to
          *  (non-zero only on a resumed pass); added to every onset time so
@@ -744,7 +760,7 @@ class OnsetExtractor(private val context: Context) {
             hpX = 0.0
             hpY = 0.0
             lpY = 0.0
-            windowTarget = effectiveRate / 100 // 10ms windows
+            windowTarget = (effectiveRate / 100).coerceAtLeast(1) // 10ms windows
         }
 
         fun process(
@@ -760,21 +776,30 @@ class OnsetExtractor(private val context: Context) {
             val baseLimit = buf.limit()
             val currentOffsetSec = if (offsetSec >= 0.0) offsetSec else (if (sampleRate > 0) onsetOffset + monoSamples.toDouble() / sampleRate else onsetOffset)
 
-            if (NativeSyncEngine.isAvailable() && buf.isDirect) {
-                val nativeOnsets = NativeSyncEngine.extractOnsets(buf, rate, ch, isFloat, currentOffsetSec)
-                if (nativeOnsets != null) {
-                    for (t in nativeOnsets) {
-                        onsets.add(t)
-                    }
+            // Use a SINGLE persistent native streaming session across all MediaCodec buffers
+            // so VoiceBandpassFilter and SilenceDetector maintain continuous filter & silence state.
+            if (!nativeAttempted) {
+                nativeAttempted = true
+                if (NativeSyncEngine.isAvailable() && buf.isDirect) {
+                    nativeSession = NativeSyncEngine.createOnsetSession(rate, ch)
+                }
+            }
+            val session = nativeSession
+            if (session != null && !nativeFailed && buf.isDirect) {
+                val ok = session.feed(buf, isFloat, currentOffsetSec)
+                if (ok) {
                     val bytesPerSample = if (isFloat) 4 else 2
                     val bytesPerFrame = bytesPerSample * channels
-                    val totalBytes = buf.remaining()
-                    val totalFrames = totalBytes / bytesPerFrame
+                    val totalFrames = buf.remaining() / bytesPerFrame
                     val step = if (rate >= 44100) 3 else if (rate >= 32000) 2 else 1
                     monoSamples += (totalFrames / step)
                     buf.position(basePos)
                     buf.limit(baseLimit)
                     return
+                } else {
+                    nativeFailed = true
+                    session.close()
+                    nativeSession = null
                 }
             }
 
@@ -851,10 +876,26 @@ class OnsetExtractor(private val context: Context) {
         }
 
         fun finish(): List<Double> {
+            val session = nativeSession
+            if (session != null && !nativeFailed) {
+                val nativeOut = session.finish()
+                session.close()
+                nativeSession = null
+                if (nativeOut != null) {
+                    val out = nativeOut.asList().sorted()
+                    AppLog.d("ONSET", "native streaming silencedetect: ${out.size} onsets")
+                    return out
+                }
+            }
             if (windowN > 0) flushWindow()
             onsets.sort()
             AppLog.d("ONSET", "silencedetect equivalent: ${onsets.size} onsets")
             return onsets
+        }
+
+        override fun close() {
+            nativeSession?.close()
+            nativeSession = null
         }
 
         /** Absolute media time (s) processed so far (call after [finish]). */

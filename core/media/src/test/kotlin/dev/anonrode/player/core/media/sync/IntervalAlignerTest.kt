@@ -158,6 +158,39 @@ class IntervalAlignerTest {
     }
 
     @Test
+    fun `alignPiecewise emits all 3 segments on a 2-cut episode`() {
+        // Segment 1 (0..600s): beta = 0.0s
+        // Segment 2 (600..1200s): beta = +14.0s
+        // Segment 3 (1200..1800s): beta = -9.5s
+        val onsets = mutableListOf<Double>()
+        val cues = mutableListOf<Double>()
+        var t = 15.0
+        var i = 1
+        while (t < 1780.0) {
+            t += 7.0 + (i * 3.1 % 8.5)
+            val audioT = Math.round(t * 100.0) / 100.0
+            val beta = when {
+                audioT < 600.0 -> 0.0
+                audioT < 1200.0 -> 14.0
+                else -> -9.5
+            }
+            onsets.add(audioT)
+            cues.add(Math.round((audioT - beta) * 100.0) / 100.0)
+            i++
+        }
+
+        val result = IntervalAligner.alignPiecewise(onsets.sorted(), cues.sorted())
+        assertNotNull("Expected multi-cut piecewise alignment", result)
+        assertTrue("Expected hasSplit=true", result!!.hasSplit)
+        val segs = result.piecewise.split(';').filter { it.isNotBlank() }
+        assertTrue(
+            "Expected >= 3 segments in piecewise string, got ${segs.size}: ${result.piecewise}",
+            segs.size >= 3,
+        )
+        assertTrue("Expected high multi-segment recall, got ${result.recall}", result.recall >= 0.80)
+    }
+
+    @Test
     fun `align refuses random noise cues without false locking`() {
         val onsets = (1..50).map { it * 15.0 }
         // Completely unrelated random cue positions

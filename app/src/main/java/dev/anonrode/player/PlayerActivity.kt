@@ -657,19 +657,19 @@ class PlayerActivity : ComponentActivity() {
                     subSyncRunning = false
                     return@post
                 }
-                val currentPosSec = engine.clock.positionMs / 1000.0
-                val liveOffsetSec = engine.subtitleOffsetMs / 1000.0
+                val currentPosSec = engine.player.currentPosition / 1000.0
+                val liveAutoSec = (engine.subtitleOffsetMs - manualNudgeMs) / 1000.0
                 val updated = piecewiseSegments.toMutableList()
                 if (updated.isNotEmpty()) {
                     val idx = updated.indexOfLast { it.first <= currentPosSec }
                     if (idx >= 0) {
-                        updated[idx] = updated[idx].first to liveOffsetSec
+                        updated[idx] = updated[idx].first to liveAutoSec
                     } else {
-                        updated.add(0, 0.0 to liveOffsetSec)
+                        updated.add(0, 0.0 to liveAutoSec)
                     }
                 } else if (currentPosSec > 60.0 && engine.persistedAutoMs != 0L) {
                     updated.add(0.0 to (engine.persistedAutoMs / 1000.0))
-                    updated.add(currentPosSec to liveOffsetSec)
+                    updated.add(currentPosSec to liveAutoSec)
                 }
                 piecewiseSegments = updated.sortedBy { it.first }
                 if (piecewiseSegments.isNotEmpty()) {
@@ -692,18 +692,29 @@ class PlayerActivity : ComponentActivity() {
 
         engine.onLiveSyncTrackingRefined = { offsetSec, speedF ->
             handler.post {
-                liveOffsetMs = (offsetSec * 1000f).roundToLong()
+                liveOffsetMs = (offsetSec * 1000f).roundToLong() + manualNudgeMs
+                if (piecewiseSegments.isNotEmpty() && currentSettings.subtitleAutoSyncEnabled) {
+                    val curPosSec = engine.player.currentPosition / 1000.0
+                    val updated = piecewiseSegments.toMutableList()
+                    val idx = updated.indexOfLast { it.first <= curPosSec }
+                    if (idx >= 0) {
+                        updated[idx] = updated[idx].first to offsetSec.toDouble()
+                        piecewiseSegments = updated
+                    }
+                }
             }
         }
 
         engine.onLiveSyncPiecewiseCut = { posSec, offsetSec ->
             handler.post {
+                if (!currentSettings.subtitleAutoSyncEnabled) return@post
                 val updated = piecewiseSegments.toMutableList()
-                val idx = updated.indexOfLast { abs(it.first - posSec) <= 45.0 }
+                val idx = updated.indexOfLast { it.first > 0.5 && abs(it.first - posSec) <= 45.0 }
                 if (idx >= 0) {
                     updated[idx] = posSec to offsetSec
                 } else {
-                    if (updated.isEmpty() && engine.persistedAutoMs != 0L) {
+                    if (updated.isEmpty()) {
+                        // Preserve segment-0 baseline (even if 0.0s for files synced at 0:00..10:00)
                         updated.add(0.0 to (engine.persistedAutoMs / 1000.0))
                     }
                     updated.add(posSec to offsetSec)
@@ -711,6 +722,7 @@ class PlayerActivity : ComponentActivity() {
                 piecewiseSegments = updated.sortedBy { it.first }
                 val pwStr = piecewiseSegments.joinToString(";") { "%.1f:%.3f".format(java.util.Locale.US, it.first, it.second) }
                 engine.currentPiecewise = pwStr
+                isSyncLocked = true
                 val uri = currentUriStr
                 if (uri != null) {
                     lifecycleScope.launch(Dispatchers.IO) {
@@ -1348,7 +1360,10 @@ class PlayerActivity : ComponentActivity() {
         stateStoreCollectorJob = lifecycleScope.launch {
             app.stateStore.getAsFlow(uri).collect { st ->
                 val s = st ?: return@collect
-                if (s.autoSyncOffsetMs == 0L && s.autoSyncSpeedFactor == 1f) {
+                val hasLockData = s.autoSyncOffsetMs != 0L ||
+                    s.autoSyncSpeedFactor != 1f ||
+                    s.autoSyncPiecewise.isNotBlank()
+                if (!hasLockData) {
                     if (syncAwaitingBackgroundVerdict) {
                         syncAwaitingBackgroundVerdict = false
                         if (s.autoSyncCheckedAtMs != 0L && subSyncRunning) {
@@ -1373,15 +1388,21 @@ class PlayerActivity : ComponentActivity() {
                 withContext(Dispatchers.Main) {
                     if (uri != currentUriStr) return@withContext
                     val engine = AnonrodeApp.get(this@PlayerActivity).engine
-                    engine.applyPersistedLock(s.autoSyncOffsetMs, s.autoSyncSpeedFactor, s.autoSyncPiecewise)
+                    engine.applyPersistedLock(
+                        autoOffsetMs = s.autoSyncOffsetMs,
+                        speedFactor = s.autoSyncSpeedFactor,
+                        piecewise = s.autoSyncPiecewise,
+                        verified = s.autoSyncCheckedAtMs != 0L || hasLockData,
+                    )
                     piecewiseSegments = parsePiecewise(s.autoSyncPiecewise)
-                    isSyncLocked = s.autoSyncOffsetMs != 0L || s.autoSyncCheckedAtMs != 0L || engine.isLiveLocked
+                    isSyncLocked = hasLockData || s.autoSyncCheckedAtMs != 0L || engine.isLiveLocked
                     if (snapOnVerdict) {
-                        val posMs = engine.clock.positionMs
+                        val posMs = engine.player.currentPosition
                         val tRaw = posMs / 1000.0
-                        appliedOffsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
+                        val segAuto = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
                             ?: piecewiseSegments.firstOrNull()?.second
                             ?: (s.autoSyncOffsetMs / 1000.0)
+                        appliedOffsetSec = segAuto + (manualNudgeMs / 1000.0)
                     }
                     subSyncRunning = false
                 }
@@ -1535,7 +1556,8 @@ class PlayerActivity : ComponentActivity() {
                 // Generation guard: a newer openVideo supersedes this one.
                 if (gen != openGeneration) return@launch
                 piecewiseSegments = parsePiecewise(state?.autoSyncPiecewise ?: "")
-                isSyncLocked = currentSettings.subtitleAutoSyncEnabled && (auto != 0L || (state?.autoSyncCheckedAtMs ?: 0L) != 0L)
+                isSyncLocked = currentSettings.subtitleAutoSyncEnabled &&
+                    (auto != 0L || autoSpeed != 1f || piecewiseSegments.isNotEmpty())
 
                 // Policy A (v0.6.2, revised v0.7.1, trust rule v0.8): gate
                 // the background fingerprint on TWO signals.
@@ -1553,7 +1575,10 @@ class PlayerActivity : ComponentActivity() {
                 // Room collector. play() still applies the stored lock at
                 // open so subs are corrected immediately meanwhile.
                 val userToggleOn = currentSettings.subtitleAutoSyncEnabled
-                val hasValidLock = (state?.autoSyncOffsetMs != null && state.autoSyncOffsetMs != 0L)
+                val hasValidLock = state != null && (
+                    state.autoSyncOffsetMs != 0L ||
+                        state.autoSyncPiecewise.isNotBlank()
+                )
                 val alreadyChecked = (state?.autoSyncCheckedAtMs ?: 0L) != 0L
                 val shouldScheduleFingerprint = userToggleOn &&
                     (!alreadyChecked || !hasValidLock) &&
@@ -1745,6 +1770,7 @@ class PlayerActivity : ComponentActivity() {
                 MediaItem.fromUri(pending.uriStr), pending.uriStr, pending.cues,
                 pending.manual, pending.auto, pending.autoSpeed,
                 persistedPiecewise = stored?.autoSyncPiecewise.orEmpty(),
+                persistedChecked = (stored?.autoSyncCheckedAtMs ?: 0L) != 0L,
                 resume = resume,
                 // v0.6.2 sub-sync UX pass: live re-lock is now gated by
                 // [subtitleAutoSyncEnabled] (user toggle, default OFF).
@@ -1859,7 +1885,7 @@ class PlayerActivity : ComponentActivity() {
      * region instead of creating an unplayably tight loop.
      */
     private fun advanceAbRepeat() {
-        val posMs = AnonrodeApp.get(this).engine.clock.positionMs
+        val posMs = AnonrodeApp.get(this).engine.player.currentPosition
         when {
             abStartMs == null -> {
                 abStartMs = posMs
@@ -2208,9 +2234,9 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Resume the subtitle render loop paused in onStop — only when
-        // cues are loaded (PiP kept it running, so nothing to resume).
-        if (!pipMode && lastCues.isNotEmpty()) {
+        // Resume the playback/subtitle render loop paused in onStop
+        // (PiP kept it running, so nothing to resume).
+        if (!pipMode) {
             renderTick?.let { tick ->
                 handler.removeCallbacks(tick)
                 handler.post(tick)
@@ -2321,7 +2347,7 @@ class PlayerActivity : ComponentActivity() {
     /** Jump to previous episode or seek to beginning if past 3 seconds. */
     private fun playPreviousNow() {
         val app = AnonrodeApp.get(this)
-        val pos = app.engine.clock.positionMs
+        val pos = app.engine.player.currentPosition
         if (pos > 3000L) {
             app.engine.player.seekTo(0)
             return
@@ -2385,7 +2411,11 @@ class PlayerActivity : ComponentActivity() {
             override fun run() {
                 val engine = AnonrodeApp.get(this@PlayerActivity).engine
                 val p = engine.player
-                val posMs = engine.clock.positionMs
+                // Main thread: read ExoPlayer's live position directly and refresh the
+                // shared PlaybackClock anchor on every tick so background threads and
+                // subtitle cues never freeze between discrete ExoPlayer state events.
+                val posMs = p.currentPosition
+                engine.clock.update(posMs, p.playbackParameters.speed, p.isPlaying)
                 positionSec = posMs / 1000f
                 durationSec = (p.duration.takeIf { it > 0 } ?: 0L) / 1000f
                 // v0.7.3 buffered track: read every tick, published only
@@ -2401,11 +2431,17 @@ class PlayerActivity : ComponentActivity() {
                 }
                 val tRaw = posMs / 1000.0
                 val spd = engine.subtitleSpeedFactor.coerceAtLeast(0.5f)
-                // Piecewise cut lock: the offset depends on position (each
-                // segment carries its own beta). Scalar lock: one offset.
-                val targetOffsetSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
-                    ?: piecewiseSegments.firstOrNull()?.second
-                    ?: (engine.subtitleOffsetMs / 1000.0)
+                // Piecewise cut lock: the offset depends on position (each segment carries
+                // its own pure auto beta, plus any manual nudge). Scalar lock: engine.subtitleOffsetMs.
+                val targetOffsetSec = if (!currentSettings.subtitleAutoSyncEnabled) {
+                    manualNudgeMs / 1000.0
+                } else if (piecewiseSegments.isNotEmpty()) {
+                    val segAutoSec = piecewiseSegments.lastOrNull { it.first <= tRaw }?.second
+                        ?: piecewiseSegments.first().second
+                    segAutoSec + (manualNudgeMs / 1000.0)
+                } else {
+                    engine.subtitleOffsetMs / 1000.0
+                }
 
                 val nowWallMs = android.os.SystemClock.uptimeMillis()
                 val dtMediaSec = if (lastTRaw.isNaN()) 0.0 else (tRaw - lastTRaw).coerceIn(0.0, 0.200)
@@ -2783,7 +2819,7 @@ class PlayerActivity : ComponentActivity() {
             }
             val checked = (st?.autoSyncCheckedAtMs ?: 0L) != 0L
             val hasLock = st != null &&
-                (st.autoSyncOffsetMs != 0L || st.autoSyncSpeedFactor != 1f)
+                (st.autoSyncOffsetMs != 0L || st.autoSyncSpeedFactor != 1f || st.autoSyncPiecewise.isNotBlank())
             if (checked || hasLock) {
                 AppLog.d("SYNC", "verdict/lock state: checked=$checked lock=$hasLock")
                 if (hasLock) {
@@ -2793,9 +2829,14 @@ class PlayerActivity : ComponentActivity() {
                     handler.post {
                         if (currentSettings.subtitleAutoSyncEnabled && uri == currentUriStr) {
                             val engine = AnonrodeApp.get(this@PlayerActivity).engine
-                            engine.applyPersistedLock(st!!.autoSyncOffsetMs, st.autoSyncSpeedFactor, st.autoSyncPiecewise)
+                            engine.applyPersistedLock(
+                                autoOffsetMs = st!!.autoSyncOffsetMs,
+                                speedFactor = st.autoSyncSpeedFactor,
+                                piecewise = st.autoSyncPiecewise,
+                                verified = checked || hasLock,
+                            )
                             piecewiseSegments = parsePiecewise(st.autoSyncPiecewise)
-                            isSyncLocked = st.autoSyncOffsetMs != 0L || (st.autoSyncCheckedAtMs != 0L)
+                            isSyncLocked = hasLock || checked
                         } else if (!currentSettings.subtitleAutoSyncEnabled && uri == currentUriStr) {
                             isSyncLocked = false
                         }

@@ -21,7 +21,7 @@ object SyncOrchestrator {
             val path: String,
         ) : Model()
 
-        /** Two affine segments split by a cut at [cutSub] (subtitle time). */
+        /** Piecewise affine segments split by one or more cuts. */
         data class Cut(
             val alpha: Double,
             val betaBefore: Double,
@@ -33,6 +33,7 @@ object SyncOrchestrator {
             val recallOne: Double,
             val recallTwo: Double,
             val single: Single?,
+            val piecewiseStorage: String = "",
         ) : Model()
     }
 
@@ -46,9 +47,10 @@ object SyncOrchestrator {
         envelope: FloatArray,
         cues: List<SubtitleCue>,
         onsets: List<Double>,
+        envelopeBaseSec: Double = 0.0,
     ): Model? {
         val singleFromEnvelope = if (envelope.isNotEmpty() && cues.size >= 5) {
-            SpeechCorrelator.findJointSync(envelope, cues)?.let { joint ->
+            SpeechCorrelator.findJointSync(envelope, cues, baseSeconds = envelopeBaseSec)?.let { joint ->
                 AppLog.d(
                     "SYNC_ORCH",
                     "continuous envelope candidate: alpha=${joint.alpha} beta=${joint.beta}s " +
@@ -105,6 +107,7 @@ object SyncOrchestrator {
                     halfOk = true,
                     path = "fft-interval",
                 ),
+                piecewiseStorage = intervalResult.piecewise,
             )
         }
 

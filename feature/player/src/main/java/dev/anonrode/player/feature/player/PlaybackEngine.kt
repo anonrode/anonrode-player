@@ -152,18 +152,26 @@ class PlaybackEngine(
      * is currently watching. Also initializes the live sync processor's baseline
      * so it can continuously track drift and piecewise cuts from that anchor.
      */
-    fun applyPersistedLock(autoOffsetMs: Long, speedFactor: Float, piecewise: String = "") {
-        if (autoOffsetMs == persistedAutoMs && speedFactor == persistedSpeed && (piecewise.isEmpty() || piecewise == currentPiecewise)) return
+    fun applyPersistedLock(
+        autoOffsetMs: Long,
+        speedFactor: Float,
+        piecewise: String = "",
+        verified: Boolean = false,
+    ) {
+        val sameOffset = autoOffsetMs == persistedAutoMs && speedFactor == persistedSpeed
+        val samePw = piecewise.isEmpty() || piecewise == currentPiecewise
+        val shouldArmBaseline = verified || autoOffsetMs != 0L || piecewise.isNotBlank()
+        if (sameOffset && samePw && (!shouldArmBaseline || syncProcessor.isLocked)) return
         persistedAutoMs = autoOffsetMs
         persistedSpeed = speedFactor
         if (piecewise.isNotEmpty()) currentPiecewise = piecewise
         subtitleOffsetMs = autoOffsetMs + manualDelayMs
         subtitleSpeedFactor = speedFactor
         syncProcessor.setEnabled(true)
-        if (autoOffsetMs != 0L) {
-            syncProcessor.setBaselineLock(autoOffsetMs / 1000f, speedFactor)
+        if (shouldArmBaseline) {
+            syncProcessor.setBaselineLock(autoOffsetMs / 1000f, speedFactor, currentPiecewise)
         }
-        AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor piecewise='$piecewise' (tracking armed)")
+        AppLog.d("SYNC", "persisted lock applied live: ${autoOffsetMs}ms x$speedFactor piecewise='$piecewise' (tracking armed=$shouldArmBaseline)")
     }
 
     /**
@@ -173,8 +181,10 @@ class PlaybackEngine(
     fun clearPersistedLock() {
         persistedAutoMs = 0L
         persistedSpeed = 1f
+        currentPiecewise = ""
         subtitleOffsetMs = manualDelayMs
         subtitleSpeedFactor = 1f
+        syncProcessor.clearBaselineLock()
     }
 
     /**
@@ -277,7 +287,11 @@ class PlaybackEngine(
      */
     fun rearmLiveSync() {
         isExplicitResync = true
-        val pos = clock.positionMs
+        val pos = if (Looper.myLooper() == Looper.getMainLooper()) {
+            player.currentPosition
+        } else {
+            clock.positionMs
+        }
         syncProcessor.rearm(pos)
         if (lastSyncCues.isNotEmpty()) {
             syncProcessor.setCues(lastSyncCues)
@@ -314,8 +328,8 @@ class PlaybackEngine(
                 cues = cues,
                 positionSec = posSec,
                 activeOffsetSec = activeOffset,
-                probeDurationSec = 6.0,
-                radiusSec = 1.5,
+                probeDurationSec = 20.0,
+                radiusSec = 45.0,
                 isCancelled = { !isActive },
             )
             if (bestOffsetSec != null && isActive) {
@@ -672,7 +686,15 @@ class PlaybackEngine(
         subtitleSpeedFactor = speedFactor
         val uri = currentUri
         if (uri != null) {
-            scope.launch { onAutoSyncSave(uri, autoMs, speedFactor, currentPiecewise) }
+            val pwToSave = if (autoMs == 0L && speedFactor == 1f && currentPiecewise.isBlank()) {
+                "0.0:0.000"
+            } else {
+                currentPiecewise
+            }
+            if (pwToSave.isNotEmpty() && currentPiecewise.isBlank()) {
+                currentPiecewise = pwToSave
+            }
+            scope.launch { onAutoSyncSave(uri, autoMs, speedFactor, pwToSave) }
         }
         scope.launch(Dispatchers.Main) {
             onLiveSyncLocked?.invoke()
@@ -687,17 +709,20 @@ class PlaybackEngine(
     ) {
         val autoMs = (offsetSeconds * 1000f).toLong()
         if (!isPiecewiseJump) {
-            persistedAutoMs = autoMs
-            persistedSpeed = speedFactor
+            // Preserve segment-0 persistedAutoMs when a multi-segment piecewise curve is active.
+            if (!currentPiecewise.contains(';')) {
+                persistedAutoMs = autoMs
+                persistedSpeed = speedFactor
+            }
             subtitleOffsetMs = autoMs + manualDelayMs
             subtitleSpeedFactor = speedFactor
             scope.launch(Dispatchers.Main) {
                 onLiveSyncTrackingRefined?.invoke(offsetSeconds, speedFactor)
             }
         } else {
-            AppLog.d("SYNC", "piecewise jump detected during continuous playback at t=%.1fs -> %+.2fs".format(positionSec, offsetSeconds))
-            persistedAutoMs = autoMs
-            persistedSpeed = speedFactor
+            // Mid-episode piecewise jump: NEVER overwrite segment-0 persistedAutoMs so
+            // pre-cut playback (0.0 -> cutPos) retains its original baseline offset.
+            AppLog.d("SYNC", "piecewise jump detected during continuous playback at t=%.1fs -> %+.2fs (baseline=%dms preserved)".format(positionSec, offsetSeconds, persistedAutoMs))
             subtitleOffsetMs = autoMs + manualDelayMs
             subtitleSpeedFactor = speedFactor
             scope.launch(Dispatchers.Main) {
@@ -737,6 +762,7 @@ class PlaybackEngine(
         persistedAutoOffsetMs: Long = 0L,
         persistedSpeedFactor: Float = 1f,
         persistedPiecewise: String = "",
+        persistedChecked: Boolean = false,
         resume: Boolean = true,
         syncEnabled: Boolean = true,
         savedPositionMs: Long? = null,
@@ -747,12 +773,20 @@ class PlaybackEngine(
         persistedAutoMs = persistedAutoOffsetMs
         persistedSpeed = persistedSpeedFactor
         currentPiecewise = persistedPiecewise
+        syncProcessor.clearBaselineLock()
         attachSyncProcessor(cues, 0L)
         if (syncEnabled) {
             subtitleOffsetMs = persistedAutoOffsetMs + manualDelayMs
             subtitleSpeedFactor = persistedSpeedFactor
-            if (persistedAutoOffsetMs != 0L) {
-                syncProcessor.setBaselineLock(persistedAutoOffsetMs / 1000f, persistedSpeedFactor)
+            val hasVerifiedLock = persistedAutoOffsetMs != 0L ||
+                persistedSpeedFactor != 1f ||
+                persistedPiecewise.isNotBlank()
+            if (hasVerifiedLock) {
+                syncProcessor.setBaselineLock(
+                    persistedAutoOffsetMs / 1000f,
+                    persistedSpeedFactor,
+                    persistedPiecewise,
+                )
             }
         } else {
             // Auto-sync off: subs render exactly as timed in the file —
@@ -778,7 +812,7 @@ class PlaybackEngine(
         player.seekTo(startPos)
         syncProcessor.setStartPosition(startPos)
         startPositionMs = startPos
-        clock.positionMs = startPos
+        clock.update(startPos, player.playbackParameters.speed, playing = false)
         player.prepare()
         AppLog.d("ENGINE", "calling play()")
         // Bring up the foreground playback service: media session (lock-screen
@@ -796,6 +830,7 @@ class PlaybackEngine(
             AppLog.e("ENGINE", "foreground service start failed; continuing without it", e)
         }
         player.play()
+        clock.update(startPos, player.playbackParameters.speed, playing = true)
         wasPlaying = true
     }
 
@@ -944,7 +979,13 @@ class PlaybackEngine(
     private fun capturePositionSnapshot(): PositionSnapshot? {
         val uri = currentUri ?: return null
         val isOnMain = Looper.myLooper() == Looper.getMainLooper()
-        val pos = if (isOnMain) player.currentPosition else clock.positionMs
+        val pos = if (isOnMain) {
+            val cur = player.currentPosition
+            clock.update(cur, player.playbackParameters.speed, player.isPlaying)
+            cur
+        } else {
+            clock.positionMs
+        }
         // Null (not 0!) when unknown: storing 0 would clobber a previously
         // persisted good duration for this URI.
         val dur = if (isOnMain) player.duration.takeIf { it > 0 && it != C.TIME_UNSET } else null

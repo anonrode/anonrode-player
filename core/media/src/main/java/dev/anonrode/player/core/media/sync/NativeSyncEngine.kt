@@ -5,7 +5,7 @@ import java.nio.ByteBuffer
 
 /**
  * JNI bridge to libanonsync.so: high-performance C++ NEON-vectorized
- * audio bandpass filtering, FFmpeg-style silencedetect, and multi-scale
+ * audio bandpass filtering, streaming silencedetect, and multi-scale
  * cross-correlation.
  */
 object NativeSyncEngine {
@@ -32,6 +32,58 @@ object NativeSyncEngine {
         }
     }
 
+    /**
+     * Persistent native streaming session holding [VoiceBandpassFilter] and
+     * [SilenceDetector] across MediaCodec PCM buffers. Call [feed] per decoded
+     * buffer, [finish] once at EOF, and always [close] in a finally block.
+     */
+    class OnsetSession internal constructor(private var handle: Long) : AutoCloseable {
+        fun feed(pcmBuffer: ByteBuffer, isFloat: Boolean, offsetSec: Double): Boolean {
+            val h = handle
+            if (h == 0L || !pcmBuffer.isDirect) return false
+            return try {
+                nativeFeedOnsetBuffer(h, pcmBuffer, isFloat, offsetSec)
+            } catch (t: Throwable) {
+                AppLog.e("ANONSYNC", "nativeFeedOnsetBuffer threw", t)
+                false
+            }
+        }
+
+        fun finish(): DoubleArray? {
+            val h = handle
+            if (h == 0L) return null
+            return try {
+                nativeFinishOnsetSession(h)
+            } catch (t: Throwable) {
+                AppLog.e("ANONSYNC", "nativeFinishOnsetSession threw", t)
+                null
+            }
+        }
+
+        override fun close() {
+            val h = handle
+            if (h != 0L) {
+                handle = 0L
+                try {
+                    nativeDestroyOnsetSession(h)
+                } catch (t: Throwable) {
+                    AppLog.e("ANONSYNC", "nativeDestroyOnsetSession threw", t)
+                }
+            }
+        }
+    }
+
+    fun createOnsetSession(sampleRate: Int, channels: Int): OnsetSession? {
+        if (!isAvailable() || sampleRate <= 0 || channels <= 0) return null
+        val h = try {
+            nativeCreateOnsetSession(sampleRate, channels)
+        } catch (t: Throwable) {
+            AppLog.e("ANONSYNC", "nativeCreateOnsetSession threw", t)
+            0L
+        }
+        return if (h != 0L) OnsetSession(h) else null
+    }
+
     data class Result(
         val locked: Boolean,
         val offsetSec: Double,
@@ -54,6 +106,9 @@ object NativeSyncEngine {
         cueStarts: DoubleArray,
         cueEnds: DoubleArray = DoubleArray(0),
         activeOffsetSec: Double = 0.0,
+        searchMinOffsetSec: Double = -120.0,
+        searchMaxOffsetSec: Double = 120.0,
+        allowSlopeSearch: Boolean = false,
     ): Result? {
         if (!isAvailable() || !pcmBuffer.isDirect || cueStarts.isEmpty()) {
             return null
@@ -67,6 +122,9 @@ object NativeSyncEngine {
                 cueStarts,
                 cueEnds,
                 activeOffsetSec,
+                searchMinOffsetSec,
+                searchMaxOffsetSec,
+                allowSlopeSearch,
             )
         } catch (t: Throwable) {
             AppLog.e("ANONSYNC", "nativeAlignPcm threw", t)
@@ -95,6 +153,9 @@ object NativeSyncEngine {
         cueStarts: DoubleArray,
         cueEnds: DoubleArray = DoubleArray(0),
         activeOffsetSec: Double = 0.0,
+        searchMinOffsetSec: Double = -120.0,
+        searchMaxOffsetSec: Double = 120.0,
+        allowSlopeSearch: Boolean = false,
     ): Result? {
         if (!isAvailable() || audioOnsets.isEmpty() || cueStarts.isEmpty()) {
             return null
@@ -105,6 +166,9 @@ object NativeSyncEngine {
                 cueStarts,
                 cueEnds,
                 activeOffsetSec,
+                searchMinOffsetSec,
+                searchMaxOffsetSec,
+                allowSlopeSearch,
             )
         } catch (t: Throwable) {
             AppLog.e("ANONSYNC", "nativeCorrelate threw", t)
@@ -163,6 +227,23 @@ object NativeSyncEngine {
     private external fun nativeIsNeonSupported(): Boolean
 
     @JvmStatic
+    private external fun nativeCreateOnsetSession(sampleRate: Int, channels: Int): Long
+
+    @JvmStatic
+    private external fun nativeFeedOnsetBuffer(
+        handle: Long,
+        byteBuffer: ByteBuffer,
+        isFloat: Boolean,
+        offsetSec: Double,
+    ): Boolean
+
+    @JvmStatic
+    private external fun nativeFinishOnsetSession(handle: Long): DoubleArray?
+
+    @JvmStatic
+    private external fun nativeDestroyOnsetSession(handle: Long)
+
+    @JvmStatic
     private external fun nativeAlignPcm(
         byteBuffer: ByteBuffer,
         sampleRate: Int,
@@ -171,6 +252,9 @@ object NativeSyncEngine {
         cueStarts: DoubleArray,
         cueEnds: DoubleArray,
         activeOffsetSec: Double,
+        searchMinOffsetSec: Double,
+        searchMaxOffsetSec: Double,
+        allowSlopeSearch: Boolean,
     ): DoubleArray?
 
     @JvmStatic
@@ -179,6 +263,9 @@ object NativeSyncEngine {
         cueStarts: DoubleArray,
         cueEnds: DoubleArray,
         activeOffsetSec: Double,
+        searchMinOffsetSec: Double,
+        searchMaxOffsetSec: Double,
+        allowSlopeSearch: Boolean,
     ): DoubleArray?
 
     @JvmStatic

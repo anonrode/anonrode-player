@@ -114,6 +114,64 @@ object SpeechCorrelator {
         val halfOk: Boolean,
     )
 
+    data class AlignmentProbe(
+        val speechBins: Int,
+        val overlapCues: Int,
+        val containment: Double,
+        val r: Double,
+    )
+
+    /**
+     * Evaluates direct speech-to-cue overlap (containment) and Pearson r at a specific
+     * applied [offsetSeconds] over `audio[0 until binCount]` starting at [baseSeconds].
+     * Renderer convention: cue covers media time [cue.start + offsetSeconds, cue.end + offsetSeconds].
+     */
+    fun measureAlignmentAt(
+        audio: FloatArray,
+        binCount: Int,
+        cues: List<SubtitleCue>,
+        offsetSeconds: Double,
+        baseSeconds: Double = 0.0,
+    ): AlignmentProbe {
+        val n = minOf(binCount, audio.size)
+        if (n <= 0 || cues.isEmpty()) return AlignmentProbe(0, 0, 0.0, 0.0)
+        val mask = BooleanArray(n)
+        var overlapCues = 0
+        for (cue in cues) {
+            val raw0 = ((cue.start + offsetSeconds - baseSeconds) / ALIGN_BIN).toInt()
+            val raw1 = ((cue.end + offsetSeconds - baseSeconds) / ALIGN_BIN).toInt()
+            if (raw1 < 0 || raw0 >= n) continue
+            overlapCues++
+            val i0 = maxOf(0, raw0)
+            val i1 = minOf(n - 1, raw1)
+            for (i in i0..i1) mask[i] = true
+        }
+        var speechBins = 0
+        var inside = 0
+        var sA = 0.0
+        var sA2 = 0.0
+        var sB = 0.0
+        var sAB = 0.0
+        for (i in 0 until n) {
+            val a = audio[i].toDouble()
+            val b = if (mask[i]) 1.0 else 0.0
+            if (audio[i] > 0.3f) {
+                speechBins++
+                if (mask[i]) inside++
+            }
+            sA += a
+            sA2 += a * a
+            sB += b
+            sAB += a * b
+        }
+        val cont = if (speechBins > 0) inside.toDouble() / speechBins else 0.0
+        val varA = n * sA2 - sA * sA
+        val varB = n * sB - sB * sB
+        val den = sqrt(maxOf(0.0, varA * varB))
+        val r = if (den > 1e-9) (n * sAB - sA * sB) / den else 0.0
+        return AlignmentProbe(speechBins, overlapCues, cont, r)
+    }
+
     /**
      * Outcome of one correlation pass. Carried over from v0.7.4: the
      * caller distinguishes "this window was too thin to judge" (NotReady)
@@ -283,6 +341,7 @@ object SpeechCorrelator {
         audio: FloatArray,
         cues: List<SubtitleCue>,
         maxOffsetSec: Double = MAX_OFFSET_SEC,
+        baseSeconds: Double = 0.0,
     ): JointResult? {
         // Framerate drift (alpha) search requires at least 120s of audio (1200 bins)
         // to reliably distinguish broadcast drift from speech/music noise and cue jitter.
@@ -330,6 +389,7 @@ object SpeechCorrelator {
         for (a in 10410..10435 step 5) alphaCandidates.add(a / 10000.0)
         for (a in 9585..9610 step 5) alphaCandidates.add(a / 10000.0)
 
+        val padBins = (maxOffsetSec / ALIGN_BIN).toInt() + 10
         val lo = -(maxOffsetSec / ALIGN_BIN).toInt()
         val hi = (maxOffsetSec / ALIGN_BIN).toInt()
         val dest = LongArray(words)
@@ -339,12 +399,13 @@ object SpeechCorrelator {
 
         fun buildSubtitleBitmask(alpha: Double): Pair<LongArray, Int> {
             val lastCueSec = cues.last().end
-            val bTotal = maxOf(n, (lastCueSec * alpha / ALIGN_BIN).toInt() + 600)
+            val rawEndBin = ((lastCueSec * alpha - baseSeconds) / ALIGN_BIN).toInt() + 600
+            val bTotal = maxOf(n, rawEndBin) + 2 * padBins
             val bWords = (bTotal + 63) / 64
             val B = LongArray(bWords)
             for (cue in cues) {
-                val i0 = maxOf(0, ((cue.start * alpha) / ALIGN_BIN).toInt())
-                val i1 = minOf(bTotal - 1, ((cue.end * alpha) / ALIGN_BIN).toInt())
+                val i0 = maxOf(0, (((cue.start * alpha - baseSeconds) / ALIGN_BIN) + padBins).toInt())
+                val i1 = minOf(bTotal - 1, (((cue.end * alpha - baseSeconds) / ALIGN_BIN) + padBins).toInt())
                 if (i0 > i1) continue
                 val w0 = i0 shr 6
                 val wEnd = i1 shr 6
@@ -360,7 +421,7 @@ object SpeechCorrelator {
         }
 
         fun evalShift(B: LongArray, bWords: Int, sh: Int): Double {
-            shiftB(B, bWords, dest, words, sh)
+            shiftB(B, bWords, dest, words, sh + padBins)
             if (lastBits != 0) dest[words - 1] = dest[words - 1] and ((1L shl lastBits) - 1)
             var sB = 0
             for (k in 0 until words) sB += java.lang.Long.bitCount(dest[k])
@@ -417,7 +478,7 @@ object SpeechCorrelator {
             val margin = if (secondBest <= -2.0) fineBestR else fineBestR - secondBest
 
             // Cross-half check on the winning trajectory:
-            // audio[i] matched B[i + fineBestShift]
+            // audio[i] matched B[i + fineBestShift + padBins]
             val mid = n / 2
             fun evalHalf(startBin: Int, endBin: Int): Double {
                 val span = endBin - startBin
@@ -432,7 +493,7 @@ object SpeechCorrelator {
 
                 var sB_h = 0.0; var sAB_h = 0.0
                 for (i in startBin until endBin) {
-                    val subIdx = i + fineBestShift
+                    val subIdx = i + fineBestShift + padBins
                     val bv = if (subIdx in 0 until bTotal) {
                         ((B[subIdx shr 6] ushr (subIdx and 63)) and 1L).toDouble()
                     } else 0.0
@@ -449,12 +510,12 @@ object SpeechCorrelator {
             val halfOk = (r1 > 0.02 && r2 > 0.02 && minOf(r1, r2) >= 0.20 * maxOf(r1, r2))
 
             // Subtitle cue speech recall: fraction of cue intervals covering speech
-            // audio_bin = cue_bin - fineBestShift
+            // audio_bin = ((cue_time * alpha - baseSeconds) / ALIGN_BIN) - fineBestShift
             var cueHits = 0
             var eligibleCues = 0
             for (cue in cues) {
-                val aStart = maxOf(0, (((cue.start * bestAlpha) / ALIGN_BIN) - fineBestShift).toInt())
-                val aEnd = minOf(n - 1, (((cue.end * bestAlpha) / ALIGN_BIN) - fineBestShift).toInt())
+                val aStart = maxOf(0, (((cue.start * bestAlpha - baseSeconds) / ALIGN_BIN) - fineBestShift).toInt())
+                val aEnd = minOf(n - 1, (((cue.end * bestAlpha - baseSeconds) / ALIGN_BIN) - fineBestShift).toInt())
                 if (aStart >= n || aEnd < 0 || aStart > aEnd) continue
                 eligibleCues++
                 var hit = false

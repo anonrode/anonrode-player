@@ -36,11 +36,23 @@ public:
     void reset();
     void configure(double sampleRate, double hpCutoff = 300.0, double lpCutoff = 3400.0);
 
+    static inline int computeDecimationStep(int inSampleRate) {
+        if (inSampleRate >= 44100) return 3;
+        if (inSampleRate >= 32000) return 2;
+        return 1;
+    }
+
+    static inline double computeEffectiveSampleRate(int inSampleRate) {
+        int step = computeDecimationStep(inSampleRate);
+        return (inSampleRate > 0) ? (static_cast<double>(inSampleRate) / static_cast<double>(step)) : 16000.0;
+    }
+
     // Process mono buffer in-place or into output buffer
     void process(const float* input, float* output, size_t count);
     void process(const int16_t* input, float* output, size_t count);
 
-    // Downsamples multi-channel audio to 16kHz mono and bandpasses in a single pass
+    // Downsamples multi-channel audio to ~16kHz mono and bandpasses in a single pass.
+    // Preserves decimation phase across streaming calls for zero long-term clock drift.
     size_t downsampleAndFilter(
         const int16_t* input, size_t frameCount,
         int inSampleRate, int inChannels,
@@ -55,6 +67,7 @@ public:
 
 private:
     double mSampleRate{16000.0};
+    size_t mDecimPhase{0};
     BiquadCoeffs mHpCoeffs;
     BiquadCoeffs mLpCoeffs;
     BiquadState mHpState;

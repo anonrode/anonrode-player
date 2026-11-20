@@ -138,6 +138,7 @@ object IntervalAligner {
         if (global.recall < 0.20) return null
 
         // 2. High-precision exact prefix-sum cut evaluation across global candidate peaks (handles short cold opens)
+        var twoPieceCandidate: Alignment? = null
         val beta1 = global.beta
         val beta2 = global.secondPeakLag
         if (global.secondPeakHits >= 3 && abs(beta1 - beta2) >= 1.0) {
@@ -145,8 +146,8 @@ object IntervalAligner {
             if (exactCut != null && exactCut.gain >= 0.05) {
                 val elapsed = System.currentTimeMillis() - t0
                 val pw = "0.0:${exactCut.betaBefore};${exactCut.cutAudioSec}:${exactCut.betaAfter}"
-                AppLog.d(TAG, "exact prefix-sum cut locked: before=${exactCut.betaBefore}s after=${exactCut.betaAfter}s cutAudio=${exactCut.cutAudioSec}s recall=${exactCut.recallTwo} gain=${exactCut.gain} in ${elapsed}ms")
-                return global.copy(
+                AppLog.d(TAG, "exact prefix-sum cut candidate: before=${exactCut.betaBefore}s after=${exactCut.betaAfter}s cutAudio=${exactCut.cutAudioSec}s recall=${exactCut.recallTwo} gain=${exactCut.gain} in ${elapsed}ms")
+                twoPieceCandidate = global.copy(
                     piecewise = pw,
                     cutSubSec = exactCut.cutSubSec,
                     cutAudioSec = exactCut.cutAudioSec,
@@ -160,6 +161,11 @@ object IntervalAligner {
         }
 
         val span = cueStarts.last() - cueStarts.first()
+        // If two-piece already explains >=85% of cues or the span is short (<600s), return it immediately.
+        // Otherwise run multi-window DP so 3+ segment (2+ cut) episodes can recover all cuts.
+        if (twoPieceCandidate != null && (span < 600.0 || twoPieceCandidate.recall >= 0.85)) {
+            return twoPieceCandidate
+        }
         if (span < 600.0) return global // Content too short for multi-window commercial cuts
 
         // 3. Multi-window Dynamic Programming fallback for complex multi-break content
@@ -187,7 +193,7 @@ object IntervalAligner {
         }
 
         if (winResults.size < 3 || candidateOffsets.size < 2) {
-            return global
+            return twoPieceCandidate ?: global
         }
 
         val sortedCands = candidateOffsets.sorted()
@@ -241,62 +247,97 @@ object IntervalAligner {
             path[w - 1] = backtrack[w][path[w]]
         }
 
-        // Check if there is a cut transition
-        var cutWindow = -1
-        val firstCand = sortedCands[path[0]]
+        // Collect ALL cut transitions across the full multi-window DP path (not just the first cut)
+        val sortedOnsets = onsets.sorted()
+        val sortedCues = cueStarts.sorted()
+        val rawTransitions = mutableListOf<Triple<Int, Double, Double>>() // (windowIdx, prevBeta, nextBeta)
+        var activeCand = sortedCands[path[0]]
         for (w in 1 until nW) {
-            if (abs(sortedCands[path[w]] - firstCand) >= 0.5) {
-                cutWindow = w
-                break
+            val nextCand = sortedCands[path[w]]
+            if (abs(nextCand - activeCand) >= 0.5) {
+                rawTransitions.add(Triple(w, activeCand, nextCand))
+                activeCand = nextCand
             }
         }
 
-        if (cutWindow < 0) {
-            return global
+        if (rawTransitions.isEmpty()) {
+            return twoPieceCandidate ?: global
         }
 
-        val betaBefore = firstCand
-        val betaAfter = sortedCands[path[cutWindow]]
-        val cutSubSec = winResults[cutWindow].wStart
-        val cutAudioSec = (cutSubSec + betaBefore).coerceAtLeast(0.0)
+        // Refine each transition boundary to the exact cue-level cut point using local prefix-sum matching
+        val beta0 = sortedCands[path[0]]
+        val subCutBounds = mutableListOf<Pair<Double, Double>>() // (cutSubSec, newBeta)
+        val audioSegments = mutableListOf<Pair<Double, Double>>() // (cutAudioSec, beta)
+        audioSegments.add(0.0 to beta0)
 
-        // Evaluate two-piece recall
-        var hitsBefore = 0
-        var hitsAfter = 0
+        for ((wIdx, prevBeta, nextBeta) in rawTransitions) {
+            val winPrev = winResults[wIdx - 1]
+            val winCurr = winResults[wIdx]
+            val localCues = sortedCues.filter { it in winPrev.wStart..winCurr.wEnd }
+            val fallbackAudio = (winCurr.wStart * global.alpha + prevBeta).coerceAtLeast(0.0)
+            val refinedAudioCut = if (localCues.size >= 4) {
+                SyncFinder.findCutBoundary(
+                    sortedOnsets, localCues, global.alpha, prevBeta, nextBeta, fallbackAudio,
+                ).coerceAtLeast(0.0)
+            } else {
+                fallbackAudio
+            }
+            val refinedSubCut = ((refinedAudioCut - prevBeta) / global.alpha).coerceAtLeast(0.0)
+            // Keep boundaries strictly increasing
+            val lastAudio = audioSegments.last().first
+            val finalAudioCut = if (refinedAudioCut > lastAudio + 1.0) refinedAudioCut else (lastAudio + 1.0)
+            subCutBounds.add(refinedSubCut to nextBeta)
+            audioSegments.add(finalAudioCut to nextBeta)
+        }
+
+        // Evaluate full multi-segment recall across all cues
+        var multiHits = 0
         val tol = 0.35
-        for (c in cueStarts) {
-            val expectedAudio = if (c < cutSubSec) (c * global.alpha + betaBefore) else (c * global.alpha + betaAfter)
-            val idx = onsets.binarySearch(expectedAudio)
+        for (c in sortedCues) {
+            var segBeta = beta0
+            for ((cutSub, bNext) in subCutBounds) {
+                if (c >= cutSub) segBeta = bNext else break
+            }
+            val expectedAudio = c * global.alpha + segBeta
+            val idx = sortedOnsets.binarySearch(expectedAudio)
             val insertion = if (idx >= 0) idx else -idx - 1
             var hit = false
-            for (k in max(0, insertion - 2)..min(onsets.size - 1, insertion + 2)) {
-                if (abs(onsets[k] - expectedAudio) <= tol) {
-                    hit = true; break
+            for (k in max(0, insertion - 2)..min(sortedOnsets.size - 1, insertion + 2)) {
+                if (abs(sortedOnsets[k] - expectedAudio) <= tol) {
+                    hit = true
+                    break
                 }
             }
-            if (hit) {
-                if (c < cutSubSec) hitsBefore++ else hitsAfter++
-            }
+            if (hit) multiHits++
         }
-        val recallTwo = (hitsBefore + hitsAfter).toDouble() / cueStarts.size
+        val recallMulti = multiHits.toDouble() / sortedCues.size
 
-        if (recallTwo >= global.recall + 0.05) {
-            val pw = "0.0:$betaBefore;$cutAudioSec:$betaAfter"
+        val baselineRecall = twoPieceCandidate?.recall ?: global.recall
+        if (recallMulti >= baselineRecall + 0.05) {
+            val pw = audioSegments.joinToString(";") { (startA, beta) ->
+                "%.1f:%.3f".format(java.util.Locale.US, startA, beta)
+            }
+            val firstCutSub = subCutBounds.first().first
+            val firstCutAudio = audioSegments[1].first
+            val lastBeta = audioSegments.last().second
             val elapsed = System.currentTimeMillis() - t0
-            AppLog.d(TAG, "piecewise cut locked: before=${betaBefore}s after=${betaAfter}s cutAudio=${cutAudioSec}s recall=${recallTwo} in ${elapsed}ms")
+            AppLog.d(
+                TAG,
+                "piecewise multi-cut locked (${audioSegments.size} segments): pw=$pw recall=$recallMulti in ${elapsed}ms",
+            )
             return global.copy(
                 piecewise = pw,
-                cutSubSec = cutSubSec,
-                cutAudioSec = cutAudioSec,
-                betaBefore = betaBefore,
-                betaAfter = betaAfter,
-                recall = recallTwo,
+                cutSubSec = firstCutSub,
+                cutAudioSec = firstCutAudio,
+                betaBefore = beta0,
+                betaAfter = lastBeta,
+                recall = recallMulti,
                 hasSplit = true,
                 elapsedMs = elapsed,
             )
         }
 
-        return global
+        return twoPieceCandidate ?: global
     }
 
     /**

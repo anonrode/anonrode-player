@@ -226,6 +226,99 @@ object SyncFinder {
     }
 
     /**
+     * Window-honest 1D shift scan for a single audio chunk [audioStartSec, audioEndSec].
+     * Unlike [findBestShift], [cueStarts] may span the full ±[radius] margin around the chunk;
+     * for every candidate beta, recall is computed strictly over cues that map into
+     * [audioStartSec - 0.5, audioEndSec + 0.5], requiring at least [minLocalCues] mapped cues
+     * so out-of-window cues neither dilute recall nor let sparse edge matches spoof a peak.
+     */
+    fun findBestShiftInWindow(
+        onsets: List<Double>,
+        cueStarts: List<Double>,
+        alpha: Double,
+        audioStartSec: Double,
+        audioEndSec: Double,
+        centerBeta: Double = 0.0,
+        radius: Double = 150.0,
+        step: Double = 0.25,
+        window: Double = WINDOW_FINE,
+        minLocalCues: Int = 8,
+    ): ShiftCandidate {
+        if (onsets.isEmpty() || cueStarts.isEmpty()) {
+            return ShiftCandidate(centerBeta, 0.0, 0.0, 0.0)
+        }
+        val sortedOnsets = onsets.sorted()
+        val sortedStarts = cueStarts.sorted()
+        val loA = audioStartSec - 0.5
+        val hiA = audioEndSec + 0.5
+
+        fun evalLocal(beta: Double): Double {
+            val minSub = (loA - beta) / alpha
+            val maxSub = (hiA - beta) / alpha
+            val startIdx = lowerBound(sortedStarts, minSub)
+            var local = 0
+            var hits = 0
+            var i = startIdx
+            while (i < sortedStarts.size && sortedStarts[i] <= maxSub) {
+                val t = alpha * sortedStarts[i] + beta
+                local++
+                val k = lowerBound(sortedOnsets, t)
+                if ((k > 0 && abs(sortedOnsets[k - 1] - t) <= window) ||
+                    (k < sortedOnsets.size && abs(sortedOnsets[k] - t) <= window)) {
+                    hits++
+                }
+                i++
+            }
+            return if (local >= minLocalCues) hits.toDouble() / local else 0.0
+        }
+
+        var bestBeta = centerBeta
+        var bestRecall = 0.0
+        val startB = centerBeta - radius
+        val endB = centerBeta + radius
+
+        var b = startB
+        while (b <= endB + 1e-9) {
+            val r = evalLocal(b)
+            if (r > bestRecall) {
+                bestRecall = r
+                bestBeta = b
+            }
+            b += step
+        }
+
+        var bf = bestBeta - step
+        val fineEnd = bestBeta + step
+        while (bf <= fineEnd + 1e-9) {
+            val r = evalLocal(bf)
+            if (r > bestRecall) {
+                bestRecall = r
+                bestBeta = bf
+            }
+            bf += 0.02
+        }
+
+        var runner = 0.0
+        b = startB
+        while (b <= endB + 1e-9) {
+            if (abs(b - bestBeta) > 2.0) {
+                val r = evalLocal(b)
+                if (r > runner) runner = r
+            }
+            b += step
+        }
+
+        val minSubBest = (loA - bestBeta) / alpha
+        val maxSubBest = (hiA - bestBeta) / alpha
+        val localBestCues = sortedStarts.filter { it in minSubBest..maxSubBest }
+        val cont = if (localBestCues.size >= minLocalCues) {
+            containment(sortedOnsets, localBestCues, alpha, bestBeta, WINDOW)
+        } else 0.0
+
+        return ShiftCandidate(bestBeta, bestRecall, bestRecall - runner, cont)
+    }
+
+    /**
      * Partitions chunk cues to find the exact boundary where the timing shift occurred.
      */
     fun findCutBoundary(

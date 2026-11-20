@@ -45,6 +45,11 @@ internal class LiveVad private constructor(
     private val vad: SileroVad,
 ) : AutoCloseable {
 
+    data class EnvelopeSnapshot(
+        val bins: FloatArray,
+        val baseSeconds: Double,
+    )
+
     private val lock = Object()
     private val pending = ByteArray(PENDING_BYTES)
     private var pendingLen = 0
@@ -53,7 +58,7 @@ internal class LiveVad private constructor(
     private val closed = AtomicBoolean(false)
     private val worker = AtomicReference<Thread?>(null)
 
-    @Volatile private var envelope = FloatArray(0)
+    @Volatile private var latestSnapshot: EnvelopeSnapshot? = null
     @Volatile private var envelopeBins = 0
     @Volatile private var formatRate = 0
     @Volatile private var formatChannels = 0
@@ -188,17 +193,21 @@ internal class LiveVad private constructor(
     private fun publish() {
         val raw = vad.getSpeechEnvelope()
         if (raw.isEmpty()) return
+        val vadBase = vad.envelopeBaseSec()
         // Keep the TAIL: the newest bins are what the correlator needs.
         val take = if (raw.size <= ENVELOPE_BINS) raw.size else ENVELOPE_BINS
         val from = raw.size - take
         val out = FloatArray(take)
         System.arraycopy(raw, from, out, 0, take)
-        envelope = out
+        latestSnapshot = EnvelopeSnapshot(
+            bins = out,
+            baseSeconds = vadBase + from * 0.1,
+        )
         envelopeBins = take
     }
 
-    /** The published 100 ms speech probabilities, or null before first output. */
-    fun snapshot(): FloatArray? = if (envelopeBins > 0) envelope else null
+    /** The published 100 ms speech probabilities with exact media base timestamp, or null before first output. */
+    fun snapshot(): EnvelopeSnapshot? = if (envelopeBins > 0) latestSnapshot else null
 
     /**
      * Re-anchors to a new media position and discards accumulated audio.
@@ -208,18 +217,18 @@ internal class LiveVad private constructor(
      * stretch of the timeline. Also called on a cue-track change, because a
      * fresh track is a fresh matching problem.
      */
-    fun reanchor() {
+    fun reanchor(anchorSec: Double = 0.0) {
         synchronized(lock) {
             pendingLen = 0
             pendingDropped = 0L
         }
         synchronized(vadLock) {
             try {
-                vad.reset()
+                vad.reset(newOnsetOffsetSec = anchorSec.coerceAtLeast(0.0))
             } catch (t: Throwable) {
                 AppLog.e(TAG, "reset failed", t)
             }
-            envelope = FloatArray(0)
+            latestSnapshot = null
             envelopeBins = 0
         }
     }

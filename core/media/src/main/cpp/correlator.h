@@ -31,6 +31,7 @@ struct AlignerConfig {
     double minRecall{0.60};           // confidence gate
     double minMargin{0.08};           // runner-up separation gate
     int minHits{3};                   // minimum agreeing hits
+    bool allowSlopeSearch{false};     // only enable PAL slopes on long (>=120s) windows
 };
 
 class MultiScaleAligner {

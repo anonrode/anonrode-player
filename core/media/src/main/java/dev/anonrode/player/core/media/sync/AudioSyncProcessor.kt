@@ -99,6 +99,18 @@ class AudioSyncProcessor(
     @Volatile private var lastTrackingEvalPosMs = 0L
     @Volatile private var trackingCandidateOffset = Double.NaN
     @Volatile private var trackingCandidateHits = 0
+    @Volatile private var trackingDesyncStreak = 0
+    @Volatile private var trackingDesyncStartSec = Double.NaN
+
+    // Verified baseline lock persisted across configure() and seeks so continuous
+    // tracking stays armed on every seek (including 0ms in-sync baselines).
+    @Volatile private var hasBaselineLock = false
+    @Volatile private var baselineOffsetSec = 0.0
+    @Volatile private var baselineSpeed = 1.0f
+    @Volatile private var baselinePiecewise: List<Pair<Double, Double>> = emptyList()
+
+    // Worker-thread reusable tail buffer for continuous tracking (avoids per-eval allocation).
+    private val trackingTailBuf = FloatArray(TRACKING_TAIL_BINS)
 
 
 
@@ -172,24 +184,32 @@ class AudioSyncProcessor(
         // [setEnabled]: each redundant push zeroed [passesUsed] while a large
         // [binCount] was already banked. SubtitleCue is a data class, so this
         // is a structural list comparison (~2 µs for 800-odd cues).
+        val prevNonEmpty = this.cues.isNotEmpty()
         val changed = this.cues != cues
         this.cues = cues
         if (cues.isNotEmpty() && changed) {
-            liveVad?.reanchor()
-            // A fresh subtitle track is a fresh matching problem: re-arm the
-            // attempt budget so a track attached after a previous give-up
-            // still gets its chance (a seek/episode switch would re-arm via
-            // the position reset anyway). Gated on [enabled] so the user
-            // toggle's OFF state keeps the processor dormant even after a
-            // track switch.
+            if (prevNonEmpty) {
+                // Switching from one loaded track to a genuinely different track invalidates
+                // the previous track's baseline lock. Deferring the FIRST cue attachment
+                // (empty -> cues, ~200ms after play()) preserves the persisted baseline lock.
+                clearBaselineLock()
+                val curSec = if (sampleRate > 0) (startPositionMs + totalFrames * 1000L / sampleRate) / 1000.0 else startPositionMs / 1000.0
+                liveVad?.reanchor(curSec)
+            }
             if (enabled) {
-                passesUsed = 0
-                gaveUp = false
+                if (!hasBaselineLock) {
+                    passesUsed = 0
+                    gaveUp = false
+                    locked = false
+                    trackingMode = false
+                }
             } else {
                 // Stay dormant — but DO clear a stale lock so a future flip
                 // back to ON begins from a clean slate, not a previously
                 // locked state.
+                clearBaselineLock()
                 locked = false
+                trackingMode = false
             }
             // P2-1 mirror of configure()'s handoff: cues usually attach
             // ~200 ms AFTER the sink configured (deferred sidecar parse),
@@ -221,11 +241,13 @@ class AudioSyncProcessor(
             // Forced give-up so we stop spending CPU on a user-disabled
             // feature; a later re-arm via setCues(true) clears gaveUp.
             gaveUp = true
+            clearBaselineLock()
             // P1-6: "turn sync off" must un-apply the lock too. A stale
             // `locked` short-circuits analyze() forever, so a later OFF→ON
             // flip stayed dead until the next seek even though the budget
             // re-armed (the gaveUp branch below was unreachable-by-effect).
             locked = false
+            trackingMode = false
         } else if (!wasEnabled) {
             // Re-arm on a GENUINE OFF→ON flip only: keeps already-accumulated
             // bins and resumes evaluation at the next eval slot.
@@ -266,6 +288,7 @@ class AudioSyncProcessor(
      * allowing the engine to start a fresh calibration pass immediately.
      */
     fun rearm(positionMs: Long = -1L) {
+        clearBaselineLock()
         passesUsed = 0
         gaveUp = false
         locked = false
@@ -275,11 +298,13 @@ class AudioSyncProcessor(
         lastTrackingEvalPosMs = 0L
         trackingCandidateOffset = Double.NaN
         trackingCandidateHits = 0
+        trackingDesyncStreak = 0
+        trackingDesyncStartSec = Double.NaN
         stableHits = 0
         lastOffset = Double.NaN
         generation++
         driftTracker.reset()
-        liveVad?.reanchor()
+        liveVad?.reanchor(if (positionMs >= 0L) positionMs / 1000.0 else 0.0)
         if (positionMs >= 0L) {
             pendingResetPosition = positionMs
         }
@@ -289,18 +314,60 @@ class AudioSyncProcessor(
     /**
      * Seeds the processor with a verified baseline lock (e.g. from background fingerprinting
      * or stored database state) and immediately arms continuous tracking mode.
+     * Survives [configure] and post-seek [resetWindow] until cleared by [rearm],
+     * [clearBaselineLock], a cue-track change, or turning auto-sync off.
      */
-    fun setBaselineLock(offsetSeconds: Float, speedFactor: Float) {
+    fun setBaselineLock(offsetSeconds: Float, speedFactor: Float, piecewise: String = "") {
+        val parsedPw = parsePiecewise(piecewise)
+        hasBaselineLock = true
+        baselineOffsetSec = offsetSeconds.toDouble()
+        baselineSpeed = speedFactor
+        baselinePiecewise = parsedPw
+        val curPosSec = if (sampleRate > 0) {
+            (startPositionMs + totalFrames * 1000L / sampleRate) / 1000.0
+        } else {
+            startPositionMs / 1000.0
+        }
+        val activeAtPos = resolveBaselineOffsetAt(curPosSec)
         locked = true
         trackingMode = true
-        activeOffsetSeconds = offsetSeconds.toDouble()
+        activeOffsetSeconds = activeAtPos
         trackingCandidateOffset = Double.NaN
         trackingCandidateHits = 0
+        trackingDesyncStreak = 0
+        trackingDesyncStartSec = Double.NaN
         lastTrackingEvalWallMs = System.currentTimeMillis()
-        lastTrackingEvalPosMs = 0L
+        lastTrackingEvalPosMs = (curPosSec * 1000.0).toLong().coerceAtLeast(0L)
         driftTracker.reset()
-        driftTracker.add(0.0, offsetSeconds.toDouble())
-        AppLog.d("SYNC", "initialized live baseline lock to ${offsetSeconds}s (tracking armed)")
+        driftTracker.add(curPosSec, activeAtPos)
+        AppLog.d("SYNC", "initialized live baseline lock to ${activeAtPos}s (pw=${parsedPw.size} segs, tracking armed)")
+    }
+
+    fun clearBaselineLock() {
+        hasBaselineLock = false
+        baselineOffsetSec = 0.0
+        baselineSpeed = 1.0f
+        baselinePiecewise = emptyList()
+    }
+
+    private fun resolveBaselineOffsetAt(posSec: Double): Double {
+        val segs = baselinePiecewise
+        if (segs.isNotEmpty()) {
+            return segs.lastOrNull { it.first <= posSec }?.second
+                ?: segs.first().second
+        }
+        return baselineOffsetSec
+    }
+
+    private fun parsePiecewise(storage: String): List<Pair<Double, Double>> {
+        if (storage.isBlank()) return emptyList()
+        return storage.split(';').mapNotNull { seg ->
+            val parts = seg.split(':')
+            if (parts.size != 2) return@mapNotNull null
+            val s = parts[0].toDoubleOrNull() ?: return@mapNotNull null
+            val b = parts[1].toDoubleOrNull() ?: return@mapNotNull null
+            s to b
+        }.sortedBy { it.first }
     }
 
     /**
@@ -341,7 +408,6 @@ class AudioSyncProcessor(
         pendingResetPosition = null
         startPositionMs = reset
         resetWindow(anchorPosMs = reset)
-        locked = false
     }
 
     override fun configure(fmt: AudioFormat): AudioFormat {
@@ -454,22 +520,23 @@ class AudioSyncProcessor(
     }
 
     override fun reset() {
+        clearBaselineLock()
         flush()
         cues = emptyList()
         active = false
         configured = false
-        liveVad?.reanchor()
+        liveVad?.reanchor(0.0)
         // The worker thread is deliberately kept alive: the processor is
         // reused across player rebuilds (reset() then configure() again).
     }
 
     private fun resetAll() {
-        resetWindow()
-        locked = false
+        resetWindow(anchorPosMs = startPositionMs)
     }
 
     private fun resetWindow(anchorPosMs: Long = -1L) {
-        liveVad?.reanchor()
+        val effectiveAnchorMs = if (anchorPosMs >= 0L) anchorPosMs else 0L
+        liveVad?.reanchor(effectiveAnchorMs / 1000.0)
         java.util.Arrays.fill(audioBins, 0f)
         // v0.8.2: anchor the bin grid AT the new position. With baseIdx=0
         // the first bin after a seek to media position P lands at
@@ -490,18 +557,32 @@ class AudioSyncProcessor(
         java.util.Arrays.fill(bpY2, 0f)
         stableHits = 0; lastOffset = Double.NaN
         passesUsed = 0; gaveUp = false
-        trackingMode = false
-        activeOffsetSeconds = Double.NaN
-        lastTrackingEvalWallMs = 0L
-        lastTrackingEvalPosMs = 0L
         trackingCandidateOffset = Double.NaN
         trackingCandidateHits = 0
+        trackingDesyncStreak = 0
+        trackingDesyncStartSec = Double.NaN
         // P1-4: a fresh window must also drop the drift history. Without
         // this the six points a post-seek / episode-switch lock fits can
         // straddle the boundary; the resulting fake span clears
         // MIN_DRIFT_SPAN_SEC, the fit is clamped to ±2.5 %, and a ~9 s/min
         // subtitle-speed error gets persisted as if it were measured.
         driftTracker.reset()
+        if (hasBaselineLock && enabled) {
+            val anchorSec = effectiveAnchorMs / 1000.0
+            val activeAtPos = resolveBaselineOffsetAt(anchorSec)
+            locked = true
+            trackingMode = true
+            activeOffsetSeconds = activeAtPos
+            lastTrackingEvalWallMs = System.currentTimeMillis()
+            lastTrackingEvalPosMs = effectiveAnchorMs
+            driftTracker.add(anchorSec, activeAtPos)
+        } else {
+            locked = false
+            trackingMode = false
+            activeOffsetSeconds = Double.NaN
+            lastTrackingEvalWallMs = 0L
+            lastTrackingEvalPosMs = 0L
+        }
         generation++ // invalidate any in-flight evaluation
     }
 
@@ -631,15 +712,17 @@ class AudioSyncProcessor(
 
 
 
-        // If already locked and in tracking mode: schedule periodic drift checks
-        // at low overhead (cadence of 25s wall-clock, or 6s to confirm a suspected piecewise cut)
+        // If already locked and in tracking mode: schedule periodic drift & cut checks
+        // at low overhead (25s normal cadence, or 10s when confirming a suspected desync/cut)
         if (trackingMode && cues.isNotEmpty() && enabled) {
             val now = System.currentTimeMillis()
             if (lastTrackingEvalWallMs == 0L) {
                 lastTrackingEvalWallMs = now
                 lastTrackingEvalPosMs = posMs
             }
-            val requiredIntervalMs = if (!trackingCandidateOffset.isNaN() && trackingCandidateHits == 1) {
+            val fastConfirm = (!trackingCandidateOffset.isNaN() && trackingCandidateHits >= 1) ||
+                trackingDesyncStreak >= 1
+            val requiredIntervalMs = if (fastConfirm) {
                 TRACKING_CONFIRM_INTERVAL_MS
             } else {
                 TRACKING_CADENCE_INTERVAL_MS
@@ -647,9 +730,10 @@ class AudioSyncProcessor(
             val wallElapsed = now - lastTrackingEvalWallMs
             val posElapsed = posMs - lastTrackingEvalPosMs
             if (wallElapsed >= requiredIntervalMs || posElapsed >= requiredIntervalMs) {
-                lastTrackingEvalWallMs = now
-                lastTrackingEvalPosMs = posMs
-                scheduleEvaluate(posMs)
+                if (scheduleEvaluate(posMs)) {
+                    lastTrackingEvalWallMs = now
+                    lastTrackingEvalPosMs = posMs
+                }
             }
             return
         }
@@ -688,19 +772,21 @@ class AudioSyncProcessor(
      * background worker. Uses the neural LiveVad envelope when available
      * and warm, with the energy envelope as zero-dependency fallback.
      */
-    private fun scheduleEvaluate(posMs: Long) {
+    private fun scheduleEvaluate(posMs: Long): Boolean {
         val vad = liveVad
-        val vadSnapshot = if (vad != null && !vad.isWarming) vad.snapshot() else null
-        if (vadSnapshot != null && vadSnapshot.size >= SpeechCorrelator.ELIGIBLE_BINS) {
-            val count = minOf(binCount, vadSnapshot.size)
+        val vadSnap = if (vad != null && !vad.isWarming) vad.snapshot() else null
+        return if (vadSnap != null && vadSnap.bins.size >= SpeechCorrelator.ELIGIBLE_BINS) {
+            val count = minOf(vadSnap.bins.size, BIN_WINDOW)
+            val fromIdx = vadSnap.bins.size - count
+            val snapBaseSec = vadSnap.baseSeconds + fromIdx * SpeechCorrelator.ALIGN_BIN
             worker.submit(
                 binCount = count,
-                baseSeconds = baseIdx * SpeechCorrelator.ALIGN_BIN,
+                baseSeconds = snapBaseSec,
                 cues = cues,
                 posMs = posMs,
                 generation = generation,
             ) { snapshot ->
-                System.arraycopy(vadSnapshot, 0, snapshot, 0, count)
+                System.arraycopy(vadSnap.bins, fromIdx, snapshot, 0, count)
             }
         } else {
             worker.submit(
@@ -790,9 +876,14 @@ class AudioSyncProcessor(
         if (stableHits >= requiredHits) {
             locked = true
             trackingMode = true
+            hasBaselineLock = true
+            baselineOffsetSec = baseOffset
+            baselineSpeed = speedF
             activeOffsetSeconds = baseOffset
             trackingCandidateOffset = Double.NaN
             trackingCandidateHits = 0
+            trackingDesyncStreak = 0
+            trackingDesyncStartSec = Double.NaN
             lastTrackingEvalWallMs = System.currentTimeMillis()
             lastTrackingEvalPosMs = req.posMs
             listener.onSyncLocked(baseOffset.toFloat(), speedF)
@@ -802,113 +893,241 @@ class AudioSyncProcessor(
     }
 
     /**
-     * Continuous background tracking: runs periodically during playback
-     * to monitor subtitle drift and automatically detect commercial cut jumps.
+     * Continuous background tracking: runs periodically during playback on the
+     * recent sliding tail (90 s) in two stages:
+     *   - Stage A (Local Leash ±6.0 s so EXCLUSION_BINS=3.5 s enforces a genuine
+     *     runner-up prominence floor): accepts ONLY smooth drift (|delta| <= 0.80 s).
+     *   - Stage B (Wide Cut-Recovery ±90 s): escalates after >= 90 s playback and
+     *     >= 50 s tail when >= 2 consecutive checks confirm Pearson r at active
+     *     offset has collapsed (< 0.10) on speech, requiring 2 consecutive agreeing
+     *     full-gate wide passes (margin >= 0.10) before committing a piecewise cut.
      */
     private fun evaluateTracking(req: SyncAnalysisWorker.Request) {
+        if (req.binCount < SpeechCorrelator.ELIGIBLE_BINS) return
+
         // Barrage / wall-of-sound check on recent audio (last 20s / 200 bins):
         // If energy is a continuous wall of sound without natural speech pauses,
-        // freeze tracking to avoid false slew from theme songs or battles!
-        if (req.binCount >= 100) {
-            val checkBins = minOf(200, req.binCount)
-            var sumEnergy = 0.0
-            var minEnergy = 1.0f
-            val startBin = req.binCount - checkBins
-            for (i in startBin until req.binCount) {
-                val v = req.bins[i]
-                sumEnergy += v
-                if (v < minEnergy) minEnergy = v
-            }
-            val meanEnergy = sumEnergy / checkBins
-            if (meanEnergy >= 0.40 && minEnergy >= 0.15) {
-                AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s skipped: continuous barrage / music wall (mean=$meanEnergy min=$minEnergy)")
-                return
-            }
+        // freeze tracking to avoid false slew or false cuts from theme songs or battles.
+        val checkBins = minOf(200, req.binCount)
+        var sumEnergy = 0.0
+        var minEnergy = 1.0f
+        val startBin = req.binCount - checkBins
+        for (i in startBin until req.binCount) {
+            val v = req.bins[i]
+            sumEnergy += v
+            if (v < minEnergy) minEnergy = v
         }
+        val meanEnergy = sumEnergy / checkBins
+        if (meanEnergy >= 0.40 && minEnergy >= 0.15) {
+            AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s skipped: continuous barrage / music wall (mean=$meanEnergy min=$minEnergy)")
+            return
+        }
+
         val active = activeOffsetSeconds
         if (active.isNaN()) {
             AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s skipped: activeOffsetSeconds is NaN")
             return
         }
 
-        // Local Leash: Constrain search to maxOffsetSec = 1.5s around activeOffsetSeconds.
-        // By shifting baseSeconds by -active, findOffset searches the local drift window
-        // [active - 1.5s, active + 1.5s], strictly preventing unconstrained searches (e.g. ±120s)
-        // that hallucinated distant spurious peaks (such as the 68.0s jump in House of the Dragon).
-        val outcome = SpeechCorrelator.findOffset(
-            audio = req.bins,
-            binCount = req.binCount,
+        // Slice the recent 90s sliding tail so minutes of pre-cut history cannot drown
+        // out fresh post-cut dialogue when a mid-episode commercial/recap jump happens.
+        val tailLen = minOf(req.binCount, TRACKING_TAIL_BINS)
+        val tailStart = req.binCount - tailLen
+        val tailBaseSec = req.baseSeconds + tailStart * SpeechCorrelator.ALIGN_BIN
+        System.arraycopy(req.bins, tailStart, trackingTailBuf, 0, tailLen)
+
+        // Stage A: Local Leash (±6.0s around activeOffsetSeconds so EXCLUSION_BINS=3.5s
+        // has a genuine runner-up background floor). Smooth drift only (|delta| <= 0.80s).
+        val localOutcome = SpeechCorrelator.findOffset(
+            audio = trackingTailBuf,
+            binCount = tailLen,
             cues = req.cues,
-            maxOffsetSec = LOCAL_LEASH_RADIUS_SEC,
-            baseSeconds = req.baseSeconds - active,
+            maxOffsetSec = LOCAL_LEASH_SEARCH_SEC,
+            baseSeconds = tailBaseSec - active,
         )
-        val rawResult = when (outcome) {
+
+        if (req.generation != generation) return
+
+        when (localOutcome) {
             is SpeechCorrelator.Outcome.NotReady -> {
                 AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s: not ready (sparse speech)")
                 return
             }
-            is SpeechCorrelator.Outcome.NoMatch -> {
-                AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s: gates refused")
-                return
+            is SpeechCorrelator.Outcome.Match -> {
+                val rawResult = localOutcome.result
+                val measuredOffset = active + rawResult.offsetSeconds
+                val delta = abs(measuredOffset - active)
+                if (delta <= 0.80) {
+                    trackingDesyncStreak = 0
+                    trackingDesyncStartSec = Double.NaN
+                    trackingCandidateOffset = Double.NaN
+                    trackingCandidateHits = 0
+                    AppLog.d(
+                        "SYNC",
+                        "tracking eval t=${req.posMs / 1000}s: measured off=${measuredOffset}s active=${active}s delta=${delta}s cont=${rawResult.containment} margin=${rawResult.margin}",
+                    )
+                    if (rawResult.containment >= 0.65 && rawResult.margin >= 0.10) {
+                        driftTracker.add(req.posMs / 1000.0, measuredOffset)
+                        val (baseOffset, speedF) = driftTracker.getCorrection()
+                        activeOffsetSeconds = baseOffset
+                        listener.onSyncTrackingUpdate(
+                            positionSec = req.posMs / 1000.0,
+                            offsetSeconds = baseOffset.toFloat(),
+                            speedFactor = speedF,
+                            isPiecewiseJump = false,
+                        )
+                    }
+                    return
+                }
+                // Peak inside ±6s is >0.80s away: do NOT commit from narrow leash; fall through
+                // to the desync check + Stage B ±90s wide search so any cut beats the full ±90s landscape.
             }
-            is SpeechCorrelator.Outcome.Match -> outcome.result
+            is SpeechCorrelator.Outcome.NoMatch -> {
+                // Local leash refused: verify whether active alignment has genuinely broken.
+            }
         }
 
+        // Cold-open / short-tail guard: never escalate to wide cut recovery during opening 90s
+        // or before at least 50s (500 bins) of recent audio is available.
+        if (req.posMs < TRACKING_MIN_CUT_POS_MS || tailLen < TRACKING_MIN_WIDE_TAIL_BINS) {
+            return
+        }
+
+        // Verify direct alignment at `active` on the recent tail.
+        val probe = SpeechCorrelator.measureAlignmentAt(
+            audio = trackingTailBuf,
+            binCount = tailLen,
+            cues = req.cues,
+            offsetSeconds = active,
+            baseSeconds = tailBaseSec,
+        )
+        val tailEndSec = tailBaseSec + tailLen * SpeechCorrelator.ALIGN_BIN
+        val corridorCues = req.cues.count {
+            it.start in (tailBaseSec - active - TRACKING_CUT_SEARCH_RADIUS_SEC)..(tailEndSec - active + TRACKING_CUT_SEARCH_RADIUS_SEC)
+        }
+        if (probe.speechBins < TRACKING_MIN_DESYNC_SPEECH_BINS || corridorCues < 5) {
+            AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s: gates refused (thin speech/cues: sp=${probe.speechBins} cues=$corridorCues)")
+            return
+        }
+
+        // Pearson r collapses to ~0 on misaligned speech even when dense dialogue has 40-55% random overlap.
+        val alignmentBroken = probe.r < TRACKING_DESYNC_MAX_R
+        if (!alignmentBroken) {
+            trackingDesyncStreak = 0
+            trackingDesyncStartSec = Double.NaN
+            AppLog.d("SYNC", "tracking pass t=${req.posMs / 1000}s: active alignment still healthy (r=%.2f cont=%.2f)".format(probe.r, probe.containment))
+            return
+        }
+
+        trackingDesyncStreak++
+        if (trackingDesyncStartSec.isNaN()) {
+            trackingDesyncStartSec = (req.posMs / 1000.0 - 20.0).coerceAtLeast(0.0)
+        }
+        AppLog.d(
+            "SYNC",
+            "tracking desync confirmed at t=${req.posMs / 1000}s (streak=$trackingDesyncStreak r=%.2f cont=%.2f sp=${probe.speechBins})".format(probe.r, probe.containment),
+        )
+        if (trackingDesyncStreak < 2) {
+            return
+        }
+
+        // Stage B: Wide Cut-Recovery Search (±90s around activeOffsetSeconds) on the 90s tail.
+        val wideOutcome = SpeechCorrelator.findOffset(
+            audio = trackingTailBuf,
+            binCount = tailLen,
+            cues = req.cues,
+            maxOffsetSec = TRACKING_CUT_SEARCH_RADIUS_SEC,
+            baseSeconds = tailBaseSec - active,
+        )
         if (req.generation != generation) return
 
-        // Map the measured local drift back to absolute media offset:
-        // actualOffset = active + deltaOffset
-        val measuredOffset = active + rawResult.offsetSeconds
-        val result = rawResult.copy(offsetSeconds = measuredOffset)
-
-        val delta = abs(result.offsetSeconds - active)
-        AppLog.d("SYNC", "tracking eval t=${req.posMs / 1000}s: measured off=${result.offsetSeconds}s active=${active}s delta=${delta}s cont=${result.containment} margin=${result.margin}")
-
-        if (delta <= 0.80) {
-            trackingCandidateOffset = Double.NaN
-            trackingCandidateHits = 0
-            if (result.containment >= 0.65 && result.margin >= 0.10) {
-                driftTracker.add(req.posMs / 1000.0, result.offsetSeconds)
-                val (baseOffset, speedF) = driftTracker.getCorrection()
-                activeOffsetSeconds = baseOffset
-                listener.onSyncTrackingUpdate(
-                    positionSec = req.posMs / 1000.0,
-                    offsetSeconds = baseOffset.toFloat(),
-                    speedFactor = speedF,
-                    isPiecewiseJump = false,
+        if (wideOutcome is SpeechCorrelator.Outcome.Match) {
+            val wRes = wideOutcome.result
+            val newOffset = active + wRes.offsetSeconds
+            val shift = abs(newOffset - active)
+            if (shift >= 1.0 && wRes.containment >= TRACKING_WIDE_MIN_CONTAINMENT && wRes.margin >= TRACKING_WIDE_MIN_MARGIN) {
+                AppLog.d(
+                    "SYNC",
+                    "tracking wide-search candidate at t=${req.posMs / 1000}s: ${active}s -> ${newOffset}s (r=%.2f margin=%.2f cont=%.2f)".format(wRes.score, wRes.margin, wRes.containment),
+                )
+                handleCutCandidate(
+                    reqPosSec = req.posMs / 1000.0,
+                    active = active,
+                    candidateOffset = newOffset,
+                    containment = wRes.containment,
+                    minContainment = TRACKING_WIDE_MIN_CONTAINMENT,
+                )
+            } else {
+                AppLog.d(
+                    "SYNC",
+                    "tracking wide-search candidate refused extra cut bar at t=${req.posMs / 1000}s: shift=%.2fs cont=%.2f margin=%.2f".format(shift, wRes.containment, wRes.margin),
                 )
             }
         } else {
-            val cand = trackingCandidateOffset
-            if (!cand.isNaN() && abs(result.offsetSeconds - cand) <= 0.35 && result.containment >= 0.70) {
-                trackingCandidateHits++
-                if (trackingCandidateHits >= 2) {
-                    AppLog.d("SYNC", "tracking CONFIRMED PIECEWISE CUT at t=${req.posMs / 1000}s: ${active}s -> ${result.offsetSeconds}s")
-                    activeOffsetSeconds = result.offsetSeconds
-                    trackingCandidateOffset = Double.NaN
-                    trackingCandidateHits = 0
-                    driftTracker.reset()
-                    driftTracker.add(req.posMs / 1000.0, result.offsetSeconds)
-                    listener.onSyncTrackingUpdate(
-                        positionSec = req.posMs / 1000.0,
-                        offsetSeconds = result.offsetSeconds.toFloat(),
-                        speedFactor = 1.0f,
-                        isPiecewiseJump = true,
-                    )
+            AppLog.d("SYNC", "tracking wide-search t=${req.posMs / 1000}s: no cut lock yet")
+        }
+    }
+
+    private fun handleCutCandidate(
+        reqPosSec: Double,
+        active: Double,
+        candidateOffset: Double,
+        containment: Double,
+        minContainment: Double,
+    ) {
+        val cand = trackingCandidateOffset
+        if (!cand.isNaN() && abs(candidateOffset - cand) <= 0.35 && containment >= minContainment) {
+            trackingCandidateHits++
+            if (trackingCandidateHits >= 2) {
+                val tailSpanSec = TRACKING_TAIL_BINS * SpeechCorrelator.ALIGN_BIN
+                val rawCutSec = if (!trackingDesyncStartSec.isNaN()) trackingDesyncStartSec else reqPosSec
+                val cutPosSec = rawCutSec.coerceIn((reqPosSec - tailSpanSec).coerceAtLeast(0.0), reqPosSec)
+                AppLog.d("SYNC", "tracking CONFIRMED PIECEWISE CUT at t=${cutPosSec}s (eval t=${reqPosSec}s): ${active}s -> ${candidateOffset}s")
+                activeOffsetSeconds = candidateOffset
+                trackingCandidateOffset = Double.NaN
+                trackingCandidateHits = 0
+                trackingDesyncStreak = 0
+                trackingDesyncStartSec = Double.NaN
+                // Record confirmed segment in our internal baseline piecewise map so future seeks know it.
+                val updatedPw = baselinePiecewise.toMutableList()
+                if (updatedPw.isEmpty()) {
+                    updatedPw.add(0.0 to baselineOffsetSec)
                 }
-            } else {
-                if (result.containment >= 0.70) {
-                    trackingCandidateOffset = result.offsetSeconds
-                    trackingCandidateHits = 1
-                    AppLog.d("SYNC", "tracking tentative piecewise jump detected at t=${req.posMs / 1000}s: off=${result.offsetSeconds}s (awaiting confirmation pass)")
+                val nearIdx = updatedPw.indexOfLast { abs(it.first - cutPosSec) <= 45.0 }
+                if (nearIdx >= 0) {
+                    updatedPw[nearIdx] = cutPosSec to candidateOffset
+                } else {
+                    updatedPw.add(cutPosSec to candidateOffset)
                 }
+                baselinePiecewise = updatedPw.sortedBy { it.first }
+                hasBaselineLock = true
+                driftTracker.reset()
+                driftTracker.add(reqPosSec, candidateOffset)
+                listener.onSyncTrackingUpdate(
+                    positionSec = cutPosSec,
+                    offsetSeconds = candidateOffset.toFloat(),
+                    speedFactor = 1.0f,
+                    isPiecewiseJump = true,
+                )
             }
+        } else if (containment >= minContainment) {
+            trackingCandidateOffset = candidateOffset
+            trackingCandidateHits = 1
+            AppLog.d("SYNC", "tracking tentative piecewise jump detected at t=${reqPosSec}s: off=${candidateOffset}s (awaiting confirmation pass)")
         }
     }
 
     /** Releases background resources held by the neural VAD worker. */
     fun release() {
         liveVad?.close()
+    }
+
+    /** Test-only synchronization barrier: waits until any in-flight evaluation finishes. */
+    internal fun awaitWorkerIdleForTest(timeoutMs: Long = 5_000L) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (worker.isBusy() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(5)
+        }
     }
 
     companion object {
@@ -931,14 +1150,31 @@ class AudioSyncProcessor(
         private const val NOISE_GUARD = 2.0
         private const val SPAN_HI = 0.7
 
-        /** Local leash search radius around active offset: ±1.5s. */
-        private const val LOCAL_LEASH_RADIUS_SEC = 1.5
+        /** Local leash search radius: ±6.0s so EXCLUSION_BINS (3.5s) enforces a real prominence floor. */
+        private const val LOCAL_LEASH_SEARCH_SEC = 6.0
 
-        /** Low-overhead evaluation cadence during continuous tracking: 25 seconds wall-clock time. */
+        /** Sliding tail length for continuous tracking: 90 seconds (900 x 100ms bins). */
+        private const val TRACKING_TAIL_BINS = 900
+
+        /** Minimum tail bins (50s) and playback position (90s) before Stage B wide cut recovery may fire. */
+        private const val TRACKING_MIN_WIDE_TAIL_BINS = 500
+        private const val TRACKING_MIN_CUT_POS_MS = 90_000L
+
+        /** Wide cut-recovery search radius once active alignment is confirmed broken: ±90s. */
+        private const val TRACKING_CUT_SEARCH_RADIUS_SEC = 90.0
+
+        /** Minimum speech bins (3.5s) in the tail and max Pearson r before declaring alignment broken. */
+        private const val TRACKING_MIN_DESYNC_SPEECH_BINS = 35
+        private const val TRACKING_DESYNC_MAX_R = 0.10
+
+        /** Extra confirmation thresholds for Stage B wide cut jumps (on top of SpeechCorrelator gates). */
+        private const val TRACKING_WIDE_MIN_CONTAINMENT = 0.40
+        private const val TRACKING_WIDE_MIN_MARGIN = 0.10
+
+        /** Low-overhead evaluation cadence during continuous tracking: 25 seconds. */
         private const val TRACKING_CADENCE_INTERVAL_MS = 25_000L
 
-        /** Fast re-eval slot to confirm a suspected piecewise cut: 6 seconds wall-clock time. */
-        private const val TRACKING_CONFIRM_INTERVAL_MS = 6_000L
-
+        /** Fast re-eval slot to confirm a suspected desync or piecewise cut: 10 seconds. */
+        private const val TRACKING_CONFIRM_INTERVAL_MS = 10_000L
     }
 }
