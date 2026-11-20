@@ -104,7 +104,7 @@ fun PlayerScreenTopBar(
     val safeTopInsets = WindowInsets.statusBars.union(WindowInsets.displayCutout)
 
     AnimatedVisibility(
-        visible = ui.controlsVisible.value && !ui.locked.value,
+        visible = ui.controlsVisible.value && !ui.locked.value && !ui.boostActive.value && !ui.speedScrubHudVisible.value,
         modifier = modifier,
         enter = fadeIn(tween(200)) + slideInVertically(tween(240, easing = OpticalGlassTokens.EaseReveal)) { -8 },
         exit = fadeOut(tween(150)),
@@ -375,18 +375,23 @@ private fun QuickToolsRibbon(
     val density = LocalDensity.current.density
     val scope = rememberCoroutineScope()
 
-    // Restore persisted ribbon order & hidden set once
+    // Restore persisted ribbon order & hidden set once (upgrading legacy 13-item order to 4/8 layout)
     LaunchedEffect(Unit) {
-        val defaultNames = RibbonTool.entries.map { it.name }
+        val defaultNames = RibbonTool.defaultVisibleOrder.map { it.name }
         val savedOrder = PlayerPrefs.ribbonOrder(context, defaultNames)
             .mapNotNull { name -> RibbonTool.entries.firstOrNull { it.name == name } }
-        if (savedOrder.isNotEmpty()) {
+        val isLegacyOrder = savedOrder.firstOrNull() == RibbonTool.NIGHT_MODE &&
+            PlayerPrefs.ribbonHidden(context).isEmpty()
+        if (savedOrder.isNotEmpty() && !isLegacyOrder) {
             quick.ribbonOrder = savedOrder
+            val savedHidden = PlayerPrefs.ribbonHidden(context)
+                .mapNotNull { name -> RibbonTool.entries.firstOrNull { it.name == name } }
+                .toSet()
+            quick.ribbonHidden = savedHidden
+        } else {
+            quick.ribbonOrder = RibbonTool.defaultVisibleOrder
+            quick.ribbonHidden = RibbonTool.defaultHiddenSet
         }
-        val savedHidden = PlayerPrefs.ribbonHidden(context)
-            .mapNotNull { name -> RibbonTool.entries.firstOrNull { it.name == name } }
-            .toSet()
-        quick.ribbonHidden = savedHidden
     }
 
     val pullAnim = remember { Animatable(if (quick.ribbonExpanded.value) 1f else 0f) }
@@ -403,12 +408,16 @@ private fun QuickToolsRibbon(
     }
 
     val progress = pullAnim.value.coerceIn(0f, 1f)
-    val isExpanded = progress > 0.15f
-    val showLabels = progress > 0.55f
+    val isExpanded = progress > 0.12f
+    val showLabels = progress > 0.52f
 
-    val visibleTools = quick.ribbonOrder.filterNot { it in quick.ribbonHidden }
-    val coreCount = 4
-    val dragSpanPx = (220f * density).coerceAtLeast(1f)
+    // 4 default collapsed tools; up to 8 expanded tools with Edit (CUSTOMISE) always pinned last
+    val nonEditVisible = quick.ribbonOrder
+        .filter { it != RibbonTool.CUSTOMISE && it !in quick.ribbonHidden }
+        .take(RibbonTool.MAX_EXPANDED_COUNT - 1)
+    val visibleTools = nonEditVisible + RibbonTool.CUSTOMISE
+    val coreCount = RibbonTool.CORE_COLLAPSED_COUNT
+    val dragSpanPx = (210f * density).coerceAtLeast(1f)
 
     fun settleRibbon(open: Boolean) {
         quick.ribbonExpanded.value = open
@@ -460,15 +469,19 @@ private fun QuickToolsRibbon(
             .fillMaxWidth()
             .then(pullGestureModifier)
             .then(if (progress > 0.85f) Modifier.horizontalScroll(quick.ribbonScroll) else Modifier),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.Top,
     ) {
         visibleTools.forEachIndexed { index, tool ->
             val isExtra = index >= coreCount
             if (isExtra && !isExpanded) return@forEachIndexed
 
-            val itemAlpha = if (!isExtra) 1f else ((progress - 0.10f) / 0.90f).coerceIn(0f, 1f)
-            val itemSlidePx = if (!isExtra) 0f else -(1f - progress) * 28f * density
+            // Staggered paper-draw slide: each drawn-out slot emerges sequentially from behind the 4th disc
+            val extraSlot = (index - coreCount).coerceAtLeast(0)
+            val staggerStart = (extraSlot * 0.08f).coerceAtMost(0.32f)
+            val slotProgress = ((progress - staggerStart) / (1f - staggerStart)).coerceIn(0f, 1f)
+            val itemAlpha = if (!isExtra) 1f else slotProgress
+            val itemSlidePx = if (!isExtra) 0f else -(1f - slotProgress) * (24f + extraSlot * 8f) * density
 
             val isActive = when (tool) {
                 RibbonTool.NIGHT_MODE -> ui.nightMode.value
@@ -566,14 +579,14 @@ private fun QuickToolsRibbon(
                         },
                     ),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(42.dp)
                         .clip(CircleShape)
                         .background(
-                            if (isActive) OpticalGlassTokens.EmeraldAccent else Color.Black.copy(alpha = 0.50f)
+                            if (isActive) OpticalGlassTokens.EmeraldAccent else Color.Black.copy(alpha = 0.54f)
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -583,9 +596,9 @@ private fun QuickToolsRibbon(
                 if (showLabels) {
                     val subLabel = when (tool) {
                         RibbonTool.SLEEP_TIMER -> when (ui.sleepTimerMinutes.intValue) {
-                            0 -> "Sleep"
-                            -1 -> "End Ep"
-                            else -> "${ui.sleepTimerMinutes.intValue}m"
+                            0 -> "Sleep Timer"
+                            -1 -> "End of Ep"
+                            else -> "Sleep ${ui.sleepTimerMinutes.intValue}m"
                         }
                         RibbonTool.LOOP -> when (ui.repeatMode.value) {
                             RepeatLoopMode.OFF -> "Loop"
@@ -593,7 +606,7 @@ private fun QuickToolsRibbon(
                             RepeatLoopMode.ALL -> "Loop All"
                         }
                         RibbonTool.ROTATE_LOCK -> when (quick.rotateMode.value) {
-                            RotateMode.SENSOR -> "Rotate"
+                            RotateMode.SENSOR -> "Landscape"
                             RotateMode.LANDSCAPE -> "Landscape"
                             RotateMode.PORTRAIT -> "Portrait"
                             RotateMode.LOCKED -> "Locked"
@@ -605,8 +618,8 @@ private fun QuickToolsRibbon(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         style = TextStyle(
-                            color = Color.White.copy(alpha = 0.88f),
-                            fontSize = 9.5.sp,
+                            color = Color.White.copy(alpha = 0.90f),
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Normal,
                             textAlign = TextAlign.Center,
                             shadow = OpticalGlassTokens.CrispTextShadow,
@@ -620,9 +633,9 @@ private fun QuickToolsRibbon(
         Box(
             modifier = Modifier
                 .padding(top = 6.dp)
-                .size(28.dp)
+                .size(30.dp)
                 .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.50f))
+                .background(Color.Black.copy(alpha = 0.54f))
                 .then(pullGestureModifier)
                 .clickable {
                     ui.bumpInteraction()

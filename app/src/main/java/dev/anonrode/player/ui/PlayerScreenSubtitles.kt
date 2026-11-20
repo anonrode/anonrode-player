@@ -73,7 +73,21 @@ fun PlayerSubtitleOverlay(
 
         val containerH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val anchorFrac = gestures.subPosFraction.floatValue.coerceIn(SUB_Y_MIN, SUB_Y_MAX)
-        val targetY = (containerH * anchorFrac).roundToInt()
+        val rawY = containerH * anchorFrac
+        val chromeVisible = ui.controlsVisible.value &&
+            !ui.locked.value &&
+            !isPipMode &&
+            (ui.speedCardOpen.value || (!ui.boostActive.value && !ui.speedScrubHudVisible.value))
+        val targetY = if (chromeVisible && anchorFrac > 0.60f) {
+            val bottomObstaclePx = when {
+                ui.speedCardOpen.value -> 148f * density
+                ui.bottomBarHeightPx.intValue > 0 -> ui.bottomBarHeightPx.intValue.toFloat() + 36f * density
+                else -> 124f * density
+            }
+            minOf(rawY, (containerH - bottomObstaclePx).coerceAtLeast(containerH * 0.45f)).roundToInt()
+        } else {
+            rawY.roundToInt()
+        }
 
         val isInteractingWithSub = gestures.mode.value == GestureMode.SUBTITLE_VERTICAL_DRAG ||
             gestures.mode.value == GestureMode.SUBTITLE_HORIZONTAL_SYNC ||

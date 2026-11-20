@@ -14,14 +14,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -41,7 +41,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.CameraAlt
@@ -49,7 +48,9 @@ import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DragHandle
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Equalizer
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Memory
@@ -57,15 +58,14 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
-import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -80,6 +80,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -105,8 +109,9 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * Full-height flat right slide-in drawer (`~41%` width, clamped `300dp..360dp`).
- * Smooth horizontal translucent black gradient (`0.80f -> 0.97f`), zero blur, zero card borders,
+ * Full-height flat right slide-in drawer (responsive width: ~45% in landscape = 374dp,
+ * ~86% in portrait = 337dp, never crushed to 164dp).
+ * Smooth horizontal translucent black gradient, zero blur, zero card borders,
  * velocity fling-to-dismiss (`>72dp` or `>800dp/s`), clean `<- Title` header.
  */
 @Composable
@@ -119,7 +124,7 @@ fun PlayerSlideInDrawer(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val density = LocalDensity.current
-    val panelWidthPx = with(density) { 350.dp.toPx() }
+    val panelWidthPx = with(density) { 380.dp.toPx() }
     val dismissThresholdPx = with(density) { 72.dp.toPx() }
     val dismissVelocityPx = with(density) { 800.dp.toPx() }
 
@@ -140,7 +145,13 @@ fun PlayerSlideInDrawer(
         if (onNavigateBack != null) onNavigateBack() else onDismiss()
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val drawerWidth = if (maxWidth >= 600.dp) {
+            (maxWidth * 0.45f).coerceIn(350.dp, 410.dp)
+        } else {
+            (maxWidth * 0.86f).coerceIn(310.dp, 360.dp)
+        }
+
         // Crystal-clear tap-outside catcher
         Box(
             modifier = Modifier
@@ -155,15 +166,14 @@ fun PlayerSlideInDrawer(
         Column(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .fillMaxWidth(0.42f)
-                .widthIn(min = 300.dp, max = 360.dp)
+                .width(drawerWidth)
                 .fillMaxHeight()
                 .graphicsLayer { translationX = dragX.value }
                 .background(
                     Brush.horizontalGradient(
-                        0.0f to Color(0xCC060608),
-                        0.22f to Color(0xF0040406),
-                        1.0f to Color(0xF7040406),
+                        0.0f to Color(0x8C040406),
+                        0.18f to Color(0xE8040406),
+                        1.0f to Color(0xF8040406),
                     )
                 )
                 .pointerInput(Unit) {
@@ -203,18 +213,18 @@ fun PlayerSlideInDrawer(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .padding(horizontal = 22.dp, vertical = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f),
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(32.dp)
+                            .size(34.dp)
                             .clip(CircleShape)
                             .clickable {
                                 if (onNavigateBack != null) onNavigateBack() else onDismiss()
@@ -225,7 +235,7 @@ fun PlayerSlideInDrawer(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = "Back",
                             tint = Color.White,
-                            modifier = Modifier.size(19.dp),
+                            modifier = Modifier.size(20.dp),
                         )
                     }
                     Text(
@@ -234,7 +244,7 @@ fun PlayerSlideInDrawer(
                         overflow = TextOverflow.Ellipsis,
                         style = TextStyle(
                             color = Color.White,
-                            fontSize = 14.5.sp,
+                            fontSize = 15.5.sp,
                             fontWeight = FontWeight.SemiBold,
                         ),
                     )
@@ -246,11 +256,121 @@ fun PlayerSlideInDrawer(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .padding(bottom = 12.dp),
+                    .padding(bottom = 14.dp),
                 content = content,
             )
         }
     }
+}
+
+/**
+ * Razor-thin 2.5dp horizontal precision line slider with optional milestone dots
+ * and a clean 14dp solid white circle thumb (`CircleShape`).
+ * Replaces Material 3's thick 20dp sausage track and 44dp vertical stick thumb.
+ */
+@Composable
+fun ThinPrecisionLineSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    modifier: Modifier = Modifier,
+    tickValues: FloatArray = FloatArray(0),
+    showActiveFill: Boolean = true,
+    activeColor: Color = OpticalGlassTokens.EmeraldAccent,
+) {
+    val view = LocalView.current
+    var isDragging by remember { mutableStateOf(false) }
+    val minV = valueRange.start
+    val maxV = valueRange.endInclusive
+    val span = (maxV - minV).coerceAtLeast(1e-4f)
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(28.dp)
+            .pointerInput(minV, maxV) {
+                detectTapGestures { offset ->
+                    val frac = (offset.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    onValueChange(minV + frac * span)
+                }
+            }
+            .pointerInput(minV, maxV) {
+                detectHorizontalDragGestures(
+                    onDragStart = { offset ->
+                        isDragging = true
+                        val frac = (offset.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        onValueChange(minV + frac * span)
+                    },
+                    onHorizontalDrag = { change, _ ->
+                        change.consume()
+                        val frac = (change.position.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        onValueChange(minV + frac * span)
+                    },
+                    onDragEnd = { isDragging = false },
+                    onDragCancel = { isDragging = false },
+                )
+            }
+            .drawWithCache {
+                val trackH = 2.6.dp.toPx()
+                val thumbR = 7.dp.toPx()
+                val dotR = 2.1.dp.toPx()
+                val padX = thumbR
+                val cornerR = CornerRadius(trackH / 2f, trackH / 2f)
+
+                onDrawBehind {
+                    val usableW = (size.width - padX * 2f).coerceAtLeast(1f)
+                    val centerY = size.height / 2f
+                    val topY = centerY - trackH / 2f
+                    val frac = ((value - minV) / span).coerceIn(0f, 1f)
+                    val thumbX = padX + usableW * frac
+
+                    // 1. Razor-thin unplayed track line
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.28f),
+                        topLeft = Offset(padX, topY),
+                        size = Size(usableW, trackH),
+                        cornerRadius = cornerR,
+                    )
+
+                    // 2. Active filled segment
+                    if (showActiveFill && thumbX > padX) {
+                        drawRoundRect(
+                            color = activeColor,
+                            topLeft = Offset(padX, topY),
+                            size = Size(thumbX - padX, trackH),
+                            cornerRadius = cornerR,
+                        )
+                    }
+
+                    // 3. Milestone tick dots along the line (Screenshot 000207)
+                    for (tVal in tickValues) {
+                        val tFrac = ((tVal - minV) / span).coerceIn(0f, 1f)
+                        val tickX = padX + usableW * tFrac
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.88f),
+                            radius = dotR,
+                            center = Offset(tickX, centerY),
+                        )
+                    }
+
+                    // 4. Clean round white circle thumb
+                    if (isDragging) {
+                        drawCircle(
+                            color = activeColor.copy(alpha = 0.28f),
+                            radius = thumbR * 1.65f,
+                            center = Offset(thumbX, centerY),
+                        )
+                    }
+                    drawCircle(
+                        color = Color.White,
+                        radius = thumbR,
+                        center = Offset(thumbX, centerY),
+                    )
+                }
+            },
+    )
 }
 
 @Composable
@@ -285,7 +405,7 @@ private fun FlatDrawerDivider() {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 18.dp, vertical = 4.dp)
+            .padding(horizontal = 22.dp, vertical = 8.dp)
             .height(1.dp)
             .background(Color.White.copy(alpha = 0.10f))
     )
@@ -308,19 +428,19 @@ private fun FlatDrawerRow(
                 if (isSelected) Color.White.copy(alpha = 0.10f) else Color.Transparent
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 11.dp),
+            .padding(horizontal = 22.dp, vertical = 14.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             Text(
                 text = title,
                 style = TextStyle(
                     color = if (isSelected) OpticalGlassTokens.EmeraldSync else Color.White,
-                    fontSize = 13.sp,
+                    fontSize = 14.sp,
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                 ),
             )
@@ -329,7 +449,7 @@ private fun FlatDrawerRow(
                     text = subtitle,
                     style = TextStyle(
                         color = subtitleColor,
-                        fontSize = 11.sp,
+                        fontSize = 11.5.sp,
                         fontFeatureSettings = "tnum",
                     ),
                 )
@@ -528,7 +648,7 @@ fun PlayerSubtitleDrawer(
                         ),
                     )
 
-                    Slider(
+                    ThinPrecisionLineSlider(
                         value = currentOffset.coerceIn(windowMin, windowMax),
                         onValueChange = { newVal ->
                             ui.subtitleOffsetSec.floatValue = newVal
@@ -538,10 +658,6 @@ fun PlayerSubtitleDrawer(
                             onApplySubtitleOffsetSec(newVal)
                         },
                         valueRange = windowMin..windowMax,
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = OpticalGlassTokens.EmeraldAccent,
-                        ),
                     )
 
                     Row(
@@ -649,8 +765,9 @@ fun PlayerSubtitleDrawer(
 }
 
 /**
- * Controls / Settings Drawer:
- * 4-column circular thin-outline icon grid + flat toggle rows + precision Brightness & Volume+Boost sliders.
+ * Controls / Settings Drawer (Screenshot 000202):
+ * 4-column circular thin-outline icon grid hosting all abstracted player tools & drawers,
+ * followed by a hairline divider and clean flat toggle rows.
  */
 @Composable
 fun PlayerSettingsDrawer(
@@ -671,15 +788,16 @@ fun PlayerSettingsDrawer(
     ) {
         Column(
             modifier = Modifier.verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // 4-Column Circular Thin-Outline Icon Grid
+            // 4-Column Circular Thin-Outline Icon Grid (Screenshot 000202)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
+                // Row 1: Playing Queue, Aspect Ratio, Decoder, Audio Track
                 Row(modifier = Modifier.fillMaxWidth()) {
                     CircularOutlineTool(
                         label = "Playing Queue",
@@ -693,7 +811,7 @@ fun PlayerSettingsDrawer(
                     )
                     val zoomLabel = AspectZoomMode.entries[ui.zoomIdx.intValue % AspectZoomMode.entries.size].label
                     CircularOutlineTool(
-                        label = "Aspect ($zoomLabel)",
+                        label = "Aspect Ratio",
                         icon = Icons.Rounded.AspectRatio,
                         isActive = ui.zoomIdx.intValue != 0,
                         modifier = Modifier.weight(1f),
@@ -722,12 +840,13 @@ fun PlayerSettingsDrawer(
                     )
                 }
 
+                // Row 2: Sleep Timer, Equalizer, Audio FX, Loop Mode (abstracted from Ribbon)
                 Row(modifier = Modifier.fillMaxWidth()) {
                     val sleepMin = ui.sleepTimerMinutes.intValue
                     val sleepLbl = when (sleepMin) {
                         0 -> "Sleep Timer"
                         -1 -> "Sleep: End"
-                        else -> "Sleep: ${sleepMin}m"
+                        else -> "Sleep ${sleepMin}m"
                     }
                     CircularOutlineTool(
                         label = sleepLbl,
@@ -746,19 +865,6 @@ fun PlayerSettingsDrawer(
                         },
                     )
                     CircularOutlineTool(
-                        label = "A-B Repeat",
-                        icon = Icons.Rounded.Repeat,
-                        isActive = ui.abStartSec.floatValue >= 0f,
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            if (actions != null) {
-                                actions.onCycleAbRepeat()
-                            } else {
-                                ui.abStartSec.floatValue = if (ui.abStartSec.floatValue < 0f) 0f else -1f
-                            }
-                        },
-                    )
-                    CircularOutlineTool(
                         label = "Equalizer",
                         icon = Icons.Rounded.Equalizer,
                         isActive = quick.equalizerOn.value,
@@ -773,20 +879,55 @@ fun PlayerSettingsDrawer(
                         },
                     )
                     CircularOutlineTool(
-                        label = "Audio Output",
-                        icon = Icons.Rounded.Cast,
-                        isActive = false,
+                        label = "Audio FX",
+                        icon = Icons.Rounded.GraphicEq,
+                        isActive = ui.audioEffectOn.value || ui.volumeBoostPercent.intValue > 100,
                         modifier = Modifier.weight(1f),
                         onClick = {
-                            onDismiss()
-                            actions?.onOpenCastPicker()
+                            val next = !ui.audioEffectOn.value
+                            if (actions != null) actions.onToggleAudioEffect(next) else ui.audioEffectOn.value = next
+                        },
+                    )
+                    val loopLabel = when (ui.repeatMode.value) {
+                        RepeatLoopMode.OFF -> "Loop"
+                        RepeatLoopMode.ONE -> "Loop One"
+                        RepeatLoopMode.ALL -> "Loop All"
+                    }
+                    CircularOutlineTool(
+                        label = loopLabel,
+                        icon = if (ui.repeatMode.value == RepeatLoopMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
+                        isActive = ui.repeatMode.value != RepeatLoopMode.OFF,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            val modes = RepeatLoopMode.entries
+                            val next = modes[(ui.repeatMode.value.ordinal + 1) % modes.size]
+                            if (actions != null) {
+                                actions.onUpdatePlaylistMode(ui.shuffleOn.value, next)
+                            } else {
+                                ui.repeatMode.value = next
+                            }
                         },
                     )
                 }
 
+                // Row 3: Shuffle, Pop-up Play, Information, All Settings
                 Row(modifier = Modifier.fillMaxWidth()) {
                     CircularOutlineTool(
-                        label = "Pop-up (PiP)",
+                        label = "Shuffle",
+                        icon = Icons.Rounded.Shuffle,
+                        isActive = ui.shuffleOn.value,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            val next = !ui.shuffleOn.value
+                            if (actions != null) {
+                                actions.onUpdatePlaylistMode(next, ui.repeatMode.value)
+                            } else {
+                                ui.shuffleOn.value = next
+                            }
+                        },
+                    )
+                    CircularOutlineTool(
+                        label = "Pop-up Play",
                         icon = Icons.Rounded.PictureInPictureAlt,
                         isActive = false,
                         modifier = Modifier.weight(1f),
@@ -796,18 +937,14 @@ fun PlayerSettingsDrawer(
                         },
                     )
                     CircularOutlineTool(
-                        label = "Screenshot",
-                        icon = Icons.Rounded.CameraAlt,
-                        isActive = false,
+                        label = "Information",
+                        icon = Icons.Rounded.Info,
+                        isActive = ui.nerdStatsVisible.value,
                         modifier = Modifier.weight(1f),
-                        onClick = onCaptureScreenshot,
-                    )
-                    CircularOutlineTool(
-                        label = "Night Mode",
-                        icon = Icons.Rounded.Bedtime,
-                        isActive = ui.nightMode.value,
-                        modifier = Modifier.weight(1f),
-                        onClick = { ui.nightMode.value = !ui.nightMode.value },
+                        onClick = {
+                            ui.nerdStatsVisible.value = !ui.nerdStatsVisible.value
+                            onDismiss()
+                        },
                     )
                     CircularOutlineTool(
                         label = "All Settings",
@@ -823,83 +960,6 @@ fun PlayerSettingsDrawer(
             }
 
             FlatDrawerDivider()
-
-            // Decoder Segment Row: [HW | HW+ | SW]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Decoder Engine", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
-                val decLabel = actions?.decoderModeLabel?.value ?: "HW+SW"
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("HW" to 0, "HW+" to 1, "SW" to 2).forEach { (lbl, modeInt) ->
-                        val active = when (modeInt) {
-                            0 -> decLabel == "HW"
-                            1 -> decLabel.startsWith("HW+")
-                            else -> decLabel == "APP" || decLabel == "SW"
-                        }
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(
-                                    if (active) OpticalGlassTokens.EmeraldAccent else Color.White.copy(alpha = 0.10f)
-                                )
-                                .clickable {
-                                    if (actions != null) actions.onSelectDecoderMode(modeInt)
-                                }
-                                .padding(horizontal = 10.dp, vertical = 4.dp),
-                        ) {
-                            Text(
-                                text = lbl,
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Repeat Mode Segment Row: [Off | One | All]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Repeat Mode", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    RepeatLoopMode.entries.forEach { mode ->
-                        val active = ui.repeatMode.value == mode
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(
-                                    if (active) OpticalGlassTokens.EmeraldAccent else Color.White.copy(alpha = 0.10f)
-                                )
-                                .clickable {
-                                    if (actions != null) {
-                                        actions.onUpdatePlaylistMode(ui.shuffleOn.value, mode)
-                                    } else {
-                                        ui.repeatMode.value = mode
-                                    }
-                                }
-                                .padding(horizontal = 10.dp, vertical = 4.dp),
-                        ) {
-                            Text(
-                                text = mode.name,
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                    }
-                }
-            }
 
             // Auto Subtitle Sync Toggle
             FlatDrawerRow(
@@ -937,82 +997,20 @@ fun PlayerSettingsDrawer(
                 },
             )
 
-            // Precision Brightness & Volume+Boost Sliders
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                val briPct = (ui.screenBrightnessFraction.floatValue * 100f).roundToInt()
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Icon(Icons.Rounded.WbSunny, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(15.dp))
-                        Text("Brightness", color = Color.White.copy(alpha = 0.8f), fontSize = 11.5.sp)
-                    }
-                    Text(
-                        text = "$briPct%",
-                        style = TextStyle(color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"),
+            // Quick Shortcuts Customise Row (matches "Shortcuts" row in Screenshot 000202)
+            FlatDrawerRow(
+                title = "Shortcuts",
+                trailing = {
+                    EmeraldToggleSwitch(
+                        checked = quick.ribbonExpanded.value,
+                        onCheckedChange = { expanded -> quick.ribbonExpanded.value = expanded },
                     )
-                }
-                Slider(
-                    value = ui.screenBrightnessFraction.floatValue.coerceIn(0.02f, 1.0f),
-                    onValueChange = { frac ->
-                        if (actions != null) actions.onApplyBrightnessFraction(frac)
-                        else ui.screenBrightnessFraction.floatValue = frac
-                    },
-                    valueRange = 0.02f..1.0f,
-                    colors = SliderDefaults.colors(
-                        thumbColor = Color.White,
-                        activeTrackColor = OpticalGlassTokens.EmeraldAccent,
-                    ),
-                )
-
-                val volPct = ui.volumeBoostPercent.intValue
-                val isBoost = volPct > 100
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Icon(Icons.AutoMirrored.Rounded.VolumeUp, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(15.dp))
-                        Text("Volume + Boost", color = Color.White.copy(alpha = 0.8f), fontSize = 11.5.sp)
-                    }
-                    Text(
-                        text = "$volPct%",
-                        style = TextStyle(
-                            color = if (isBoost) OpticalGlassTokens.AmberBoost else Color.White,
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            fontFeatureSettings = "tnum",
-                        ),
-                    )
-                }
-                Slider(
-                    value = volPct.toFloat().coerceIn(0f, 200f),
-                    onValueChange = { v ->
-                        val next = v.roundToInt()
-                        if (actions != null) actions.onApplyVolumeBoostPercent(next)
-                        else ui.volumeBoostPercent.intValue = next
-                    },
-                    valueRange = 0f..200f,
-                    colors = SliderDefaults.colors(
-                        thumbColor = Color.White,
-                        activeTrackColor = if (isBoost) OpticalGlassTokens.AmberBoost else OpticalGlassTokens.EmeraldAccent,
-                    ),
-                )
-            }
+                },
+                onClick = {
+                    onDismiss()
+                    quick.showRibbonCustomise.value = true
+                },
+            )
         }
     }
 }
@@ -1027,17 +1025,18 @@ private fun CircularOutlineTool(
 ) {
     Column(
         modifier = modifier
+            .padding(horizontal = 2.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick,
             ),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(5.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(42.dp)
+                .size(46.dp)
                 .clip(CircleShape)
                 .background(
                     if (isActive) OpticalGlassTokens.EmeraldAccent.copy(alpha = 0.18f) else Color.Transparent
@@ -1053,17 +1052,18 @@ private fun CircularOutlineTool(
                 imageVector = icon,
                 contentDescription = label,
                 tint = if (isActive) OpticalGlassTokens.EmeraldSync else Color.White,
-                modifier = Modifier.size(19.dp),
+                modifier = Modifier.size(20.dp),
             )
         }
         Text(
             text = label,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
             style = TextStyle(
-                color = if (isActive) OpticalGlassTokens.EmeraldSync else Color.White.copy(alpha = 0.85f),
-                fontSize = 10.sp,
+                color = if (isActive) OpticalGlassTokens.EmeraldSync else Color.White.copy(alpha = 0.88f),
+                fontSize = 10.5.sp,
+                lineHeight = 13.sp,
                 fontWeight = FontWeight.Normal,
             ),
         )
@@ -1352,11 +1352,10 @@ fun PlayerPlaylistDrawer(
 
 /**
  * Floating Bottom Precision Speed Bar (Screenshot 000207):
- * - Top row: `-` circle (`-0.05x`), centered `1.00x` readout pill, `+` circle (`+0.05x`).
- * - Bottom row: continuous `0.25x..4.0x` slider with milestone ticks (`0.25x`, `1.0x`, `2.0x`, `3.0x`, `4.0x`)
- *   + circular reset button (`1.0x`), plus quick milestone chips.
+ * - Top row: `-` circle (`-0.05x`), centered `1.00x` readout pill with pencil glyph, `+` circle (`+0.05x`).
+ * - Bottom row: razor-thin 2.5dp `0.25x..4.0x` line slider with small white milestone dots
+ *   and 14dp round white circle thumb, `0.25x..4.0x` scale labels underneath, and circular reset icon.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PrecisionSpeedCard(
     visible: Boolean,
@@ -1370,8 +1369,8 @@ fun PrecisionSpeedCard(
 
     Box(
         modifier = modifier
-            .fillMaxWidth(0.84f)
-            .widthIn(min = 310.dp, max = 560.dp)
+            .fillMaxWidth(0.72f)
+            .widthIn(min = 320.dp, max = 540.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(Color(0xE80A0A0C))
             .clickable(
@@ -1379,13 +1378,13 @@ fun PrecisionSpeedCard(
                 indication = null,
                 onClick = {},
             )
-            .padding(horizontal = 18.dp, vertical = 14.dp),
+            .padding(horizontal = 22.dp, vertical = 14.dp),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // Row 1: [-] ... [1.00x] ... [+]
+            // Row 1: [-] ... [1.00x ✎] ... [+]
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1395,7 +1394,7 @@ fun PrecisionSpeedCard(
                     modifier = Modifier
                         .size(34.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.14f))
+                        .background(Color.White.copy(alpha = 0.12f))
                         .clickable {
                             val next = ((current - 0.05f) * 20f).roundToInt() / 20f
                             val clamped = next.coerceIn(0.25f, 4.0f)
@@ -1407,21 +1406,36 @@ fun PrecisionSpeedCard(
                     Text("−", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Medium)
                 }
 
-                Box(
+                Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color.White.copy(alpha = 0.10f))
-                        .padding(horizontal = 20.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center,
+                        .background(Color.White.copy(alpha = 0.11f))
+                        .clickable {
+                            // Tapping readout pill cycles common presets (1.0x -> 1.25x -> 1.5x -> 2.0x -> 1.0x)
+                            val presets = floatArrayOf(1.0f, 1.25f, 1.5f, 2.0f)
+                            val idx = presets.indexOfFirst { abs(it - current) < 0.03f }
+                            val next = presets[(idx + 1) % presets.size]
+                            ui.currentPlaybackSpeed.floatValue = next
+                            onApplySpeed(next)
+                        }
+                        .padding(horizontal = 22.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
                         text = String.format(java.util.Locale.US, "%.2fx", current),
                         style = TextStyle(
                             color = Color.White,
-                            fontSize = 18.sp,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.SemiBold,
                             fontFeatureSettings = "tnum",
                         ),
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.Edit,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.90f),
+                        modifier = Modifier.size(14.dp),
                     )
                 }
 
@@ -1429,7 +1443,7 @@ fun PrecisionSpeedCard(
                     modifier = Modifier
                         .size(34.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.14f))
+                        .background(Color.White.copy(alpha = 0.12f))
                         .clickable {
                             val next = ((current + 0.05f) * 20f).roundToInt() / 20f
                             val clamped = next.coerceIn(0.25f, 4.0f)
@@ -1442,14 +1456,17 @@ fun PrecisionSpeedCard(
                 }
             }
 
-            // Row 2: Continuous 0.25x..4.0x Slider + Milestone Ticks + Reset Icon
+            // Row 2: Thin 2.5dp Line Slider + Milestone Dots + Scale Labels + Reset Icon
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Slider(
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    ThinPrecisionLineSlider(
                         value = current,
                         onValueChange = { raw ->
                             val snapped = ((raw * 20f).roundToInt() / 20f).coerceIn(0.25f, 4.0f)
@@ -1457,18 +1474,18 @@ fun PrecisionSpeedCard(
                             onApplySpeed(snapped)
                         },
                         valueRange = 0.25f..4.0f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = OpticalGlassTokens.EmeraldAccent,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.24f),
-                        ),
+                        tickValues = floatArrayOf(0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f),
+                        showActiveFill = true,
                     )
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 2.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         listOf("0.25x" to 0.25f, "1.0x" to 1.0f, "2.0x" to 2.0f, "3.0x" to 3.0f, "4.0x" to 4.0f)
                             .forEach { (lbl, spdVal) ->
+                                val isSel = abs(current - spdVal) < 0.03f
                                 Text(
                                     text = lbl,
                                     modifier = Modifier.clickable {
@@ -1476,9 +1493,9 @@ fun PrecisionSpeedCard(
                                         onApplySpeed(spdVal)
                                     },
                                     style = TextStyle(
-                                        color = if (abs(current - spdVal) < 0.03f) OpticalGlassTokens.EmeraldSync else Color.White.copy(alpha = 0.78f),
-                                        fontSize = 10.5.sp,
-                                        fontWeight = if (abs(current - spdVal) < 0.03f) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSel) Color.White else Color.White.copy(alpha = 0.80f),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal,
                                         fontFeatureSettings = "tnum",
                                     ),
                                 )
@@ -1488,7 +1505,7 @@ fun PrecisionSpeedCard(
 
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(34.dp)
                         .clip(CircleShape)
                         .clickable {
                             ui.currentPlaybackSpeed.floatValue = 1.0f
@@ -1502,40 +1519,6 @@ fun PrecisionSpeedCard(
                         tint = Color.White,
                         modifier = Modifier.size(21.dp),
                     )
-                }
-            }
-
-            // Row 3: Quick Milestone Preset Chips
-            val milestones = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f)
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                milestones.forEach { chipSpeed ->
-                    val isActive = abs(current - chipSpeed) < 0.02f
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(
-                                if (isActive) OpticalGlassTokens.EmeraldAccent else Color.White.copy(alpha = 0.10f)
-                            )
-                            .clickable {
-                                ui.currentPlaybackSpeed.floatValue = chipSpeed
-                                onApplySpeed(chipSpeed)
-                            }
-                            .padding(horizontal = 10.dp, vertical = 5.dp),
-                    ) {
-                        Text(
-                            text = "${chipSpeed}x",
-                            style = TextStyle(
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
-                                fontFeatureSettings = "tnum",
-                            ),
-                        )
-                    }
                 }
             }
         }
@@ -1562,10 +1545,10 @@ fun PlayerRibbonCustomiseDrawer(
                 text = "Reset",
                 modifier = Modifier
                     .clickable {
-                        quick.ribbonOrder = RibbonTool.entries
-                        quick.ribbonHidden = emptySet()
-                        PlayerPrefs.saveRibbonOrder(context, RibbonTool.entries.map { it.name })
-                        PlayerPrefs.saveRibbonHidden(context, emptySet())
+                        quick.ribbonOrder = RibbonTool.defaultVisibleOrder
+                        quick.ribbonHidden = RibbonTool.defaultHiddenSet
+                        PlayerPrefs.saveRibbonOrder(context, RibbonTool.defaultVisibleOrder.map { it.name })
+                        PlayerPrefs.saveRibbonHidden(context, RibbonTool.defaultHiddenSet.map { it.name }.toSet())
                     }
                     .padding(horizontal = 6.dp, vertical = 4.dp),
                 style = TextStyle(

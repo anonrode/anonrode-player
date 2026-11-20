@@ -99,7 +99,11 @@ fun PlayerScreenBottomBar(
     val safeBottomInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout)
 
     AnimatedVisibility(
-        visible = ui.controlsVisible.value && !ui.locked.value,
+        visible = ui.controlsVisible.value &&
+            !ui.locked.value &&
+            !ui.speedCardOpen.value &&
+            !ui.boostActive.value &&
+            !ui.speedScrubHudVisible.value,
         modifier = modifier,
         enter = fadeIn(tween(200)) + slideInVertically(tween(240, easing = OpticalGlassTokens.EaseReveal)) { 8 },
         exit = fadeOut(tween(150)),
@@ -593,171 +597,181 @@ private fun TransportRow(
     val spd = ui.currentPlaybackSpeed.floatValue
     val speedBtnText = if (abs(spd - 1.0f) < 0.02f) "Speed" else "%.2fx".format(spd).replace(".00x", ".0x")
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Left Wing: Bare Lock Button
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val isCompact = maxWidth < 540.dp
+        val btnBoxSize = if (isCompact) 38.dp else 44.dp
+        val centerGap = if (isCompact) 4.dp else 16.dp
+        val iconSideSize = if (isCompact) 22.dp else 24.dp
+        val skipIconSize = if (isCompact) 23.dp else 26.dp
+
         Row(
-            modifier = Modifier.width(116.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .clickable {
-                        ui.locked.value = true
-                        ui.lockScrimVisible.value = true
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.LockOpen,
-                    contentDescription = "Lock Screen",
-                    tint = Color.White,
-                    modifier = Modifier.size(21.dp),
-                )
-            }
-        }
-
-        // Center Cluster: -10s, Prev, Ringed Play/Pause, Next, +10s
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .clickable { onStepSeekSec(-stepSec) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Replay10,
-                    contentDescription = "Rewind ${stepSec}s",
-                    tint = Color.White,
-                    modifier = Modifier.size(24.dp),
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onPreviousEpisode),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.SkipPrevious,
-                    contentDescription = "Previous",
-                    tint = Color.White,
-                    modifier = Modifier.size(26.dp),
-                )
-            }
-
-            // 46dp Clean Thin-Ringed Play/Pause Hero
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(CircleShape)
-                    .border(1.6.dp, Color.White.copy(alpha = 0.90f), CircleShape)
-                    .clickable(onClick = onPlayPauseToggle),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = if (ui.isPlaying.value) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    contentDescription = if (ui.isPlaying.value) "Pause" else "Play",
-                    tint = Color.White,
-                    modifier = Modifier.size(25.dp),
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onNextEpisode),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.SkipNext,
-                    contentDescription = "Next",
-                    tint = Color.White,
-                    modifier = Modifier.size(26.dp),
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .clickable { onStepSeekSec(+stepSec) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Forward10,
-                    contentDescription = "Forward ${stepSec}s",
-                    tint = Color.White,
-                    modifier = Modifier.size(24.dp),
-                )
-            }
-        }
-
-        // Right Wing: Speed trigger + Unmistakable Aspect Ratio control
-        Row(
-            modifier = Modifier.width(116.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onOpenSpeedBar)
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = speedBtnText,
-                    style = TextStyle(
-                        color = if (abs(spd - 1.0f) > 0.02f) OpticalGlassTokens.EmeraldSync else Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFeatureSettings = "tnum",
-                        shadow = OpticalGlassTokens.CrispTextShadow,
-                    ),
-                )
-            }
-
+            // Left Wing: Bare Lock Button
             Row(
-                modifier = Modifier
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable {
-                        onCycleAspectRatio()
-                        ui.aspectBadgeVisible.value = true
-                    }
-                    .padding(horizontal = 6.dp),
+                modifier = if (isCompact) Modifier else Modifier.width(114.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.AspectRatio,
-                    contentDescription = "Aspect Ratio ($zoomLabel)",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp),
-                )
-                Text(
-                    text = zoomLabel,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        shadow = OpticalGlassTokens.CrispTextShadow,
-                    ),
-                )
+                Box(
+                    modifier = Modifier
+                        .size(btnBoxSize)
+                        .clip(CircleShape)
+                        .clickable {
+                            ui.locked.value = true
+                            ui.lockScrimVisible.value = true
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.LockOpen,
+                        contentDescription = "Lock Screen",
+                        tint = Color.White,
+                        modifier = Modifier.size(if (isCompact) 19.dp else 21.dp),
+                    )
+                }
+            }
+
+            // Center Cluster: -10s, Prev, Ringed Play/Pause, Next, +10s
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(centerGap),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(btnBoxSize)
+                        .clip(CircleShape)
+                        .clickable { onStepSeekSec(-stepSec) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Replay10,
+                        contentDescription = "Rewind ${stepSec}s",
+                        tint = Color.White,
+                        modifier = Modifier.size(iconSideSize),
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(btnBoxSize)
+                        .clip(CircleShape)
+                        .clickable(onClick = onPreviousEpisode),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.SkipPrevious,
+                        contentDescription = "Previous",
+                        tint = Color.White,
+                        modifier = Modifier.size(skipIconSize),
+                    )
+                }
+
+                // 44-46dp Clean Thin-Ringed Play/Pause Hero
+                Box(
+                    modifier = Modifier
+                        .size(if (isCompact) 44.dp else 46.dp)
+                        .clip(CircleShape)
+                        .border(1.6.dp, Color.White.copy(alpha = 0.90f), CircleShape)
+                        .clickable(onClick = onPlayPauseToggle),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (ui.isPlaying.value) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (ui.isPlaying.value) "Pause" else "Play",
+                        tint = Color.White,
+                        modifier = Modifier.size(if (isCompact) 23.dp else 25.dp),
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(btnBoxSize)
+                        .clip(CircleShape)
+                        .clickable(onClick = onNextEpisode),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.SkipNext,
+                        contentDescription = "Next",
+                        tint = Color.White,
+                        modifier = Modifier.size(skipIconSize),
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(btnBoxSize)
+                        .clip(CircleShape)
+                        .clickable { onStepSeekSec(+stepSec) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Forward10,
+                        contentDescription = "Forward ${stepSec}s",
+                        tint = Color.White,
+                        modifier = Modifier.size(iconSideSize),
+                    )
+                }
+            }
+
+            // Right Wing: Speed trigger + Unmistakable Aspect Ratio control
+            Row(
+                modifier = if (isCompact) Modifier else Modifier.width(114.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (isCompact) 2.dp else 6.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .height(38.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onOpenSpeedBar)
+                        .padding(horizontal = if (isCompact) 6.dp else 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = speedBtnText,
+                        style = TextStyle(
+                            color = if (abs(spd - 1.0f) > 0.02f) OpticalGlassTokens.EmeraldSync else Color.White,
+                            fontSize = if (isCompact) 11.5.sp else 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFeatureSettings = "tnum",
+                            shadow = OpticalGlassTokens.CrispTextShadow,
+                        ),
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .height(38.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            onCycleAspectRatio()
+                            ui.aspectBadgeVisible.value = true
+                        }
+                        .padding(horizontal = if (isCompact) 5.dp else 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AspectRatio,
+                        contentDescription = "Aspect Ratio ($zoomLabel)",
+                        tint = Color.White,
+                        modifier = Modifier.size(19.dp),
+                    )
+                    if (!isCompact) {
+                        Text(
+                            text = zoomLabel,
+                            style = TextStyle(
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                shadow = OpticalGlassTokens.CrispTextShadow,
+                            ),
+                        )
+                    }
+                }
             }
         }
     }

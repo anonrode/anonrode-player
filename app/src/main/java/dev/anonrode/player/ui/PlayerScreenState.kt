@@ -57,19 +57,48 @@ enum class SubDrawerPage {
 
 @Immutable
 enum class RibbonTool(val label: String) {
-    NIGHT_MODE("Night"),
-    SPEED("Speed"),
-    AB_REPEAT("A-B"),
-    AUDIO_EFFECT("Audio FX"),
-    EQUALIZER("EQ"),
-    SCREENSHOT("Shot"),
-    SHUFFLE("Shuffle"),
-    LOOP("Loop"),
-    MUTE("Mute"),
-    SLEEP_TIMER("Sleep"),
-    BG_PLAY("Bg Play"),
     ROTATE_LOCK("Rotate"),
+    MUTE("Mute"),
+    BG_PLAY("Bg Play"),
+    SPEED("Speed"),
+    NIGHT_MODE("Night Mode"),
+    AB_REPEAT("A-B Repeat"),
+    SCREENSHOT("Screenshot"),
     CUSTOMISE("Edit"),
+    SLEEP_TIMER("Sleep Timer"),
+    EQUALIZER("Equalizer"),
+    AUDIO_EFFECT("Audio FX"),
+    LOOP("Loop"),
+    SHUFFLE("Shuffle");
+
+    companion object {
+        const val CORE_COLLAPSED_COUNT = 4
+        const val MAX_EXPANDED_COUNT = 8
+
+        val defaultVisibleOrder: List<RibbonTool> = listOf(
+            ROTATE_LOCK,
+            MUTE,
+            BG_PLAY,
+            SPEED,
+            NIGHT_MODE,
+            AB_REPEAT,
+            SCREENSHOT,
+            CUSTOMISE,
+            SLEEP_TIMER,
+            EQUALIZER,
+            AUDIO_EFFECT,
+            LOOP,
+            SHUFFLE,
+        )
+
+        val defaultHiddenSet: Set<RibbonTool> = setOf(
+            SLEEP_TIMER,
+            EQUALIZER,
+            AUDIO_EFFECT,
+            LOOP,
+            SHUFFLE,
+        )
+    }
 }
 
 @Immutable
@@ -183,8 +212,8 @@ class GestureUiState {
 
 @Stable
 class QuickRowUiState {
-    var ribbonOrder by mutableStateOf<List<RibbonTool>>(RibbonTool.entries)
-    var ribbonHidden by mutableStateOf<Set<RibbonTool>>(emptySet())
+    var ribbonOrder by mutableStateOf<List<RibbonTool>>(RibbonTool.defaultVisibleOrder)
+    var ribbonHidden by mutableStateOf<Set<RibbonTool>>(RibbonTool.defaultHiddenSet)
     val ribbonScroll = ScrollState(0)
     val ribbonExpanded = mutableStateOf(false)
     val ribbonProgress = mutableFloatStateOf(0f)

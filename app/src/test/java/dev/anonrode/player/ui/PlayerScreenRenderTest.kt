@@ -261,31 +261,27 @@ class PlayerScreenRenderTest {
     }
 
     @Test
+    @Config(sdk = [34], qualifiers = "w850dp-h392dp", application = android.app.Application::class)
     fun speed_card_open() {
         val ui = PlayerUiState(initialIsPlaying = true).apply {
-            currentPlaybackSpeed.floatValue = 1.37f
+            currentPlaybackSpeed.floatValue = 1.00f
             speedCardOpen.value = true
         }
         val actions = fixtureActions(ui = ui)
         compose.setContent {
-            Stage(false) {
+            Stage(true) {
                 Chrome(actions, visible = true)
-                Box(Modifier.fillMaxSize().padding(top = 150.dp), contentAlignment = Alignment.TopCenter) {
-                    PrecisionSpeedCard(
-                        visible = true,
-                        ui = ui,
-                        onApplySpeed = {},
-                        onDismiss = {},
-                    )
-                }
             }
         }
         capture("speed_card_open")
     }
 
     @Test
+    @Config(sdk = [34], qualifiers = "w850dp-h392dp", application = android.app.Application::class)
     fun subtitle_drawer_open() {
-        val ui = PlayerUiState(initialIsPlaying = true)
+        val ui = PlayerUiState(initialIsPlaying = true).apply {
+            subtitleOffsetSec.floatValue = 0.42f
+        }
         val gestures = GestureUiState()
         val actions = fixtureActions(ui = ui, gestures = gestures)
         val tracks = listOf(
@@ -293,31 +289,30 @@ class PlayerScreenRenderTest {
             SubtitleTrackItem(id = "sub-2", title = "Spanish (sidecar)", formatLabel = "SRT • Sidecar", isExternal = true),
         )
         compose.setContent {
-            Stage(false) {
-                Chrome(actions, visible = true)
-                Box(Modifier.fillMaxSize().background(Color(0x66000000))) {
-                    PlayerSubtitleDrawer(
-                        visible = true,
-                        tracks = tracks,
-                        selectedTrackId = "sub-1",
-                        ui = ui,
-                        gestures = gestures,
-                        onSelectTrack = {},
-                        onOpenLocalFilePicker = {},
-                        onTriggerAutoSync = {},
-                        onApplySubtitleOffsetSec = {},
-                        onDismiss = {},
-                    )
-                }
+            Stage(true) {
+                Chrome(actions, visible = false)
+                PlayerSubtitleDrawer(
+                    visible = true,
+                    tracks = tracks,
+                    selectedTrackId = "sub-1",
+                    ui = ui,
+                    gestures = gestures,
+                    onSelectTrack = {},
+                    onOpenLocalFilePicker = {},
+                    onTriggerAutoSync = {},
+                    onApplySubtitleOffsetSec = {},
+                    onDismiss = {},
+                )
             }
         }
         capture("subtitle_drawer_open")
     }
 
     @Test
+    @Config(sdk = [34], qualifiers = "w850dp-h392dp", application = android.app.Application::class)
     fun settings_drawer_open() {
         val ui = PlayerUiState(initialIsPlaying = true).apply {
-            volumeBoostPercent.intValue = 150
+            volumeBoostPercent.intValue = 100
             nightMode.value = false
             backgroundPlayOn.value = true
         }
@@ -326,47 +321,45 @@ class PlayerScreenRenderTest {
         }
         val actions = fixtureActions(ui = ui, quick = quick)
         compose.setContent {
-            Stage(false) {
-                Chrome(actions, visible = true)
-                Box(Modifier.fillMaxSize().background(Color(0x66000000))) {
-                    PlayerSettingsDrawer(
-                        visible = true,
-                        ui = ui,
-                        quick = quick,
-                        onApplySpeed = {},
-                        onOpenAudioTracks = {},
-                        onEnterPip = {},
-                        onCaptureScreenshot = {},
-                        onDismiss = {},
-                    )
-                }
+            Stage(true) {
+                Chrome(actions, visible = false)
+                PlayerSettingsDrawer(
+                    visible = true,
+                    ui = ui,
+                    quick = quick,
+                    onApplySpeed = {},
+                    onOpenAudioTracks = {},
+                    onEnterPip = {},
+                    onCaptureScreenshot = {},
+                    onDismiss = {},
+                )
             }
         }
         capture("settings_drawer_open")
     }
 
     @Test
+    @Config(sdk = [34], qualifiers = "w850dp-h392dp", application = android.app.Application::class)
     fun playlist_drawer_open() {
         val actions = fixtureActions()
-        val episodes = (1..5).map { i ->
+        val episodes = (1..4).map { i ->
             PlaylistEpisodeItem(
                 id = "/sdcard/show/episode-0$i.mkv",
-                title = "…season-1-episode-0$i",
-                durationSec = 3200f + i * 60f,
-                isPlaying = i == 2,
+                title = "Ripe.Town.E0$i.(DRAMAKEY.COM).mkv",
+                durationSec = 3000f + i * 70f,
+                isPlaying = i == 3,
             )
         }
         compose.setContent {
-            Stage(false) {
-                Chrome(actions, visible = true)
-                Box(Modifier.fillMaxSize().background(Color(0x66000000))) {
-                    PlayerPlaylistDrawer(
-                        visible = true,
-                        episodes = episodes,
-                        onSelectEpisode = {},
-                        onDismiss = {},
-                    )
-                }
+            Stage(true) {
+                Chrome(actions, visible = false)
+                PlayerPlaylistDrawer(
+                    visible = true,
+                    episodes = episodes,
+                    seriesTitle = "RIPE TOWN",
+                    onSelectEpisode = {},
+                    onDismiss = {},
+                )
             }
         }
         capture("playlist_drawer_open")
@@ -387,7 +380,6 @@ class PlayerScreenRenderTest {
         val actions = fixtureActions()
         actions.quick.ribbonExpanded.value = true
         actions.quick.isSyncLocked.value = true
-        actions.ui.boostActive.value = true
         compose.setContent { Stage(true) { Chrome(actions, visible = true) } }
         capture("landscape_ribbon_expanded")
     }
